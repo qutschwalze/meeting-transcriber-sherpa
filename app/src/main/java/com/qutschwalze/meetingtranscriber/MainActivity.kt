@@ -66,7 +66,7 @@ class MainActivity : AppCompatActivity() {
         setSupportActionBar(binding.toolbar)
         supportActionBar?.setDisplayHomeAsUpEnabled(true)
 
-        diarizer = SpeakerDiarizer(sensitivity = 1.8f, minSegmentDurationMs = 600, silenceThresholdMs = 400)
+        diarizer = SpeakerDiarizer(changeThreshold = 0.35f, matchThreshold = 0.25f, minSegmentMs = 500, silenceMs = 350)
 
         setupDrawer()
         setupButtons()
@@ -204,27 +204,28 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupLanguageChips() {
-        binding.chipAuto.setOnClickListener {
-            autoMode = true
-            selectedLangCode = "de"
-            updateLanguageCheckmarks()
-        }
-        binding.chipDe.setOnClickListener {
-            autoMode = false
-            detectedLanguage = null
-            selectedLangCode = "de"
-            updateLanguageCheckmarks()
-        }
-        binding.chipEn.setOnClickListener {
-            autoMode = false
-            detectedLanguage = null
-            selectedLangCode = "en"
-            updateLanguageCheckmarks()
-        }
-        binding.chipFr.setOnClickListener {
-            autoMode = false
-            detectedLanguage = null
-            selectedLangCode = "fr"
+        binding.chipGroupLang.setOnCheckedStateChangeListener { _, checkedIds ->
+            when {
+                checkedIds.contains(R.id.chipAuto) -> {
+                    autoMode = true
+                    selectedLangCode = "de"
+                }
+                checkedIds.contains(R.id.chipDe) -> {
+                    autoMode = false
+                    detectedLanguage = null
+                    selectedLangCode = "de"
+                }
+                checkedIds.contains(R.id.chipEn) -> {
+                    autoMode = false
+                    detectedLanguage = null
+                    selectedLangCode = "en"
+                }
+                checkedIds.contains(R.id.chipFr) -> {
+                    autoMode = false
+                    detectedLanguage = null
+                    selectedLangCode = "fr"
+                }
+            }
             updateLanguageCheckmarks()
         }
     }
@@ -506,15 +507,15 @@ class MainActivity : AppCompatActivity() {
 
     private fun smoothScrollToBottom() {
         binding.scrollTranscript.post {
-            val child = binding.scrollTranscript.getChildAt(0) ?: return@post
-            val scrollViewHeight = binding.scrollTranscript.height
-            val contentHeight = child.height
-            if (contentHeight > scrollViewHeight) {
-                // Scroll to 70% of content — keeps latest text in lower third
-                val targetScroll = (contentHeight * 0.7).toInt() - scrollViewHeight / 2
-                val scrollAmount = targetScroll.coerceAtLeast(0)
-                binding.scrollTranscript.smoothScrollTo(0, scrollAmount)
-            }
+            binding.scrollTranscript.postDelayed({
+                val child = binding.scrollTranscript.getChildAt(0) ?: return@postDelayed
+                val scrollViewHeight = binding.scrollTranscript.height
+                val contentHeight = child.height
+                if (contentHeight > scrollViewHeight) {
+                    val targetScroll = (contentHeight * 0.65).toInt() - scrollViewHeight / 2
+                    binding.scrollTranscript.scrollTo(0, targetScroll.coerceAtLeast(0))
+                }
+            }, 50)
         }
     }
 

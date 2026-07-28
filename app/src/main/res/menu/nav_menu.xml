@@ -14,20 +14,16 @@
         </menu>
     </item>
 
-    <item android:id="@+id/nav_separator1" android:title="" />
-
     <!-- Transkripte -->
     <item
         android:id="@+id/nav_transcripts"
         android:title="📋 Alle Transkripte"
         android:icon="@drawable/ic_list" />
 
-    <item android:id="@+id/nav_separator2" android:title="" />
-
     <!-- About -->
     <item
         android:id="@+id/nav_about"
         android:title="ℹ️ About"
-        android:icon="@drawable/ic_list" />
+        android:icon="@drawable/ic_info" />
 
 </menu>
