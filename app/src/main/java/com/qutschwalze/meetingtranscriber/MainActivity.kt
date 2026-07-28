@@ -264,8 +264,7 @@ class MainActivity : AppCompatActivity() {
         // Flush remaining partial text
         flushCurrentText()
 
-        // Run final diarization on remaining audio
-        runDiarizationOnBuffer()
+        // NOTE: Diarization disabled — streaming ASR text is preserved as-is
 
         binding.tvStatus.text = getString(R.string.status_ready)
         binding.fabRecord.text = getString(R.string.btn_start)
@@ -319,10 +318,8 @@ class MainActivity : AppCompatActivity() {
                 // Periodically run diarization on accumulated audio
                 chunkCounter++
                 val chunksPerDiarization = DIARIZATION_CHUNK_SECONDS * 10 // 100ms chunks
-                if (chunkCounter >= chunksPerDiarization && diarizationReady) {
-                    runDiarizationOnBuffer()
-                    chunkCounter = 0
-                }
+                // NOTE: Buffer-diarization disabled during recording to preserve ASR text
+                // Diarization runs only on stop (see stopRecording)
             }
         }
 
