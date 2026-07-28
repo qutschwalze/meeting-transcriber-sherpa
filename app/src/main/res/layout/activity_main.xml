@@ -139,7 +139,7 @@
                 app:backgroundTint="#E53935"
                 android:layout_marginBottom="20dp" />
 
-            <!-- Transcript Card -->
+            <!-- Transcript Card — RecyclerView for proper auto-scroll -->
             <com.google.android.material.card.MaterialCardView
                 android:layout_width="match_parent"
                 android:layout_height="0dp"
@@ -156,7 +156,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="match_parent"
                     android:orientation="vertical"
-                    android:padding="16dp">
+                    android:padding="12dp">
 
                     <TextView
                         android:layout_width="wrap_content"
@@ -168,27 +168,24 @@
                         android:letterSpacing="0.1"
                         android:layout_marginBottom="8dp" />
 
-                    <ScrollView
-                        android:id="@+id/scrollTranscript"
+                    <androidx.recyclerview.widget.RecyclerView
+                        android:id="@+id/rvTranscript"
                         android:layout_width="match_parent"
                         android:layout_height="0dp"
                         android:layout_weight="1"
-                        android:scrollbars="vertical"
-                        android:fadingEdge="vertical"
-                        android:requiresFadingEdge="vertical">
+                        android:clipToPadding="false"
+                        android:paddingBottom="8dp" />
 
-                        <TextView
-                            android:id="@+id/tvTranscript"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:text="@string/transcript_placeholder"
-                            android:textColor="#B0B0B0"
-                            android:textSize="15sp"
-                            android:lineSpacingMultiplier="1.4"
-                            android:textIsSelectable="true"
-                            android:paddingBottom="8dp" />
-
-                    </ScrollView>
+                    <!-- Partial result (while speaking) -->
+                    <TextView
+                        android:id="@+id/tvPartial"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:textColor="#888888"
+                        android:textSize="14sp"
+                        android:textStyle="italic"
+                        android:visibility="gone"
+                        android:layout_marginTop="4dp" />
 
                     <!-- Text Size SeekBar -->
                     <LinearLayout

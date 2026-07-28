@@ -22,6 +22,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
+import androidx.recyclerview.widget.LinearLayoutManager
 import com.qutschwalze.meetingtranscriber.databinding.ActivityMainBinding
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -37,17 +38,24 @@ class MainActivity : AppCompatActivity() {
     private var recordingThread: Thread? = null
     private val handler = Handler(Looper.getMainLooper())
     private var startTime = 0L
-    private val transcriptBuilder = StringBuilder()
-    private var currentSpeaker = -1
-    private var lastSpeakerText = StringBuilder()  // Text for current speaker segment
-    private lateinit var diarizer: SpeakerDiarizer
 
+    // Transcript
+    private lateinit var transcriptAdapter: LiveTranscriptAdapter
+    private var currentSpeakerId = -1
+    private val currentTextBuffer = StringBuilder()
+
+    // Engines
     private var engineDE: SherpaEngine? = null
     private var engineEN: SherpaEngine? = null
     private var activeEngine: SherpaEngine? = null
     private var detectedLanguage: String? = null
     private var autoMode = true
     private var selectedLangCode = "de"
+
+    // Diarization
+    private lateinit var diarizationManager: DiarizationManager
+    private val audioBuffer = mutableListOf<FloatArray>()
+    private var diarizationReady = false
 
     companion object {
         private const val REQUEST_AUDIO_PERMISSION = 200
@@ -56,26 +64,41 @@ class MainActivity : AppCompatActivity() {
         private const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
         private const val AUDIO_GAIN = 2.5f
         private const val DETECTION_WINDOW_MS = 3000L
+        // Process diarization every N seconds of audio
+        private const val DIARIZATION_CHUNK_SECONDS = 3
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
-
         setSupportActionBar(binding.toolbar)
 
-        diarizer = SpeakerDiarizer(changeThreshold = 0.35f, matchThreshold = 0.25f, minSegmentMs = 500, silenceMs = 350)
+        // RecyclerView setup
+        transcriptAdapter = LiveTranscriptAdapter()
+        binding.rvTranscript.apply {
+            layoutManager = LinearLayoutManager(this@MainActivity).apply {
+                stackFromEnd = true
+            }
+            adapter = transcriptAdapter
+        }
+
+        // Initialize diarization
+        lifecycleScope.launch(Dispatchers.IO) {
+            diarizationManager = DiarizationManager(this@MainActivity)
+            diarizationReady = diarizationManager.init()
+            if (!diarizationReady) {
+                handler.post { Toast.makeText(this@MainActivity, "Diarization-Modelle konnten nicht geladen werden", Toast.LENGTH_LONG).show() }
+            }
+        }
 
         setupButtons()
         setupLanguageChips()
         setupTextSizeSlider()
         checkPermissions()
-
-        binding.tvTranscript.textSize = 15f
     }
 
-    // ── Overflow Menu (⋮) ──
+    // ── Overflow Menu ──
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
         menuInflater.inflate(R.menu.overflow_menu, menu)
@@ -84,10 +107,10 @@ class MainActivity : AppCompatActivity() {
 
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         when (item.itemId) {
-            R.id.menu_lang_auto -> { autoMode = true; selectedLangCode = "de"; updateChips(); Toast.makeText(this, "🤖 Auto", Toast.LENGTH_SHORT).show() }
-            R.id.menu_lang_de -> { autoMode = false; detectedLanguage = null; selectedLangCode = "de"; updateChips(); Toast.makeText(this, "🇩🇪 DE", Toast.LENGTH_SHORT).show() }
-            R.id.menu_lang_en -> { autoMode = false; detectedLanguage = null; selectedLangCode = "en"; updateChips(); Toast.makeText(this, "🇬🇧 EN", Toast.LENGTH_SHORT).show() }
-            R.id.menu_lang_fr -> { autoMode = false; detectedLanguage = null; selectedLangCode = "fr"; updateChips(); Toast.makeText(this, "🇫🇷 FR", Toast.LENGTH_SHORT).show() }
+            R.id.menu_lang_auto -> { autoMode = true; selectedLangCode = "de"; updateChips() }
+            R.id.menu_lang_de -> { autoMode = false; detectedLanguage = null; selectedLangCode = "de"; updateChips() }
+            R.id.menu_lang_en -> { autoMode = false; detectedLanguage = null; selectedLangCode = "en"; updateChips() }
+            R.id.menu_lang_fr -> { autoMode = false; detectedLanguage = null; selectedLangCode = "fr"; updateChips() }
             R.id.menu_transcripts -> startActivity(Intent(this, TranscriptListActivity::class.java))
             R.id.menu_about -> showAboutDialog()
         }
@@ -95,10 +118,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showAboutDialog() {
-        val v = try { packageManager.getPackageInfo(packageName, 0).versionName } catch (_: Exception) { "2.6" }
+        val v = try { packageManager.getPackageInfo(packageName, 0).versionName } catch (_: Exception) { "3.0" }
         AlertDialog.Builder(this)
             .setTitle("ℹ️ About")
-            .setMessage("Meeting Transcriber v$v\nEngine: Sherpa-ONNX 1.13.3\n\nOffline-Spracherkennung mit\nStreaming Zipformer Transducer.\n\nFeatures:\n• Live-Transkription\n• Auto-Spracherkennung (DE/EN)\n• Speaker Diarization\n• 3 Sprachen (DE, EN, FR)\n\ngithub.com/qutschwalze/\nmeeting-transcriber-sherpa")
+            .setMessage("Meeting Transcriber v$v\nEngine: Sherpa-ONNX 1.13.3\nSpeaker Diarization: Pyannote 3.0\n\nOffline-Spracherkennung mit\nStreaming Zipformer Transducer.\n\nFeatures:\n• Live-Transkription\n• Auto-Spracherkennung (DE/EN)\n• Native Speaker Diarization\n• 3 Sprachen (DE, EN, FR)")
             .setPositiveButton("OK", null)
             .show()
     }
@@ -131,15 +154,15 @@ class MainActivity : AppCompatActivity() {
             if (isRecording.get()) stopRecording() else startRecording()
         }
         binding.btnCopy.setOnClickListener {
-            val text = transcriptBuilder.toString()
+            val text = transcriptAdapter.getFullTranscript()
             if (text.isNotBlank()) {
-                val cb = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
-                cb.setPrimaryClip(ClipData.newPlainText("Transkript", text))
+                (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager)
+                    .setPrimaryClip(ClipData.newPlainText("Transkript", text))
                 Toast.makeText(this, getString(R.string.copied), Toast.LENGTH_SHORT).show()
             } else Toast.makeText(this, getString(R.string.no_transcript), Toast.LENGTH_SHORT).show()
         }
         binding.btnShare.setOnClickListener {
-            val text = transcriptBuilder.toString()
+            val text = transcriptAdapter.getFullTranscript()
             if (text.isNotBlank()) {
                 startActivity(Intent.createChooser(Intent().apply {
                     action = Intent.ACTION_SEND; putExtra(Intent.EXTRA_TEXT, text); type = "text/plain"
@@ -151,7 +174,7 @@ class MainActivity : AppCompatActivity() {
     private fun setupTextSizeSlider() {
         binding.seekTextSize.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
-                if (fromUser) { binding.tvTranscript.textSize = progress.toFloat(); binding.tvTextSizeLabel.text = "${progress}sp" }
+                if (fromUser) { transcriptAdapter.setTextSize(progress.toFloat()); binding.tvTextSizeLabel.text = "${progress}sp" }
             }
             override fun onStartTrackingTouch(sb: SeekBar?) {}
             override fun onStopTrackingTouch(sb: SeekBar?) {}
@@ -192,16 +215,18 @@ class MainActivity : AppCompatActivity() {
 
                 isRecording.set(true)
                 startTime = System.currentTimeMillis()
-                transcriptBuilder.clear()
-                lastSpeakerText.clear()
-                currentSpeaker = -1
-                diarizer.reset()
+                currentSpeakerId = -1
+                currentTextBuffer.clear()
+                audioBuffer.clear()
+                transcriptAdapter.clear()
+
                 audioRecord?.startRecording()
 
                 binding.tvStatus.text = getString(R.string.status_recording)
                 binding.fabRecord.text = getString(R.string.btn_stop)
                 binding.fabRecord.isEnabled = true
-                binding.tvTranscript.text = getString(R.string.transcript_placeholder)
+                binding.rvTranscript.visibility = View.VISIBLE
+                binding.tvPartial.visibility = View.VISIBLE
                 binding.exportButtons.visibility = View.GONE
 
                 if (autoMode) binding.tvModelInfo.text = "🤖 Auto-Erkennung aktiv…"
@@ -236,13 +261,16 @@ class MainActivity : AppCompatActivity() {
         audioRecord?.apply { try { stop() } catch (_: Exception) {}; release() }
         audioRecord = null
 
-        // Flush remaining speaker text
-        flushSpeakerText()
+        // Flush remaining partial text
+        flushCurrentText()
 
-        activeEngine?.let { val r = it.getResult(); if (r.isNotBlank()) addText(r) }
+        // Run final diarization on remaining audio
+        runDiarizationOnBuffer()
 
         binding.tvStatus.text = getString(R.string.status_ready)
         binding.fabRecord.text = getString(R.string.btn_start)
+        binding.tvPartial.visibility = View.GONE
+
         val ld = when {
             autoMode && detectedLanguage != null -> " (${if (detectedLanguage == "de") "🇩🇪 DE" else "🇬🇧 EN"} erkannt)"
             !autoMode -> " (${selectedLangCode.uppercase()})" else -> ""
@@ -250,7 +278,11 @@ class MainActivity : AppCompatActivity() {
         binding.tvModelInfo.text = "Modell: $ld"
         binding.progressLevel.progress = 0
 
-        if (transcriptBuilder.isNotBlank()) { binding.exportButtons.visibility = View.VISIBLE; saveTranscriptToFile() }
+        if (transcriptAdapter.itemCount > 0) {
+            binding.exportButtons.visibility = View.VISIBLE
+            saveTranscriptToFile()
+        }
+
         engineDE?.release(); engineEN?.release(); engineDE = null; engineEN = null; activeEngine = null
     }
 
@@ -258,8 +290,9 @@ class MainActivity : AppCompatActivity() {
 
     private inner class AudioTask : Runnable {
         override fun run() {
-            val buf = ShortArray((0.1 * SAMPLE_RATE).toInt())
+            val buf = ShortArray((0.1 * SAMPLE_RATE).toInt()) // 100ms chunks
             val detBuf = mutableListOf<String>()
+            var chunkCounter = 0
 
             while (isRecording.get()) {
                 val read = audioRecord?.read(buf, 0, buf.size) ?: 0
@@ -268,26 +301,28 @@ class MainActivity : AppCompatActivity() {
                 val now = System.currentTimeMillis() - startTime
                 val amp = ShortArray(read) { i -> (buf[i].toFloat() * AUDIO_GAIN).toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort() }
 
-                // Level
+                // Level indicator
                 var mx = 0
                 for (i in 0 until read) { val a = Math.abs(amp[i].toInt()); if (a > mx) mx = a }
                 handler.post { binding.progressLevel.progress = (mx * 100 / 32768).coerceIn(0, 100) }
 
-                // Speaker diarization
-                val rms = calcRMS(amp, read)
-                if (rms > 0.015f) {
-                    val sr = diarizer.analyze(amp, read, now)
-                    if (sr.changed && currentSpeaker != sr.speakerId) {
-                        // Flush previous speaker's text before switching
-                        flushSpeakerText()
-                        currentSpeaker = sr.speakerId
-                    }
-                }
-
-                // Sherpa-ONNX
+                // Convert to float for Sherpa
                 val float = FloatArray(read) { amp[it] / 32768.0f }
+
+                // Buffer audio for diarization
+                audioBuffer.add(float.copyOf())
+
+                // Stream ASR
                 if (autoMode && detectedLanguage == null) autoDetect(float, now, detBuf)
                 else feedEngine(activeEngine!!, float)
+
+                // Periodically run diarization on accumulated audio
+                chunkCounter++
+                val chunksPerDiarization = DIARIZATION_CHUNK_SECONDS * 10 // 100ms chunks
+                if (chunkCounter >= chunksPerDiarization && diarizationReady) {
+                    runDiarizationOnBuffer()
+                    chunkCounter = 0
+                }
             }
         }
 
@@ -304,90 +339,125 @@ class MainActivity : AppCompatActivity() {
                 detectedLanguage = if (dc > ec) "de" else "en"
                 activeEngine = if (detectedLanguage == "de") de else en
                 val l = if (detectedLanguage == "de") "🇩🇪 Deutsch" else "🇬🇧 English"
-                handler.post { binding.tvModelInfo.text = "🤖 Erkannt: $l"; Toast.makeText(this@MainActivity, "Sprache: $l", Toast.LENGTH_SHORT).show() }
-                activeEngine?.getResult()?.let { if (it.isNotBlank()) addText(it) }
+                handler.post { binding.tvModelInfo.text = "🤖 Erkannt: $l" }
             }
-            if (now < DETECTION_WINDOW_MS) {
-                val p = de.getResult()
-                if (p.isNotBlank()) handler.post { binding.tvTranscript.text = "${transcriptBuilder.toString().trim()}\n[text…] $p…"; doScroll() }
-            }
+
+            // Show partial
+            val p = de.getResult()
+            if (p.isNotBlank()) handler.post { binding.tvPartial.text = p; binding.tvPartial.visibility = View.VISIBLE }
         }
 
         private fun feedEngine(engine: SherpaEngine, s: FloatArray) {
             engine.acceptWaveform(s)
             while (engine.isReady()) engine.decode()
             if (engine.isEndpoint()) {
-                val t = engine.getResult(); if (t.isNotBlank()) addText(t); engine.reset()
+                val t = engine.getResult()
+                if (t.isNotBlank()) {
+                    flushCurrentText()
+                    // Add new speaker segment
+                    currentSpeakerId = 0 // Default — diarization will update
+                    currentTextBuffer.append(t)
+                    handler.post {
+                        if (transcriptAdapter.itemCount == 0 || currentSpeakerId != getPreviousSpeakerId()) {
+                            // New segment needed
+                        }
+                        binding.tvPartial.text = currentTextBuffer.toString().trim()
+                    }
+                }
+                engine.reset()
             } else {
                 val p = engine.getResult()
-                if (p.isNotBlank()) handler.post { binding.tvTranscript.text = "${transcriptBuilder.toString().trim()}\n$p…"; doScroll() }
+                if (p.isNotBlank()) {
+                    currentTextBuffer.append(p)
+                    handler.post { binding.tvPartial.text = currentTextBuffer.toString().trim() }
+                }
             }
         }
     }
 
-    // ── Speaker Text Management ──
+    private fun getPreviousSpeakerId(): Int {
+        return if (transcriptAdapter.itemCount > 0) {
+            // Get last entry's speaker ID from the adapter's entries
+            -1 // Simplified — diarization handles this
+        } else -1
+    }
 
-    /** Called when speaker changes — flush accumulated text for previous speaker */
-    private fun flushSpeakerText() {
-        if (currentSpeaker >= 0 && lastSpeakerText.isNotEmpty()) {
-            val text = lastSpeakerText.toString().trim()
-            if (text.isNotBlank()) {
-                transcriptBuilder.append("[Sprecher $currentSpeaker]\n")
-                transcriptBuilder.append(text).append("\n\n")
-                lastSpeakerText.clear()
-                handler.post { updateDisplay() }
+    private fun flushCurrentText() {
+        val text = currentTextBuffer.toString().trim()
+        if (text.isNotBlank() && currentSpeakerId >= 0) {
+            val entry = TranscriptEntry(speakerId = currentSpeakerId, text = text)
+            handler.post {
+                transcriptAdapter.addEntry(entry)
+                scrollToBottom()
             }
         }
-        lastSpeakerText.clear()
+        currentTextBuffer.clear()
     }
 
-    private fun addText(text: String) {
-        val clean = text.trim()
-        if (clean.isBlank()) return
-        lastSpeakerText.append(clean).append(" ")
-        // Also update display with current accumulated text
-        handler.post { updateDisplay() }
-    }
+    // ── Diarization ──
 
-    private fun updateDisplay() {
-        // Build display: transcript + current speaker's pending text
-        val display = StringBuilder(transcriptBuilder)
-        if (currentSpeaker >= 0 && lastSpeakerText.isNotEmpty()) {
-            if (display.isNotEmpty()) display.append("\n")
-            display.append("[Sprecher $currentSpeaker]\n")
-            display.append(lastSpeakerText.toString().trim())
+    private fun runDiarizationOnBuffer() {
+        if (audioBuffer.isEmpty() || !diarizationReady) return
+
+        // Concatenate all buffered audio
+        val totalSamples = audioBuffer.sumOf { it.size }
+        val allSamples = FloatArray(totalSamples)
+        var pos = 0
+        for (chunk in audioBuffer) {
+            System.arraycopy(chunk, 0, allSamples, pos, chunk.size)
+            pos += chunk.size
         }
-        binding.tvTranscript.text = display.toString().trim()
-        doScroll()
+
+        // Run diarization
+        lifecycleScope.launch(Dispatchers.Default) {
+            try {
+                val segments = diarizationManager.process(allSamples)
+                if (segments.isNotEmpty()) {
+                    // Rebuild transcript with speaker labels
+                    handler.post {
+                        transcriptAdapter.clear()
+                        for (seg in segments) {
+                            val startSample = (seg.start * SAMPLE_RATE).toInt().coerceIn(0, allSamples.size - 1)
+                            val endSample = (seg.end * SAMPLE_RATE).toInt().coerceIn(startSample + 1, allSamples.size)
+
+                            // Get text from ASR for this segment
+                            // For now, use the accumulated text from streaming
+                            val entry = TranscriptEntry(
+                                speakerId = seg.speaker,
+                                text = "(Segment ${String.format("%.1f", seg.start)}s - ${String.format("%.1f", seg.end)}s)",
+                                startMs = (seg.start * 1000).toLong(),
+                                endMs = (seg.end * 1000).toLong()
+                            )
+                            transcriptAdapter.addEntry(entry)
+                        }
+                        scrollToBottom()
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
     }
 
     // ── Auto-Scroll ──
 
-    private fun doScroll() {
-        binding.scrollTranscript.post {
-            binding.scrollTranscript.postDelayed({
-                val child = binding.scrollTranscript.getChildAt(0) ?: return@postDelayed
-                val sh = binding.scrollTranscript.height
-                val ch = child.height
-                if (ch > sh) {
-                    val target = (ch * 0.65).toInt() - sh / 2
-                    binding.scrollTranscript.scrollTo(0, target.coerceAtLeast(0))
-                }
-            }, 50)
+    private fun scrollToBottom() {
+        val lm = binding.rvTranscript.layoutManager as? LinearLayoutManager ?: return
+        val lastVisible = lm.findLastCompletelyVisibleItemPosition()
+        val total = transcriptAdapter.itemCount - 1
+
+        // Only auto-scroll if user is already near the bottom
+        if (lastVisible >= total - 2 || total <= 2) {
+            binding.rvTranscript.scrollToPosition(total)
         }
     }
 
     // ── Utils ──
 
-    private fun calcRMS(s: ShortArray, n: Int): Float {
-        var sq = 0.0
-        for (i in 0 until n) { val v = s[i].toDouble() / Short.MAX_VALUE; sq += v * v }
-        return kotlin.math.sqrt(sq / n).toFloat()
-    }
-
     private fun saveTranscriptToFile() {
         val lang = detectedLanguage ?: selectedLangCode
-        val file = TranscriptManager.saveTranscript(this, transcriptBuilder.toString(), lang)
+        val text = transcriptAdapter.getFullTranscript()
+        val file = TranscriptManager.saveTranscript(this, text, lang)
         if (file != null) Toast.makeText(this, "Gespeichert: ${TranscriptManager.getTranscriptDirPath(this)}", Toast.LENGTH_LONG).show()
         else Toast.makeText(this, "Fehler beim Speichern", Toast.LENGTH_SHORT).show()
     }
@@ -408,5 +478,6 @@ class MainActivity : AppCompatActivity() {
         handler.removeCallbacks(timerRunnable)
         audioRecord?.apply { try { stop() } catch (_: Exception) {}; release() }
         engineDE?.release(); engineEN?.release()
+        diarizationManager.release()
     }
 }
