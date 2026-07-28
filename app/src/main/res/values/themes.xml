@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.MeetingTranscriber" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">#00D4AA</item>
+        <item name="colorPrimaryContainer">#16213E</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="colorSecondary">#E53935</item>
+        <item name="android:statusBarColor">#0F0F23</item>
+        <item name="android:navigationBarColor">#0F0F23</item>
+    </style>
+</resources>

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Meeting Transcriber</string>
+    <string name="status_ready">Bereit — Tippen zum Starten</string>
+    <string name="status_initializing">Modell wird geladen…</string>
+    <string name="status_recording">Aufnahme läuft…</string>
+    <string name="status_processing">Verarbeitung…</string>
+    <string name="status_error">Fehler aufgetreten</string>
+    <string name="btn_start">Aufnahme starten</string>
+    <string name="btn_stop">Aufnahme stoppen</string>
+    <string name="btn_copy">Kopieren</string>
+    <string name="btn_share">Teilen</string>
+    <string name="transcript_label">TRANSKRIPT</string>
+    <string name="transcript_placeholder">Das Transkript erscheint hier, während du sprichst…</string>
+    <string name="language_label">SPRACHE</string>
+    <string name="model_info">Modell: sherpa-onnx-streaming | Offline</string>
+    <string name="btn_all_transcripts">Alle Transkripte anzeigen</string>
+    <string name="copied">In die Zwischenablage kopiert</string>
+    <string name="no_transcript">Noch kein Transkript vorhanden</string>
+</resources>

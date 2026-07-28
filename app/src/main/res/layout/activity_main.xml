@@ -1,0 +1,255 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#1A1A2E">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="24dp"
+        android:gravity="center_horizontal">
+
+        <!-- Header -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/app_name"
+            android:textColor="#E0E0E0"
+            android:textSize="28sp"
+            android:textStyle="bold"
+            android:layout_marginTop="16dp" />
+
+        <TextView
+            android:id="@+id/tvStatus"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/status_ready"
+            android:textColor="#888888"
+            android:textSize="14sp"
+            android:layout_marginTop="4dp"
+            android:layout_marginBottom="24dp" />
+
+        <!-- Timer -->
+        <TextView
+            android:id="@+id/tvTimer"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="00:00"
+            android:textColor="#00D4AA"
+            android:textSize="48sp"
+            android:textStyle="bold"
+            android:fontFamily="monospace"
+            android:layout_marginBottom="8dp" />
+
+        <!-- Audio Level Indicator -->
+        <ProgressBar
+            android:id="@+id/progressLevel"
+            style="@android:style/Widget.ProgressBar.Horizontal"
+            android:layout_width="match_parent"
+            android:layout_height="8dp"
+            android:max="100"
+            android:progress="0"
+            android:layout_marginHorizontal="32dp"
+            android:layout_marginBottom="32dp"
+            android:progressDrawable="@drawable/level_indicator" />
+
+        <!-- Record Button -->
+        <com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
+            android:id="@+id/fabRecord"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/btn_start"
+            android:textColor="#FFFFFF"
+            app:icon="@drawable/ic_mic"
+            app:iconTint="#FFFFFF"
+            app:backgroundTint="#E53935"
+            android:layout_marginBottom="32dp" />
+
+        <!-- Transcript Card -->
+        <com.google.android.material.card.MaterialCardView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            app:cardBackgroundColor="#16213E"
+            app:cardCornerRadius="12dp"
+            app:cardElevation="0dp"
+            app:strokeColor="#2A2A4A"
+            app:strokeWidth="1dp"
+            android:layout_marginBottom="16dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="16dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/transcript_label"
+                    android:textColor="#00D4AA"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.1"
+                    android:layout_marginBottom="12dp" />
+
+                <ScrollView
+                    android:id="@+id/scrollTranscript"
+                    android:layout_width="match_parent"
+                    android:layout_height="200dp"
+                    android:scrollbars="vertical"
+                    android:fadingEdge="vertical"
+                    android:requiresFadingEdge="vertical">
+
+                    <TextView
+                        android:id="@+id/tvTranscript"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/transcript_placeholder"
+                        android:textColor="#B0B0B0"
+                        android:textSize="15sp"
+                        android:lineSpacingMultiplier="1.4"
+                        android:textIsSelectable="true"
+                        android:paddingBottom="8dp" />
+
+                </ScrollView>
+
+            </LinearLayout>
+
+        </com.google.android.material.card.MaterialCardView>
+
+        <!-- Export Buttons -->
+        <LinearLayout
+            android:id="@+id/exportButtons"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center"
+            android:visibility="gone"
+            android:layout_marginBottom="8dp">
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnCopy"
+                style="@style/Widget.Material3.Button.OutlinedButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/btn_copy"
+                android:textColor="#00D4AA"
+                app:strokeColor="#00D4AA"
+                android:layout_marginEnd="8dp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnShare"
+                style="@style/Widget.Material3.Button.OutlinedButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/btn_share"
+                android:textColor="#00D4AA"
+                app:strokeColor="#00D4AA"
+                android:layout_marginStart="8dp" />
+
+        </LinearLayout>
+
+        <!-- View all transcripts -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnViewTranscripts"
+            style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/btn_all_transcripts"
+            android:textColor="#00D4AA"
+            android:layout_marginBottom="16dp"
+            app:icon="@drawable/ic_list"
+            app:iconTint="#00D4AA" />
+
+        <!-- Language Selector - PROMINENT -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="SPRACHE WÄHLEN"
+            android:textColor="#00D4AA"
+            android:textSize="13sp"
+            android:textStyle="bold"
+            android:letterSpacing="0.1"
+            android:layout_marginBottom="8dp" />
+
+        <com.google.android.material.card.MaterialCardView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            app:cardBackgroundColor="#16213E"
+            app:cardCornerRadius="12dp"
+            app:cardElevation="0dp"
+            app:strokeColor="#00D4AA"
+            app:strokeWidth="1dp"
+            android:layout_marginBottom="8dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:padding="4dp">
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnLangAuto"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    android:layout_width="0dp"
+                    android:layout_height="44dp"
+                    android:layout_weight="1"
+                    android:text="🤖 Auto"
+                    android:textColor="#00D4AA"
+                    android:textSize="13sp"
+                    app:strokeColor="#00D4AA"
+                    android:layout_marginEnd="4dp" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnLangDe"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    android:layout_width="0dp"
+                    android:layout_height="44dp"
+                    android:layout_weight="1"
+                    android:text="🇩🇪 DE"
+                    android:textColor="#FFFFFF"
+                    android:textSize="13sp"
+                    app:strokeColor="#2A2A4A"
+                    android:layout_marginHorizontal="4dp" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnLangEn"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    android:layout_width="0dp"
+                    android:layout_height="44dp"
+                    android:layout_weight="1"
+                    android:text="🇬🇧 EN"
+                    android:textColor="#FFFFFF"
+                    android:textSize="13sp"
+                    app:strokeColor="#2A2A4A"
+                    android:layout_marginStart="4dp" />
+
+            </LinearLayout>
+
+        </com.google.android.material.card.MaterialCardView>
+
+        <!-- Hidden spinner for other languages -->
+        <Spinner
+            android:id="@+id/spinnerLanguage"
+            android:layout_width="wrap_content"
+            android:layout_height="0dp"
+            android:visibility="gone" />
+
+        <TextView
+            android:id="@+id/tvModelInfo"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/model_info"
+            android:textColor="#444444"
+            android:textSize="11sp"
+            android:layout_marginTop="4dp"
+            android:layout_marginBottom="24dp" />
+
+    </LinearLayout>
+
+</ScrollView>

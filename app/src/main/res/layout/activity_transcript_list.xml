@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="#1A1A2E">
+
+    <!-- Toolbar -->
+    <com.google.android.material.appbar.MaterialToolbar
+        android:id="@+id/toolbar"
+        android:layout_width="match_parent"
+        android:layout_height="?attr/actionBarSize"
+        android:background="#0F0F23"
+        app:title="Transkripte"
+        app:titleTextColor="#E0E0E0"
+        app:navigationIcon="@drawable/ic_back"
+        app:navigationIconTint="#E0E0E0" />
+
+    <!-- Empty state -->
+    <TextView
+        android:id="@+id/tvEmpty"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:gravity="center"
+        android:text="Noch keine Transkripte gespeichert.\n\nStarte eine Aufnahme, um dein erstes Transkript zu erstellen."
+        android:textColor="#666666"
+        android:textSize="15sp"
+        android:lineSpacingMultiplier="1.4"
+        android:padding="48dp"
+        android:visibility="gone" />
+
+    <!-- Transcript list -->
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/rvTranscripts"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:padding="16dp"
+        android:clipToPadding="false" />
+
+</LinearLayout>
