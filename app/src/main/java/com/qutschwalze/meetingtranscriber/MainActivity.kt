@@ -260,10 +260,13 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        val modelPath = ModelManager.getModelPath(this, langCode)
+        val modelDir = ModelManager.getModelPath(this, langCode)
             ?: throw Exception("Modell-Pfad nicht gefunden: $langCode")
+        val files = ModelManager.getModelFiles(this, langCode)
+            ?: throw Exception("Modell-Dateien nicht gefunden: $langCode")
+        val tokens = File(modelDir, "tokens.txt").absolutePath
 
-        val engine = SherpaEngine(modelPath)
+        val engine = SherpaEngine(files.first, files.second, files.third, tokens)
         if (!engine.init()) {
             throw Exception("Engine-Init fehlgeschlagen: $langCode")
         }

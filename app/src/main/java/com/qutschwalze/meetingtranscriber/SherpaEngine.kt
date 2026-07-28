@@ -5,12 +5,9 @@ import com.k2fsa.sherpa.onnx.OnlineRecognizer
 import com.k2fsa.sherpa.onnx.OnlineRecognizerConfig
 import com.k2fsa.sherpa.onnx.OnlineStream
 import com.k2fsa.sherpa.onnx.OnlineTransducerModelConfig
-import com.k2fsa.sherpa.onnx.OnlineParaformerModelConfig
-import com.k2fsa.sherpa.onnx.OnlineZipformer2CtcModelConfig
 import com.k2fsa.sherpa.onnx.FeatureConfig
 import com.k2fsa.sherpa.onnx.EndpointConfig
 import com.k2fsa.sherpa.onnx.EndpointRule
-import java.io.File
 
 /**
  * Sherpa-ONNX Streaming ASR Engine.
@@ -18,43 +15,25 @@ import java.io.File
  * Audio input: FloatArray at 16kHz sample rate.
  */
 class SherpaEngine(
-    private val modelDir: String,
-    private val modelType: String = "zipformer"
+    private val encoderPath: String,
+    private val decoderPath: String,
+    private val joinerPath: String,
+    private val tokensPath: String
 ) {
     private var recognizer: OnlineRecognizer? = null
     private var stream: OnlineStream? = null
 
-    /** Create recognizer from downloaded model files on disk */
+    /**
+     * Convenience constructor from model directory — looks for standard filenames.
+     */
+    constructor(modelDir: String) : this(
+        encoderPath = findFile(modelDir, listOf("encoder.onnx", "encoder.int8.onnx")),
+        decoderPath = findFile(modelDir, listOf("decoder.onnx")),
+        joinerPath = findFile(modelDir, listOf("joiner.onnx", "joiner.int8.onnx")),
+        tokensPath = "$modelDir/tokens.txt"
+    )
+
     fun init(): Boolean {
-        val encoder = File(modelDir, "encoder.onnx")
-        val decoder = File(modelDir, "decoder.onnx")
-        val joiner = File(modelDir, "joiner.onnx")
-        val tokens = File(modelDir, "tokens.txt")
-
-        if (!encoder.exists() || !decoder.exists() || !joiner.exists() || !tokens.exists()) {
-            // Try int8 variants
-            val encoderInt8 = File(modelDir, "encoder-epoch-99-avg-1-chunk-16-left-128.int8.onnx")
-            val decoderOnnx = File(modelDir, "decoder-epoch-99-avg-1-chunk-16-left-128.onnx")
-            val joinerInt8 = File(modelDir, "joiner-epoch-99-avg-1-chunk-16-left-128.int8.onnx")
-            val tokensTxt = File(modelDir, "tokens.txt")
-
-            if (!encoderInt8.exists() || !decoderOnnx.exists() || !joinerInt8.exists() || !tokensTxt.exists()) {
-                return false
-            }
-
-            return initFromFiles(encoderInt8.absolutePath, decoderOnnx.absolutePath, joinerInt8.absolutePath, tokensTxt.absolutePath)
-        }
-
-        return initFromFiles(encoder.absolutePath, decoder.absolutePath, joiner.absolutePath, tokens.absolutePath)
-    }
-
-    /** Create recognizer from explicit file paths */
-    fun initFromFiles(
-        encoderPath: String,
-        decoderPath: String,
-        joinerPath: String,
-        tokensPath: String
-    ): Boolean {
         val transducerConfig = OnlineTransducerModelConfig(
             encoder = encoderPath,
             decoder = decoderPath,
@@ -65,7 +44,6 @@ class SherpaEngine(
             transducer = transducerConfig,
             tokens = tokensPath,
             numThreads = 2,
-            modelType = modelType,
         )
 
         val endpointConfig = EndpointConfig(
@@ -87,55 +65,63 @@ class SherpaEngine(
             stream = recognizer!!.createStream()
             true
         } catch (e: Exception) {
+            e.printStackTrace()
             false
         }
     }
 
-    /** Feed audio samples (FloatArray, 16kHz) into the stream */
     fun acceptWaveform(samples: FloatArray, sampleRate: Int = 16000) {
         stream?.acceptWaveform(samples, sampleRate)
     }
 
-    /** Check if the recognizer is ready to decode */
     fun isReady(): Boolean {
         val r = recognizer ?: return false
         val s = stream ?: return false
         return r.isReady(s)
     }
 
-    /** Decode one chunk */
     fun decode() {
-        val r = recognizer ?: return
-        val s = stream ?: return
-        r.decode(s)
+        recognizer?.decode(stream!!)
     }
 
-    /** Check if an endpoint (end of utterance) was detected */
     fun isEndpoint(): Boolean {
         val r = recognizer ?: return false
         val s = stream ?: return false
         return r.isEndpoint(s)
     }
 
-    /** Get the current partial/final result text */
     fun getResult(): String {
         val r = recognizer ?: return ""
         val s = stream ?: return ""
         return r.getResult(s).text
     }
 
-    /** Reset the stream after an endpoint (start new utterance) */
     fun reset() {
-        val r = recognizer ?: return
-        val s = stream ?: return
-        r.reset(s)
+        recognizer?.reset(stream!!)
     }
 
-    /** Release resources */
     fun release() {
         stream?.release()
         recognizer?.release()
         stream = null
         recognizer = null
+    }
+
+    companion object {
+        private fun findFile(dir: String, candidates: List<String>): String {
+            for (name in candidates) {
+                val f = java.io.File(dir, name)
+                if (f.exists()) return f.absolutePath
+            }
+            // Fallback: list directory and find first match
+            val d = java.io.File(dir)
+            if (d.exists()) {
+                for (name in candidates) {
+                    val match = d.listFiles()?.find { it.name == name || it.name.contains(name.removeSuffix(".onnx")) }
+                    if (match != null) return match.absolutePath
+                }
+            }
+            throw IllegalArgumentException("No matching file in $dir for: $candidates")
+        }
     }
 }

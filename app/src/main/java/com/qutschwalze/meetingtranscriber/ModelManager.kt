@@ -5,76 +5,99 @@ import android.util.Log
 import java.io.BufferedInputStream
 import java.io.File
 import java.io.FileOutputStream
+import java.net.HttpURLConnection
 import java.net.URL
-import java.util.zip.ZipInputStream
 
 /**
- * Manages Sherpa-ONNX model downloads and storage.
- * Models are downloaded from HuggingFace as ZIP files and stored in context.filesDir/models/
+ * Manages Sherpa-ONNX model downloads from HuggingFace.
+ * Each model consists of 4 files: encoder.onnx, decoder.onnx, joiner.onnx, tokens.txt
+ * Downloaded individually — no archive extraction needed.
  */
 object ModelManager {
     private const val TAG = "ModelManager"
 
-    /**
-     * Sherpa-ONNX streaming Zipformer models from HuggingFace.
-     * Each model contains: encoder.onnx, decoder.onnx, joiner.onnx, tokens.txt
-     */
-    data class ModelInfo(
-        val name: String,
+    data class ModelFiles(
+        val dirName: String,
         val displayName: String,
-        val url: String,
-        val zipName: String,
-        val type: String = "zipformer"
+        val baseUrl: String,
+        val encoder: String,
+        val decoder: String,
+        val joiner: String,
+        val tokens: String
     )
 
     val models = mapOf(
-        "de" to ModelInfo(
-            name = "sherpa-onnx-streaming-zipformer-de-kroko-2025-08-06",
-            displayName = "Deutsch (Streaming Zipformer)",
-            url = "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-de-kroko-2025-08-06/resolve/main/sherpa-onnx-streaming-zipformer-de-kroko-2025-08-06.tar.bz2",
-            zipName = "sherpa-onnx-streaming-zipformer-de-kroko-2025-08-06.tar.bz2"
+        "de" to ModelFiles(
+            dirName = "sherpa-onnx-streaming-zipformer-de-kroko-2025-08-06",
+            displayName = "Deutsch",
+            baseUrl = "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-de-kroko-2025-08-06/resolve/main",
+            encoder = "encoder.onnx",
+            decoder = "decoder.onnx",
+            joiner = "joiner.onnx",
+            tokens = "tokens.txt"
         ),
-        "en" to ModelInfo(
-            name = "sherpa-onnx-streaming-zipformer-en-2023-06-26",
-            displayName = "English (Streaming Zipformer)",
-            url = "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-2023-06-26/resolve/main/sherpa-onnx-streaming-zipformer-en-2023-06-26.tar.bz2",
-            zipName = "sherpa-onnx-streaming-zipformer-en-2023-06-26.tar.bz2"
+        "en" to ModelFiles(
+            dirName = "sherpa-onnx-streaming-zipformer-en-2023-06-26",
+            displayName = "English",
+            baseUrl = "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-2023-06-26/resolve/main",
+            encoder = "encoder-epoch-99-avg-1-chunk-16-left-128.int8.onnx",
+            decoder = "decoder-epoch-99-avg-1-chunk-16-left-128.onnx",
+            joiner = "joiner-epoch-99-avg-1-chunk-16-left-128.int8.onnx",
+            tokens = "tokens.txt"
         ),
-        "fr" to ModelInfo(
-            name = "sherpa-onnx-streaming-zipformer-fr-2023-04-14",
-            displayName = "Français (Streaming Zipformer)",
-            url = "https://huggingface.co/shaojieli/sherpa-onnx-streaming-zipformer-fr-2023-04-14/resolve/main/sherpa-onnx-streaming-zipformer-fr-2023-04-14.tar.bz2",
-            zipName = "sherpa-onnx-streaming-zipformer-fr-2023-04-14.tar.bz2"
+        "fr" to ModelFiles(
+            dirName = "sherpa-onnx-streaming-zipformer-fr-2023-04-14",
+            displayName = "Français",
+            baseUrl = "https://huggingface.co/shaojieli/sherpa-onnx-streaming-zipformer-fr-2023-04-14/resolve/main",
+            encoder = "encoder-epoch-29-avg-9-with-averaged-model.int8.onnx",
+            decoder = "decoder-epoch-29-avg-9-with-averaged-model.onnx",
+            joiner = "joiner-epoch-29-avg-9-with-averaged-model.int8.onnx",
+            tokens = "tokens.txt"
         ),
-        "es" to ModelInfo(
-            name = "sherpa-onnx-streaming-zipformer-es-kroko-2025-08-06",
-            displayName = "Español (Streaming Zipformer)",
-            url = "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-es-kroko-2025-08-06/resolve/main/sherpa-onnx-streaming-zipformer-es-kroko-2025-08-06.tar.bz2",
-            zipName = "sherpa-onnx-streaming-zipformer-es-kroko-2025-08-06.tar.bz2"
+        "es" to ModelFiles(
+            dirName = "sherpa-onnx-streaming-zipformer-es-2024-06-16",
+            displayName = "Español",
+            baseUrl = "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-es-2024-06-16/resolve/main",
+            encoder = "encoder-epoch-99-avg-1.int8.onnx",
+            decoder = "decoder-epoch-99-avg-1.onnx",
+            joiner = "joiner-epoch-99-avg-1.int8.onnx",
+            tokens = "tokens.txt"
         ),
-        "it" to ModelInfo(
-            name = "sherpa-onnx-streaming-zipformer-it-2024-06-16",
-            displayName = "Italiano (Streaming Zipformer)",
-            url = "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-it-2024-06-16/resolve/main/sherpa-onnx-streaming-zipformer-it-2024-06-16.tar.bz2",
-            zipName = "sherpa-onnx-streaming-zipformer-it-2024-06-16.tar.bz2"
+        "it" to ModelFiles(
+            dirName = "sherpa-onnx-streaming-zipformer-it-2024-06-16",
+            displayName = "Italiano",
+            baseUrl = "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-it-2024-06-16/resolve/main",
+            encoder = "encoder-epoch-99-avg-1.int8.onnx",
+            decoder = "decoder-epoch-99-avg-1.onnx",
+            joiner = "joiner-epoch-99-avg-1.int8.onnx",
+            tokens = "tokens.txt"
         ),
-        "ru" to ModelInfo(
-            name = "sherpa-onnx-streaming-zipformer-ru-2024-06-16",
-            displayName = "Русский (Streaming Zipformer)",
-            url = "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-ru-2024-06-16/resolve/main/sherpa-onnx-streaming-zipformer-ru-2024-06-16.tar.bz2",
-            zipName = "sherpa-onnx-streaming-zipformer-ru-2024-06-16.tar.bz2"
+        "ru" to ModelFiles(
+            dirName = "sherpa-onnx-streaming-zipformer-ru-2024-06-16",
+            displayName = "Русский",
+            baseUrl = "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-ru-2024-06-16/resolve/main",
+            encoder = "encoder-epoch-99-avg-1.int8.onnx",
+            decoder = "decoder-epoch-99-avg-1.onnx",
+            joiner = "joiner-epoch-99-avg-1.int8.onnx",
+            tokens = "tokens.txt"
         ),
-        "pt" to ModelInfo(
-            name = "sherpa-onnx-streaming-zipformer-pt-2024-06-16",
-            displayName = "Português (Streaming Zipformer)",
-            url = "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-pt-2024-06-16/resolve/main/sherpa-onnx-streaming-zipformer-pt-2024-06-16.tar.bz2",
-            zipName = "sherpa-onnx-streaming-zipformer-pt-2024-06-16.tar.bz2"
+        "pt" to ModelFiles(
+            dirName = "sherpa-onnx-streaming-zipformer-pt-2024-06-16",
+            displayName = "Português",
+            baseUrl = "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-pt-2024-06-16/resolve/main",
+            encoder = "encoder-epoch-99-avg-1.int8.onnx",
+            decoder = "decoder-epoch-99-avg-1.onnx",
+            joiner = "joiner-epoch-99-avg-1.int8.onnx",
+            tokens = "tokens.txt"
         ),
-        "nl" to ModelInfo(
-            name = "sherpa-onnx-streaming-zipformer-nl-2024-06-16",
-            displayName = "Nederlands (Streaming Zipformer)",
-            url = "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-nl-2024-06-16/resolve/main/sherpa-onnx-streaming-zipformer-nl-2024-06-16.tar.bz2",
-            zipName = "sherpa-onnx-streaming-zipformer-nl-2024-06-16.tar.bz2"
+        "nl" to ModelFiles(
+            dirName = "sherpa-onnx-streaming-zipformer-nl-2024-06-16",
+            displayName = "Nederlands",
+            baseUrl = "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-nl-2024-06-16/resolve/main",
+            encoder = "encoder-epoch-99-avg-1.int8.onnx",
+            decoder = "decoder-epoch-99-avg-1.onnx",
+            joiner = "joiner-epoch-99-avg-1.int8.onnx",
+            tokens = "tokens.txt"
         )
     )
 
@@ -84,16 +107,37 @@ object ModelManager {
 
     fun isModelAvailable(context: Context, langCode: String): Boolean {
         val info = models[langCode] ?: return false
-        val modelDir = File(getModelDir(context), info.name)
-        return modelDir.exists() && modelDir.listFiles()?.isNotEmpty() == true
+        val modelDir = File(getModelDir(context), info.dirName)
+        if (!modelDir.exists()) return false
+        // Check all 4 required files exist
+        return File(modelDir, info.encoder).exists() &&
+                File(modelDir, info.decoder).exists() &&
+                File(modelDir, info.joiner).exists() &&
+                File(modelDir, info.tokens).exists()
     }
 
     fun getModelPath(context: Context, langCode: String): String? {
         val info = models[langCode] ?: return null
-        val modelDir = File(getModelDir(context), info.name)
-        return if (modelDir.exists()) modelDir.absolutePath else null
+        val modelDir = File(getModelDir(context), info.dirName)
+        return if (isModelAvailable(context, langCode)) modelDir.absolutePath else null
     }
 
+    /** Get exact file paths for creating a SherpaEngine */
+    fun getModelFiles(context: Context, langCode: String): Triple<String, String, String>? {
+        val info = models[langCode] ?: return null
+        val modelDir = File(getModelDir(context), info.dirName)
+        if (!isModelAvailable(context, langCode)) return null
+        return Triple(
+            File(modelDir, info.encoder).absolutePath,
+            File(modelDir, info.decoder).absolutePath,
+            File(modelDir, info.joiner).absolutePath
+        )
+    }
+
+    /**
+     * Download model files individually from HuggingFace.
+     * No archive extraction — files are downloaded directly to the model directory.
+     */
     fun downloadModel(
         context: Context,
         langCode: String,
@@ -105,88 +149,89 @@ object ModelManager {
         }
 
         val modelsDir = getModelDir(context)
-        val modelDir = File(modelsDir, info.name)
+        val modelDir = File(modelsDir, info.dirName)
 
-        if (modelDir.exists() && modelDir.listFiles()?.isNotEmpty() == true) {
+        if (isModelAvailable(context, langCode)) {
             onProgress("Modell bereits vorhanden")
             return modelDir
         }
 
-        val downloadFile = File(modelsDir, info.zipName)
-
         try {
-            modelsDir.mkdirs()
-            onProgress("Download: ${info.name}…")
+            modelDir.mkdirs()
 
-            val connection = URL(info.url).openConnection()
-            connection.connectTimeout = 30000
-            connection.readTimeout = 60000
-            val totalSize = connection.contentLength
+            val files = listOf(
+                info.encoder to "encoder",
+                info.decoder to "decoder",
+                info.joiner to "joiner",
+                info.tokens to "tokens.txt"
+            )
 
-            BufferedInputStream(connection.getInputStream()).use { input ->
-                FileOutputStream(downloadFile).use { output ->
-                    val buffer = ByteArray(8192)
-                    var bytesRead: Int
-                    var totalRead = 0L
+            for ((filename, label) in files) {
+                val targetFile = File(modelDir, filename)
+                if (targetFile.exists() && targetFile.length() > 0) {
+                    continue // Skip already downloaded files
+                }
 
-                    while (input.read(buffer).also { bytesRead = it } != -1) {
-                        output.write(buffer, 0, bytesRead)
-                        totalRead += bytesRead
+                val fileUrl = "${info.baseUrl}/$filename"
+                onProgress("Download: $label…")
 
-                        if (totalSize > 0) {
-                            val progress = (totalRead * 100 / totalSize).toInt()
-                            onProgress("Download: $progress%")
-                        }
-                    }
+                downloadFile(fileUrl, targetFile) { progress ->
+                    onProgress("$label: $progress%")
+                }
+
+                if (!targetFile.exists() || targetFile.length() == 0L) {
+                    throw Exception("Download fehlgeschlagen: $filename")
                 }
             }
 
-            onProgress("Entpacke Modell…")
-            when {
-                info.zipName.endsWith(".tar.bz2") -> untarBz2(downloadFile, modelsDir)
-                info.zipName.endsWith(".zip") -> unzip(downloadFile, modelsDir)
-                else -> unzip(downloadFile, modelsDir)
-            }
-            downloadFile.delete()
-
-            if (modelDir.exists()) {
-                onProgress("Modell bereit")
-                return modelDir
-            }
+            onProgress("Modell bereit")
+            return modelDir
 
         } catch (e: Exception) {
-            Log.e(TAG, "Model download failed", e)
+            Log.e(TAG, "Model download failed: ${e.message}", e)
             onProgress("Download fehlgeschlagen: ${e.message}")
-            downloadFile.delete()
+            // Clean up partial downloads
+            modelDir.listFiles()?.forEach { it.delete() }
+            modelDir.delete()
         }
 
         return null
     }
 
-    private fun untarBz2(archiveFile: File, targetDir: File) {
-        // Use system tar to extract .tar.bz2
-        val process = ProcessBuilder(
-            "tar", "xjf", archiveFile.absolutePath, "-C", targetDir.absolutePath
-        ).start()
-        process.waitFor()
-    }
+    private fun downloadFile(
+        urlStr: String,
+        targetFile: File,
+        onProgress: (Int) -> Unit = {}
+    ) {
+        val connection = URL(urlStr).openConnection() as HttpURLConnection
+        connection.connectTimeout = 30000
+        connection.readTimeout = 60000
+        connection.connect()
 
-    private fun unzip(zipFile: File, targetDir: File) {
-        ZipInputStream(zipFile.inputStream().buffered()).use { zip ->
-            var entry = zip.nextEntry
-            while (entry != null) {
-                val file = File(targetDir, entry.name)
-                if (entry.isDirectory) {
-                    file.mkdirs()
-                } else {
-                    file.parentFile?.mkdirs()
-                    FileOutputStream(file).use { fos ->
-                        zip.copyTo(fos)
+        if (connection.responseCode != 200) {
+            throw Exception("HTTP ${connection.responseCode} for $urlStr")
+        }
+
+        val totalSize = connection.contentLength.toLong()
+
+        BufferedInputStream(connection.inputStream).use { input ->
+            FileOutputStream(targetFile).use { output ->
+                val buffer = ByteArray(8192)
+                var bytesRead: Int
+                var totalRead = 0L
+
+                while (input.read(buffer).also { bytesRead = it } != -1) {
+                    output.write(buffer, 0, bytesRead)
+                    totalRead += bytesRead
+
+                    if (totalSize > 0) {
+                        val progress = (totalRead * 100 / totalSize).toInt()
+                        onProgress(progress)
                     }
                 }
-                zip.closeEntry()
-                entry = zip.nextEntry
             }
         }
+
+        connection.disconnect()
     }
 }
