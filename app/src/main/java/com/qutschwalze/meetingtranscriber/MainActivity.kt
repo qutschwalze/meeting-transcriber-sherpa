@@ -215,7 +215,7 @@ class MainActivity : AppCompatActivity() {
 
                 isRecording.set(true)
                 startTime = System.currentTimeMillis()
-                currentSpeakerId = -1
+                currentSpeakerId = 0  // Default speaker — diarization updates later
                 currentTextBuffer.clear()
                 audioBuffer.clear()
                 transcriptAdapter.clear()
