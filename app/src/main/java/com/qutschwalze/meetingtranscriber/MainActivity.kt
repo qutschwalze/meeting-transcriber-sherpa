@@ -43,7 +43,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var transcriptAdapter: LiveTranscriptAdapter
     private var currentSpeakerId = 0
     private val currentTextBuffer = StringBuilder()
-    private var lastEndpointMs = 0L
 
     // ASR Engines (always auto DE/EN)
     private var engineDE: SherpaEngine? = null
@@ -51,10 +50,14 @@ class MainActivity : AppCompatActivity() {
     private var activeEngine: SherpaEngine? = null
     private var detectedLanguage: String? = null
 
-    // Simple speaker detection
+    // Speaker detection via pitch
     private var speakerCount = 1
-    private var lastTextHadPause = false
-    private val SILENCE_THRESHOLD_MS = 1200  // Pause > 1.2s = possible new speaker
+    private var lastEndpointMs = 0L
+    private var currentPitch = 0f
+    private val pitchHistory = mutableListOf<Float>()
+    private val SPEAKER_DIFF_THRESHOLD = 15f  // Hz difference = new speaker
+    private val MIN_SEGMENT_MS = 800
+    private var lastAudioChunk: ShortArray? = null
 
     companion object {
         private const val REQUEST_AUDIO_PERMISSION = 200
@@ -246,6 +249,9 @@ class MainActivity : AppCompatActivity() {
                 for (i in 0 until read) { val a = Math.abs(amp[i].toInt()); if (a > mx) mx = a }
                 handler.post { binding.progressLevel.progress = (mx * 100 / 32768).coerceIn(0, 100) }
 
+                // Save chunk for pitch estimation
+                lastAudioChunk = amp.copyOf(read)
+
                 // Always feed both engines for auto-detect
                 val float = FloatArray(read) { amp[it] / 32768.0f }
                 if (detectedLanguage == null) autoDetect(float, now, detBuf)
@@ -283,24 +289,37 @@ class MainActivity : AppCompatActivity() {
             val text = engine.getResult()
 
             if (engine.isEndpoint()) {
-                // Check silence gap for speaker change
-                val now = System.currentTimeMillis()
-                val gap = now - lastEndpointMs
-                if (lastEndpointMs > 0 && gap > SILENCE_THRESHOLD_MS && text.isNotBlank()) {
-                    // Long pause — likely new speaker
-                    flushCurrentText()
-                    speakerCount++
-                    currentSpeakerId = speakerCount - 1
-                }
-                lastEndpointMs = now
-
                 if (text.isNotBlank()) {
+                    // Check speaker change: compare pitch of current segment to history
+                    val now = System.currentTimeMillis()
+                    val segmentMs = now - lastEndpointMs
+
+                    if (segmentMs > MIN_SEGMENT_MS && currentPitch > 0 && pitchHistory.size >= 2) {
+                        val avgPitch = pitchHistory.average().toFloat()
+                        val diff = Math.abs(currentPitch - avgPitch)
+
+                        if (diff > SPEAKER_DIFF_THRESHOLD && pitchHistory.size > 1) {
+                            // Significant pitch change — new speaker
+                            flushCurrentText()
+                            speakerCount++
+                            currentSpeakerId = speakerCount - 1
+                            pitchHistory.clear()
+                        }
+                    }
+
+                    pitchHistory.add(currentPitch)
+                    lastEndpointMs = now
                     currentTextBuffer.append(text)
                 }
                 engine.reset()
                 flushCurrentText()
                 handler.post { binding.tvPartial.visibility = View.GONE }
             } else if (text.isNotBlank()) {
+                // Track pitch from audio buffer (estimated from last chunk)
+                val lastChunk = lastAudioChunk
+                if (lastChunk != null) {
+                    currentPitch = estimatePitch(lastChunk)
+                }
                 handler.post {
                     binding.tvPartial.text = text
                     binding.tvPartial.visibility = View.VISIBLE
@@ -319,6 +338,50 @@ class MainActivity : AppCompatActivity() {
             }
         }
         currentTextBuffer.clear()
+    }
+
+    /**
+     * Estimate pitch (F0) via autocorrelation.
+     * Returns fundamental frequency in Hz (0 = unvoiced/silence).
+     * Male: ~85-180Hz, Female: ~165-255Hz
+     */
+    private fun estimatePitch(samples: ShortArray): Float {
+        val n = samples.size
+        if (n < 256) return 0f
+
+        // Only check lags for 60-400Hz at 16kHz
+        val minLag = 40   // 400Hz
+        val maxLag = 267  // 60Hz
+
+        var bestCorr = 0.0
+        var bestLag = minLag
+
+        for (lag in minLag..maxLag) {
+            var corr = 0.0
+            var norm1 = 0.0
+            var norm2 = 0.0
+            val cnt = n - lag
+            for (i in 0 until cnt) {
+                val a = samples[i].toDouble() / Short.MAX_VALUE
+                val b = samples[i + lag].toDouble() / Short.MAX_VALUE
+                corr += a * b
+                norm1 += a * a
+                norm2 += b * b
+            }
+            val norm = Math.sqrt(norm1 * norm2)
+            if (norm > 0) {
+                corr /= norm
+                if (corr > bestCorr) {
+                    bestCorr = corr
+                    bestLag = lag
+                }
+            }
+        }
+
+        // Only return pitch if correlation is strong enough (voiced speech)
+        if (bestCorr < 0.3) return 0f
+
+        return (SAMPLE_RATE.toFloat() / bestLag)
     }
 
     // ── Utils ──
