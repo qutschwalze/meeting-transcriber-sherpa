@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <item
+        android:id="@+id/menu_language"
+        android:title="🗣️ Sprache"
+        app:showAsAction="never">
+        <menu>
+            <item android:id="@+id/menu_lang_auto" android:title="🤖 Auto-Erkennung" />
+            <item android:id="@+id/menu_lang_de" android:title="🇩🇪 Deutsch" />
+            <item android:id="@+id/menu_lang_en" android:title="🇬🇧 English" />
+            <item android:id="@+id/menu_lang_fr" android:title="🇫🇷 Français" />
+        </menu>
+    </item>
+
+    <item
+        android:id="@+id/menu_transcripts"
+        android:title="📋 Alle Transkripte"
+        app:showAsAction="never" />
+
+    <item
+        android:id="@+id/menu_about"
+        android:title="ℹ️ About"
+        app:showAsAction="never" />
+
+</menu>
