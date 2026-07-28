@@ -57,12 +57,7 @@ class MainActivity : AppCompatActivity() {
     private val allLanguages = mapOf(
         "Deutsch" to "de",
         "English" to "en",
-        "Français" to "fr",
-        "Español" to "es",
-        "Italiano" to "it",
-        "Русский" to "ru",
-        "Português" to "pt",
-        "Nederlands" to "nl"
+        "Français" to "fr"
     )
 
     private var selectedLangCode = "de"

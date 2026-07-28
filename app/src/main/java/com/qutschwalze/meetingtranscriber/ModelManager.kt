@@ -53,51 +53,6 @@ object ModelManager {
             decoder = "decoder-epoch-29-avg-9-with-averaged-model.onnx",
             joiner = "joiner-epoch-29-avg-9-with-averaged-model.int8.onnx",
             tokens = "tokens.txt"
-        ),
-        "es" to ModelFiles(
-            dirName = "sherpa-onnx-streaming-zipformer-es-2024-06-16",
-            displayName = "Español",
-            baseUrl = "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-es-2024-06-16/resolve/main",
-            encoder = "encoder-epoch-99-avg-1.int8.onnx",
-            decoder = "decoder-epoch-99-avg-1.onnx",
-            joiner = "joiner-epoch-99-avg-1.int8.onnx",
-            tokens = "tokens.txt"
-        ),
-        "it" to ModelFiles(
-            dirName = "sherpa-onnx-streaming-zipformer-it-2024-06-16",
-            displayName = "Italiano",
-            baseUrl = "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-it-2024-06-16/resolve/main",
-            encoder = "encoder-epoch-99-avg-1.int8.onnx",
-            decoder = "decoder-epoch-99-avg-1.onnx",
-            joiner = "joiner-epoch-99-avg-1.int8.onnx",
-            tokens = "tokens.txt"
-        ),
-        "ru" to ModelFiles(
-            dirName = "sherpa-onnx-streaming-zipformer-ru-2024-06-16",
-            displayName = "Русский",
-            baseUrl = "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-ru-2024-06-16/resolve/main",
-            encoder = "encoder-epoch-99-avg-1.int8.onnx",
-            decoder = "decoder-epoch-99-avg-1.onnx",
-            joiner = "joiner-epoch-99-avg-1.int8.onnx",
-            tokens = "tokens.txt"
-        ),
-        "pt" to ModelFiles(
-            dirName = "sherpa-onnx-streaming-zipformer-pt-2024-06-16",
-            displayName = "Português",
-            baseUrl = "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-pt-2024-06-16/resolve/main",
-            encoder = "encoder-epoch-99-avg-1.int8.onnx",
-            decoder = "decoder-epoch-99-avg-1.onnx",
-            joiner = "joiner-epoch-99-avg-1.int8.onnx",
-            tokens = "tokens.txt"
-        ),
-        "nl" to ModelFiles(
-            dirName = "sherpa-onnx-streaming-zipformer-nl-2024-06-16",
-            displayName = "Nederlands",
-            baseUrl = "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-nl-2024-06-16/resolve/main",
-            encoder = "encoder-epoch-99-avg-1.int8.onnx",
-            decoder = "decoder-epoch-99-avg-1.onnx",
-            joiner = "joiner-epoch-99-avg-1.int8.onnx",
-            tokens = "tokens.txt"
         )
     )
 
@@ -109,7 +64,6 @@ object ModelManager {
         val info = models[langCode] ?: return false
         val modelDir = File(getModelDir(context), info.dirName)
         if (!modelDir.exists()) return false
-        // Check all 4 required files exist
         return File(modelDir, info.encoder).exists() &&
                 File(modelDir, info.decoder).exists() &&
                 File(modelDir, info.joiner).exists() &&
@@ -122,7 +76,6 @@ object ModelManager {
         return if (isModelAvailable(context, langCode)) modelDir.absolutePath else null
     }
 
-    /** Get exact file paths for creating a SherpaEngine */
     fun getModelFiles(context: Context, langCode: String): Triple<String, String, String>? {
         val info = models[langCode] ?: return null
         val modelDir = File(getModelDir(context), info.dirName)
@@ -134,10 +87,6 @@ object ModelManager {
         )
     }
 
-    /**
-     * Download model files individually from HuggingFace.
-     * No archive extraction — files are downloaded directly to the model directory.
-     */
     fun downloadModel(
         context: Context,
         langCode: String,
@@ -169,7 +118,7 @@ object ModelManager {
             for ((filename, label) in files) {
                 val targetFile = File(modelDir, filename)
                 if (targetFile.exists() && targetFile.length() > 0) {
-                    continue // Skip already downloaded files
+                    continue
                 }
 
                 val fileUrl = "${info.baseUrl}/$filename"
@@ -190,7 +139,6 @@ object ModelManager {
         } catch (e: Exception) {
             Log.e(TAG, "Model download failed: ${e.message}", e)
             onProgress("Download fehlgeschlagen: ${e.message}")
-            // Clean up partial downloads
             modelDir.listFiles()?.forEach { it.delete() }
             modelDir.delete()
         }
@@ -205,18 +153,18 @@ object ModelManager {
     ) {
         val connection = URL(urlStr).openConnection() as HttpURLConnection
         connection.connectTimeout = 30000
-        connection.readTimeout = 60000
+        connection.readTimeout = 120000  // Longer timeout for large files
         connection.connect()
 
         if (connection.responseCode != 200) {
-            throw Exception("HTTP ${connection.responseCode} for $urlStr")
+            throw Exception("HTTP ${connection.responseCode} für $urlStr")
         }
 
         val totalSize = connection.contentLength.toLong()
 
         BufferedInputStream(connection.inputStream).use { input ->
             FileOutputStream(targetFile).use { output ->
-                val buffer = ByteArray(8192)
+                val buffer = ByteArray(16384)  // Larger buffer for speed
                 var bytesRead: Int
                 var totalRead = 0L
 
