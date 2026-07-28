@@ -41,21 +41,20 @@ class MainActivity : AppCompatActivity() {
 
     // Transcript
     private lateinit var transcriptAdapter: LiveTranscriptAdapter
-    private var currentSpeakerId = -1
+    private var currentSpeakerId = 0
     private val currentTextBuffer = StringBuilder()
+    private var lastEndpointMs = 0L
 
-    // Engines
+    // ASR Engines (always auto DE/EN)
     private var engineDE: SherpaEngine? = null
     private var engineEN: SherpaEngine? = null
     private var activeEngine: SherpaEngine? = null
     private var detectedLanguage: String? = null
-    private var autoMode = true
-    private var selectedLangCode = "de"
 
-    // Diarization
-    private lateinit var diarizationManager: DiarizationManager
-    private val audioBuffer = mutableListOf<FloatArray>()
-    private var diarizationReady = false
+    // Simple speaker detection
+    private var speakerCount = 1
+    private var lastTextHadPause = false
+    private val SILENCE_THRESHOLD_MS = 1200  // Pause > 1.2s = possible new speaker
 
     companion object {
         private const val REQUEST_AUDIO_PERMISSION = 200
@@ -64,8 +63,6 @@ class MainActivity : AppCompatActivity() {
         private const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
         private const val AUDIO_GAIN = 2.5f
         private const val DETECTION_WINDOW_MS = 3000L
-        // Process diarization every N seconds of audio
-        private const val DIARIZATION_CHUNK_SECONDS = 3
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -74,31 +71,18 @@ class MainActivity : AppCompatActivity() {
         setContentView(binding.root)
         setSupportActionBar(binding.toolbar)
 
-        // RecyclerView setup
         transcriptAdapter = LiveTranscriptAdapter()
         binding.rvTranscript.apply {
-            layoutManager = LinearLayoutManager(this@MainActivity).apply {
-                reverseLayout = true  // Newest entries at top
-            }
+            layoutManager = LinearLayoutManager(this@MainActivity).apply { reverseLayout = true }
             adapter = transcriptAdapter
         }
 
-        // Initialize diarization
-        lifecycleScope.launch(Dispatchers.IO) {
-            diarizationManager = DiarizationManager(this@MainActivity)
-            diarizationReady = diarizationManager.init()
-            if (!diarizationReady) {
-                handler.post { Toast.makeText(this@MainActivity, "Diarization-Modelle konnten nicht geladen werden", Toast.LENGTH_LONG).show() }
-            }
-        }
-
         setupButtons()
-        setupLanguageChips()
         setupTextSizeSlider()
         checkPermissions()
     }
 
-    // ── Overflow Menu ──
+    // ── Menu (⋮) ──
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
         menuInflater.inflate(R.menu.overflow_menu, menu)
@@ -107,10 +91,6 @@ class MainActivity : AppCompatActivity() {
 
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         when (item.itemId) {
-            R.id.menu_lang_auto -> { autoMode = true; selectedLangCode = "de"; updateChips() }
-            R.id.menu_lang_de -> { autoMode = false; detectedLanguage = null; selectedLangCode = "de"; updateChips() }
-            R.id.menu_lang_en -> { autoMode = false; detectedLanguage = null; selectedLangCode = "en"; updateChips() }
-            R.id.menu_lang_fr -> { autoMode = false; detectedLanguage = null; selectedLangCode = "fr"; updateChips() }
             R.id.menu_transcripts -> startActivity(Intent(this, TranscriptListActivity::class.java))
             R.id.menu_about -> showAboutDialog()
         }
@@ -118,36 +98,15 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showAboutDialog() {
-        val v = try { packageManager.getPackageInfo(packageName, 0).versionName } catch (_: Exception) { "3.0" }
+        val v = try { packageManager.getPackageInfo(packageName, 0).versionName } catch (_: Exception) { "4.0" }
         AlertDialog.Builder(this)
             .setTitle("ℹ️ About")
-            .setMessage("Meeting Transcriber v$v\nEngine: Sherpa-ONNX 1.13.3\nSpeaker Diarization: Pyannote 3.0\n\nOffline-Spracherkennung mit\nStreaming Zipformer Transducer.\n\nFeatures:\n• Live-Transkription\n• Auto-Spracherkennung (DE/EN)\n• Native Speaker Diarization\n• 3 Sprachen (DE, EN, FR)")
+            .setMessage("Meeting Transcriber v$v\nEngine: Sherpa-ONNX 1.13.3\n\nOffline-Spracherkennung mit\nStreaming Zipformer Transducer.\n\nAuto-Erkennung: DE/EN/FR\nSpeaker-Erkennung über Pausen")
             .setPositiveButton("OK", null)
             .show()
     }
 
-    // ── Language Chips ──
-
-    private fun setupLanguageChips() {
-        binding.chipGroupLang.setOnCheckedStateChangeListener { _, checkedIds ->
-            when {
-                checkedIds.contains(R.id.chipAuto) -> { autoMode = true; selectedLangCode = "de" }
-                checkedIds.contains(R.id.chipDe) -> { autoMode = false; detectedLanguage = null; selectedLangCode = "de" }
-                checkedIds.contains(R.id.chipEn) -> { autoMode = false; detectedLanguage = null; selectedLangCode = "en" }
-                checkedIds.contains(R.id.chipFr) -> { autoMode = false; detectedLanguage = null; selectedLangCode = "fr" }
-            }
-            updateChips()
-        }
-    }
-
-    private fun updateChips() {
-        binding.chipAuto.isChecked = autoMode
-        binding.chipDe.isChecked = !autoMode && selectedLangCode == "de"
-        binding.chipEn.isChecked = !autoMode && selectedLangCode == "en"
-        binding.chipFr.isChecked = !autoMode && selectedLangCode == "fr"
-    }
-
-    // ── Buttons ──
+    // ── Buttons & Controls ──
 
     private fun setupButtons() {
         binding.fabRecord.setOnClickListener {
@@ -181,8 +140,6 @@ class MainActivity : AppCompatActivity() {
         })
     }
 
-    // ── Permissions ──
-
     private fun checkPermissions() {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED)
             ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.RECORD_AUDIO), REQUEST_AUDIO_PERMISSION)
@@ -205,31 +162,27 @@ class MainActivity : AppCompatActivity() {
 
         lifecycleScope.launch {
             try {
-                withContext(Dispatchers.IO) {
-                    if (autoMode) { loadModel("de"); loadModel("en") }
-                    else loadModel(selectedLangCode)
-                }
+                withContext(Dispatchers.IO) { loadModel("de"); loadModel("en") }
 
                 val buf = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT)
                 audioRecord = AudioRecord(MediaRecorder.AudioSource.MIC, SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT, buf * 2)
 
                 isRecording.set(true)
                 startTime = System.currentTimeMillis()
-                currentSpeakerId = 0  // Default speaker — diarization updates later
+                currentSpeakerId = 0
                 currentTextBuffer.clear()
-                audioBuffer.clear()
+                lastEndpointMs = 0
+                speakerCount = 1
                 transcriptAdapter.clear()
-
                 audioRecord?.startRecording()
 
                 binding.tvStatus.text = getString(R.string.status_recording)
                 binding.fabRecord.text = getString(R.string.btn_stop)
                 binding.fabRecord.isEnabled = true
-                binding.rvTranscript.visibility = View.VISIBLE
                 binding.tvPartial.visibility = View.VISIBLE
                 binding.exportButtons.visibility = View.GONE
+                binding.tvModelInfo.text = "🎙️ Auto (DE/EN)"
 
-                if (autoMode) binding.tvModelInfo.text = "🤖 Auto-Erkennung aktiv…"
                 handler.post(timerRunnable)
                 recordingThread = Thread(AudioTask()).also { it.start() }
             } catch (e: Exception) {
@@ -246,11 +199,11 @@ class MainActivity : AppCompatActivity() {
             if (ModelManager.downloadModel(this, lang) { p -> handler.post { binding.tvStatus.text = "$lang: $p" } } == null)
                 throw Exception("Download fehlgeschlagen: $lang")
         }
-        val dir = ModelManager.getModelPath(this, lang) ?: throw Exception("Pfad nicht gefunden: $lang")
-        val files = ModelManager.getModelFiles(this, lang) ?: throw Exception("Dateien nicht gefunden: $lang")
+        val dir = ModelManager.getModelPath(this, lang) ?: throw Exception("Pfad: $lang")
+        val files = ModelManager.getModelFiles(this, lang) ?: throw Exception("Dateien: $lang")
         val tokens = File(dir, "tokens.txt").absolutePath
         val engine = SherpaEngine(files.first, files.second, files.third, tokens)
-        if (!engine.init()) throw Exception("Engine-Init fehlgeschlagen: $lang")
+        if (!engine.init()) throw Exception("Engine: $lang")
         when (lang) { "de" -> engineDE = engine; "en" -> engineEN = engine }
         if (activeEngine == null) activeEngine = engine
     }
@@ -261,27 +214,16 @@ class MainActivity : AppCompatActivity() {
         audioRecord?.apply { try { stop() } catch (_: Exception) {}; release() }
         audioRecord = null
 
-        // Flush remaining partial text
         flushCurrentText()
-
-        // NOTE: Diarization disabled — streaming ASR text is preserved as-is
-
         binding.tvStatus.text = getString(R.string.status_ready)
         binding.fabRecord.text = getString(R.string.btn_start)
         binding.tvPartial.visibility = View.GONE
-
-        val ld = when {
-            autoMode && detectedLanguage != null -> " (${if (detectedLanguage == "de") "🇩🇪 DE" else "🇬🇧 EN"} erkannt)"
-            !autoMode -> " (${selectedLangCode.uppercase()})" else -> ""
-        }
-        binding.tvModelInfo.text = "Modell: $ld"
         binding.progressLevel.progress = 0
 
-        if (transcriptAdapter.itemCount > 0) {
-            binding.exportButtons.visibility = View.VISIBLE
-            saveTranscriptToFile()
-        }
+        val ld = if (detectedLanguage != null) " (${if (detectedLanguage == "de") "🇩🇪 DE" else "🇬🇧 EN"})" else ""
+        binding.tvModelInfo.text = "Modell:$ld"
 
+        if (transcriptAdapter.itemCount > 0) { binding.exportButtons.visibility = View.VISIBLE; saveTranscriptToFile() }
         engineDE?.release(); engineEN?.release(); engineDE = null; engineEN = null; activeEngine = null
     }
 
@@ -289,9 +231,8 @@ class MainActivity : AppCompatActivity() {
 
     private inner class AudioTask : Runnable {
         override fun run() {
-            val buf = ShortArray((0.1 * SAMPLE_RATE).toInt()) // 100ms chunks
+            val buf = ShortArray((0.1 * SAMPLE_RATE).toInt())
             val detBuf = mutableListOf<String>()
-            var chunkCounter = 0
 
             while (isRecording.get()) {
                 val read = audioRecord?.read(buf, 0, buf.size) ?: 0
@@ -300,26 +241,15 @@ class MainActivity : AppCompatActivity() {
                 val now = System.currentTimeMillis() - startTime
                 val amp = ShortArray(read) { i -> (buf[i].toFloat() * AUDIO_GAIN).toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort() }
 
-                // Level indicator
+                // Level
                 var mx = 0
                 for (i in 0 until read) { val a = Math.abs(amp[i].toInt()); if (a > mx) mx = a }
                 handler.post { binding.progressLevel.progress = (mx * 100 / 32768).coerceIn(0, 100) }
 
-                // Convert to float for Sherpa
+                // Always feed both engines for auto-detect
                 val float = FloatArray(read) { amp[it] / 32768.0f }
-
-                // Buffer audio for diarization
-                audioBuffer.add(float.copyOf())
-
-                // Stream ASR
-                if (autoMode && detectedLanguage == null) autoDetect(float, now, detBuf)
+                if (detectedLanguage == null) autoDetect(float, now, detBuf)
                 else feedEngine(activeEngine!!, float)
-
-                // Periodically run diarization on accumulated audio
-                chunkCounter++
-                val chunksPerDiarization = DIARIZATION_CHUNK_SECONDS * 10 // 100ms chunks
-                // NOTE: Buffer-diarization disabled during recording to preserve ASR text
-                // Diarization runs only on stop (see stopRecording)
             }
         }
 
@@ -328,7 +258,6 @@ class MainActivity : AppCompatActivity() {
             de.acceptWaveform(s); en.acceptWaveform(s)
             while (de.isReady()) de.decode(); while (en.isReady()) en.decode()
 
-            // Use partial results for language detection
             val dt = de.getResult(); val et = en.getResult()
             if (dt.isNotBlank()) buf.add("de:$dt"); if (et.isNotBlank()) buf.add("en:$et")
 
@@ -337,11 +266,10 @@ class MainActivity : AppCompatActivity() {
                 val ec = buf.count { it.startsWith("en:") && it.length > 4 }
                 detectedLanguage = if (dc > ec) "de" else "en"
                 activeEngine = if (detectedLanguage == "de") de else en
-                val l = if (detectedLanguage == "de") "🇩🇪 Deutsch" else "🇬🇧 English"
-                handler.post { binding.tvModelInfo.text = "🤖 Erkannt: $l" }
+                val l = if (detectedLanguage == "de") "🇩🇪 DE" else "🇬🇧 EN"
+                handler.post { binding.tvModelInfo.text = "🎙️ Erkannt: $l" }
             }
 
-            // Show partial from DE engine during detection window
             if (now < DETECTION_WINDOW_MS) {
                 val p = de.getResult()
                 if (p.isNotBlank()) handler.post { binding.tvPartial.text = p; binding.tvPartial.visibility = View.VISIBLE }
@@ -355,7 +283,17 @@ class MainActivity : AppCompatActivity() {
             val text = engine.getResult()
 
             if (engine.isEndpoint()) {
-                // Final result — add to transcript
+                // Check silence gap for speaker change
+                val now = System.currentTimeMillis()
+                val gap = now - lastEndpointMs
+                if (lastEndpointMs > 0 && gap > SILENCE_THRESHOLD_MS && text.isNotBlank()) {
+                    // Long pause — likely new speaker
+                    flushCurrentText()
+                    speakerCount++
+                    currentSpeakerId = speakerCount - 1
+                }
+                lastEndpointMs = now
+
                 if (text.isNotBlank()) {
                     currentTextBuffer.append(text)
                 }
@@ -363,7 +301,6 @@ class MainActivity : AppCompatActivity() {
                 flushCurrentText()
                 handler.post { binding.tvPartial.visibility = View.GONE }
             } else if (text.isNotBlank()) {
-                // Partial result — show live, don't accumulate
                 handler.post {
                     binding.tvPartial.text = text
                     binding.tvPartial.visibility = View.VISIBLE
@@ -372,85 +309,24 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun getPreviousSpeakerId(): Int {
-        return if (transcriptAdapter.itemCount > 0) {
-            // Get last entry's speaker ID from the adapter's entries
-            -1 // Simplified — diarization handles this
-        } else -1
-    }
-
     private fun flushCurrentText() {
         val text = currentTextBuffer.toString().trim()
-        if (text.isNotBlank() && currentSpeakerId >= 0) {
+        if (text.isNotBlank()) {
             val entry = TranscriptEntry(speakerId = currentSpeakerId, text = text)
             handler.post {
                 transcriptAdapter.addEntry(entry)
-                scrollToBottom()
+                binding.rvTranscript.scrollToPosition(0)
             }
         }
         currentTextBuffer.clear()
     }
 
-    // ── Diarization ──
-
-    private fun runDiarizationOnBuffer() {
-        if (audioBuffer.isEmpty() || !diarizationReady) return
-
-        // Concatenate all buffered audio
-        val totalSamples = audioBuffer.sumOf { it.size }
-        val allSamples = FloatArray(totalSamples)
-        var pos = 0
-        for (chunk in audioBuffer) {
-            System.arraycopy(chunk, 0, allSamples, pos, chunk.size)
-            pos += chunk.size
-        }
-
-        // Run diarization
-        lifecycleScope.launch(Dispatchers.Default) {
-            try {
-                val segments = diarizationManager.process(allSamples)
-                if (segments.isNotEmpty()) {
-                    // Rebuild transcript with speaker labels
-                    handler.post {
-                        transcriptAdapter.clear()
-                        for (seg in segments) {
-                            val startSample = (seg.start * SAMPLE_RATE).toInt().coerceIn(0, allSamples.size - 1)
-                            val endSample = (seg.end * SAMPLE_RATE).toInt().coerceIn(startSample + 1, allSamples.size)
-
-                            // Get text from ASR for this segment
-                            // For now, use the accumulated text from streaming
-                            val entry = TranscriptEntry(
-                                speakerId = seg.speaker,
-                                text = "(Segment ${String.format("%.1f", seg.start)}s - ${String.format("%.1f", seg.end)}s)",
-                                startMs = (seg.start * 1000).toLong(),
-                                endMs = (seg.end * 1000).toLong()
-                            )
-                            transcriptAdapter.addEntry(entry)
-                        }
-                        scrollToBottom()
-                    }
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-        }
-    }
-
-    // ── Auto-Scroll ──
-
-    private fun scrollToBottom() {
-        // With reverseLayout=true, newest items are at position 0
-        binding.rvTranscript.scrollToPosition(0)
-    }
-
     // ── Utils ──
 
     private fun saveTranscriptToFile() {
-        val lang = detectedLanguage ?: selectedLangCode
-        val text = transcriptAdapter.getFullTranscript()
-        val file = TranscriptManager.saveTranscript(this, text, lang)
+        val lang = detectedLanguage ?: "auto"
+        val file = TranscriptManager.saveTranscript(this, transcriptAdapter.getFullTranscript(), lang)
         if (file != null) Toast.makeText(this, "Gespeichert: ${TranscriptManager.getTranscriptDirPath(this)}", Toast.LENGTH_LONG).show()
-        else Toast.makeText(this, "Fehler beim Speichern", Toast.LENGTH_SHORT).show()
     }
 
     private val timerRunnable = object : Runnable {
@@ -469,6 +345,5 @@ class MainActivity : AppCompatActivity() {
         handler.removeCallbacks(timerRunnable)
         audioRecord?.apply { try { stop() } catch (_: Exception) {}; release() }
         engineDE?.release(); engineEN?.release()
-        diarizationManager.release()
     }
 }

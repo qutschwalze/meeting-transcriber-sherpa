@@ -67,66 +67,6 @@
                 android:layout_marginBottom="16dp"
                 android:progressDrawable="@drawable/level_indicator" />
 
-            <!-- Language chips -->
-            <com.google.android.material.chip.ChipGroup
-                android:id="@+id/chipGroupLang"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                app:singleSelection="true"
-                app:selectionRequired="true"
-                android:layout_marginBottom="16dp">
-
-                <com.google.android.material.chip.Chip
-                    android:id="@+id/chipAuto"
-                    style="@style/Widget.Material3.Chip.Filter"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="🤖 Auto"
-                    android:textColor="#00D4AA"
-                    android:checked="true"
-                    app:chipBackgroundColor="#16213E"
-                    app:chipStrokeColor="#00D4AA"
-                    app:chipStrokeWidth="1dp"
-                    app:checkedIconVisible="false" />
-
-                <com.google.android.material.chip.Chip
-                    android:id="@+id/chipDe"
-                    style="@style/Widget.Material3.Chip.Filter"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="🇩🇪 DE"
-                    android:textColor="#B0B0B0"
-                    app:chipBackgroundColor="#16213E"
-                    app:chipStrokeColor="#2A2A4A"
-                    app:chipStrokeWidth="1dp"
-                    app:checkedIconVisible="false" />
-
-                <com.google.android.material.chip.Chip
-                    android:id="@+id/chipEn"
-                    style="@style/Widget.Material3.Chip.Filter"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="🇬🇧 EN"
-                    android:textColor="#B0B0B0"
-                    app:chipBackgroundColor="#16213E"
-                    app:chipStrokeColor="#2A2A4A"
-                    app:chipStrokeWidth="1dp"
-                    app:checkedIconVisible="false" />
-
-                <com.google.android.material.chip.Chip
-                    android:id="@+id/chipFr"
-                    style="@style/Widget.Material3.Chip.Filter"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="🇫🇷 FR"
-                    android:textColor="#B0B0B0"
-                    app:chipBackgroundColor="#16213E"
-                    app:chipStrokeColor="#2A2A4A"
-                    app:chipStrokeWidth="1dp"
-                    app:checkedIconVisible="false" />
-
-            </com.google.android.material.chip.ChipGroup>
-
             <!-- Record Button -->
             <com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
                 android:id="@+id/fabRecord"
