@@ -10,11 +10,13 @@ import java.net.URL
 
 /**
  * Manages Sherpa-ONNX model downloads from HuggingFace.
- * Each model consists of 4 files: encoder.onnx, decoder.onnx, joiner.onnx, tokens.txt
- * Downloaded individually — no archive extraction needed.
+ * Downloads individual files with retry logic.
  */
 object ModelManager {
     private const val TAG = "ModelManager"
+    private const val MAX_RETRIES = 3
+    private const val CONNECT_TIMEOUT = 30000
+    private const val READ_TIMEOUT = 180000  // 3 minutes per file
 
     data class ModelFiles(
         val dirName: String,
@@ -28,7 +30,7 @@ object ModelManager {
 
     val models = mapOf(
         "de" to ModelFiles(
-            dirName = "sherpa-onnx-streaming-zipformer-de-kroko-2025-08-06",
+            dirName = "sherpa-onnx-de-kroko",
             displayName = "Deutsch",
             baseUrl = "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-de-kroko-2025-08-06/resolve/main",
             encoder = "encoder.onnx",
@@ -37,7 +39,7 @@ object ModelManager {
             tokens = "tokens.txt"
         ),
         "en" to ModelFiles(
-            dirName = "sherpa-onnx-streaming-zipformer-en-2023-06-26",
+            dirName = "sherpa-onnx-en-2023",
             displayName = "English",
             baseUrl = "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-2023-06-26/resolve/main",
             encoder = "encoder-epoch-99-avg-1-chunk-16-left-128.int8.onnx",
@@ -46,7 +48,7 @@ object ModelManager {
             tokens = "tokens.txt"
         ),
         "fr" to ModelFiles(
-            dirName = "sherpa-onnx-streaming-zipformer-fr-2023-04-14",
+            dirName = "sherpa-onnx-fr-2023",
             displayName = "Français",
             baseUrl = "https://huggingface.co/shaojieli/sherpa-onnx-streaming-zipformer-fr-2023-04-14/resolve/main",
             encoder = "encoder-epoch-29-avg-9-with-averaged-model.int8.onnx",
@@ -56,9 +58,7 @@ object ModelManager {
         )
     )
 
-    fun getModelDir(context: Context): File {
-        return File(context.filesDir, "models")
-    }
+    fun getModelDir(context: Context): File = File(context.filesDir, "models")
 
     fun isModelAvailable(context: Context, langCode: String): Boolean {
         val info = models[langCode] ?: return false
@@ -117,28 +117,51 @@ object ModelManager {
 
             for ((filename, label) in files) {
                 val targetFile = File(modelDir, filename)
-                if (targetFile.exists() && targetFile.length() > 0) {
+                if (targetFile.exists() && targetFile.length() > 1000) {
+                    Log.i(TAG, "Skipping $label (already downloaded)")
                     continue
                 }
 
                 val fileUrl = "${info.baseUrl}/$filename"
-                onProgress("Download: $label…")
+                var lastError: Exception? = null
 
-                downloadFile(fileUrl, targetFile) { progress ->
-                    onProgress("$label: $progress%")
+                for (attempt in 1..MAX_RETRIES) {
+                    try {
+                        onProgress("Download $label (Versuch $attempt/$MAX_RETRIES)…")
+                        Log.i(TAG, "Downloading $fileUrl (attempt $attempt)")
+
+                        downloadFile(fileUrl, targetFile) { progress ->
+                            onProgress("$label: $progress%")
+                        }
+
+                        if (targetFile.exists() && targetFile.length() > 0) {
+                            Log.i(TAG, "Download OK: $label (${targetFile.length()} bytes)")
+                            lastError = null
+                            break
+                        } else {
+                            throw Exception("Datei leer nach Download")
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Download attempt $attempt failed for $label: ${e.message}")
+                        lastError = e
+                        targetFile.delete()
+                        if (attempt < MAX_RETRIES) {
+                            Thread.sleep(1000L * attempt)  // Exponential backoff
+                        }
+                    }
                 }
 
-                if (!targetFile.exists() || targetFile.length() == 0L) {
-                    throw Exception("Download fehlgeschlagen: $filename")
+                if (lastError != null) {
+                    throw Exception("Download fehlgeschlagen nach $MAX_RETRIES Versuchen: $label (${lastError.message})")
                 }
             }
 
-            onProgress("Modell bereit")
+            onProgress("Modell bereit ✓")
             return modelDir
 
         } catch (e: Exception) {
             Log.e(TAG, "Model download failed: ${e.message}", e)
-            onProgress("Download fehlgeschlagen: ${e.message}")
+            onProgress("Fehler: ${e.message}")
             modelDir.listFiles()?.forEach { it.delete() }
             modelDir.delete()
         }
@@ -152,19 +175,24 @@ object ModelManager {
         onProgress: (Int) -> Unit = {}
     ) {
         val connection = URL(urlStr).openConnection() as HttpURLConnection
-        connection.connectTimeout = 30000
-        connection.readTimeout = 120000  // Longer timeout for large files
+        connection.connectTimeout = CONNECT_TIMEOUT
+        connection.readTimeout = READ_TIMEOUT
+        connection.setRequestProperty("User-Agent", "MeetingTranscriber/2.0")
         connection.connect()
 
-        if (connection.responseCode != 200) {
-            throw Exception("HTTP ${connection.responseCode} für $urlStr")
+        val responseCode = connection.responseCode
+        if (responseCode != 200) {
+            val errorBody = connection.errorStream?.bufferedReader()?.readText() ?: ""
+            connection.disconnect()
+            throw Exception("HTTP $responseCode — $errorBody")
         }
 
         val totalSize = connection.contentLength.toLong()
+        Log.i(TAG, "Starting download: $urlStr (${if (totalSize > 0) "${totalSize / 1024}KB" else "unknown size"})")
 
         BufferedInputStream(connection.inputStream).use { input ->
             FileOutputStream(targetFile).use { output ->
-                val buffer = ByteArray(16384)  // Larger buffer for speed
+                val buffer = ByteArray(32768)  // 32KB buffer
                 var bytesRead: Int
                 var totalRead = 0L
 
@@ -177,6 +205,9 @@ object ModelManager {
                         onProgress(progress)
                     }
                 }
+
+                output.flush()
+                Log.i(TAG, "Download complete: ${targetFile.name} ($totalRead bytes)")
             }
         }
 
