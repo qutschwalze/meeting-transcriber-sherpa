@@ -78,7 +78,7 @@ class MainActivity : AppCompatActivity() {
         transcriptAdapter = LiveTranscriptAdapter()
         binding.rvTranscript.apply {
             layoutManager = LinearLayoutManager(this@MainActivity).apply {
-                stackFromEnd = true
+                reverseLayout = true  // Newest entries at top
             }
             adapter = transcriptAdapter
         }
@@ -439,14 +439,8 @@ class MainActivity : AppCompatActivity() {
     // ── Auto-Scroll ──
 
     private fun scrollToBottom() {
-        val lm = binding.rvTranscript.layoutManager as? LinearLayoutManager ?: return
-        val lastVisible = lm.findLastCompletelyVisibleItemPosition()
-        val total = transcriptAdapter.itemCount - 1
-
-        // Only auto-scroll if user is already near the bottom
-        if (lastVisible >= total - 2 || total <= 2) {
-            binding.rvTranscript.scrollToPosition(total)
-        }
+        // With reverseLayout=true, newest items are at position 0
+        binding.rvTranscript.scrollToPosition(0)
     }
 
     // ── Utils ──

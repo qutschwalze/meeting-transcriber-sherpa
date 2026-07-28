@@ -56,7 +56,8 @@ class LiveTranscriptAdapter : RecyclerView.Adapter<LiveTranscriptAdapter.ViewHol
     }
 
     fun getFullTranscript(): String {
-        return entries.joinToString("\n\n") { "[Sprecher ${it.speakerId}]\n${it.text}" }
+        // Reverse for saving — display is newest-first, save should be oldest-first
+        return entries.reversed().joinToString("\n\n") { "[Sprecher ${it.speakerId}]\n${it.text}" }
     }
 
     fun clear() {
