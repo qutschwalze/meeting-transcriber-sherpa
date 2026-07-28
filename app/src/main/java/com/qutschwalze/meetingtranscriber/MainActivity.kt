@@ -66,10 +66,11 @@ class MainActivity : AppCompatActivity() {
         setSupportActionBar(binding.toolbar)
         supportActionBar?.setDisplayHomeAsUpEnabled(true)
 
-        diarizer = SpeakerDiarizer(sensitivity = 1.2f, minSegmentDurationMs = 1500)
+        diarizer = SpeakerDiarizer(sensitivity = 1.8f, minSegmentDurationMs = 600, silenceThresholdMs = 400)
 
         setupDrawer()
         setupButtons()
+        setupLanguageChips()
         setupTextSizeSlider()
         checkPermissions()
 
@@ -132,11 +133,18 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateLanguageCheckmarks() {
+        // Update drawer menu
         val menu = binding.navView.menu
         menu.findItem(R.id.nav_lang_auto)?.isChecked = autoMode
         menu.findItem(R.id.nav_lang_de)?.isChecked = !autoMode && selectedLangCode == "de"
         menu.findItem(R.id.nav_lang_en)?.isChecked = !autoMode && selectedLangCode == "en"
         menu.findItem(R.id.nav_lang_fr)?.isChecked = !autoMode && selectedLangCode == "fr"
+
+        // Update chips on main page
+        binding.chipAuto.isChecked = autoMode
+        binding.chipDe.isChecked = !autoMode && selectedLangCode == "de"
+        binding.chipEn.isChecked = !autoMode && selectedLangCode == "en"
+        binding.chipFr.isChecked = !autoMode && selectedLangCode == "fr"
     }
 
     private fun showAboutDialog() {
@@ -192,6 +200,32 @@ class MainActivity : AppCompatActivity() {
             } else {
                 Toast.makeText(this, getString(R.string.no_transcript), Toast.LENGTH_SHORT).show()
             }
+        }
+    }
+
+    private fun setupLanguageChips() {
+        binding.chipAuto.setOnClickListener {
+            autoMode = true
+            selectedLangCode = "de"
+            updateLanguageCheckmarks()
+        }
+        binding.chipDe.setOnClickListener {
+            autoMode = false
+            detectedLanguage = null
+            selectedLangCode = "de"
+            updateLanguageCheckmarks()
+        }
+        binding.chipEn.setOnClickListener {
+            autoMode = false
+            detectedLanguage = null
+            selectedLangCode = "en"
+            updateLanguageCheckmarks()
+        }
+        binding.chipFr.setOnClickListener {
+            autoMode = false
+            detectedLanguage = null
+            selectedLangCode = "fr"
+            updateLanguageCheckmarks()
         }
     }
 
@@ -473,8 +507,14 @@ class MainActivity : AppCompatActivity() {
     private fun smoothScrollToBottom() {
         binding.scrollTranscript.post {
             val child = binding.scrollTranscript.getChildAt(0) ?: return@post
-            val scrollAmount = child.height - binding.scrollTranscript.height
-            if (scrollAmount > 0) binding.scrollTranscript.scrollTo(0, scrollAmount)
+            val scrollViewHeight = binding.scrollTranscript.height
+            val contentHeight = child.height
+            if (contentHeight > scrollViewHeight) {
+                // Scroll to 70% of content — keeps latest text in lower third
+                val targetScroll = (contentHeight * 0.7).toInt() - scrollViewHeight / 2
+                val scrollAmount = targetScroll.coerceAtLeast(0)
+                binding.scrollTranscript.smoothScrollTo(0, scrollAmount)
+            }
         }
     }
 
