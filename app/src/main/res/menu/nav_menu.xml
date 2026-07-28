@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Sprache -->
+    <item
+        android:id="@+id/nav_language"
+        android:title="🗣️ Sprache"
+        android:icon="@drawable/ic_mic">
+        <menu>
+            <item android:id="@+id/nav_lang_auto" android:title="🤖 Auto-Erkennung" />
+            <item android:id="@+id/nav_lang_de" android:title="🇩🇪 Deutsch" />
+            <item android:id="@+id/nav_lang_en" android:title="🇬🇧 English" />
+            <item android:id="@+id/nav_lang_fr" android:title="🇫🇷 Français" />
+        </menu>
+    </item>
+
+    <item android:id="@+id/nav_separator1" android:title="" />
+
+    <!-- Transkripte -->
+    <item
+        android:id="@+id/nav_transcripts"
+        android:title="📋 Alle Transkripte"
+        android:icon="@drawable/ic_list" />
+
+    <item android:id="@+id/nav_separator2" android:title="" />
+
+    <!-- About -->
+    <item
+        android:id="@+id/nav_about"
+        android:title="ℹ️ About"
+        android:icon="@drawable/ic_list" />
+
+</menu>
