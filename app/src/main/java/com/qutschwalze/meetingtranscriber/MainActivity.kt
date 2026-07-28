@@ -330,6 +330,8 @@ class MainActivity : AppCompatActivity() {
             val de = engineDE ?: return; val en = engineEN ?: return
             de.acceptWaveform(s); en.acceptWaveform(s)
             while (de.isReady()) de.decode(); while (en.isReady()) en.decode()
+
+            // Use partial results for language detection
             val dt = de.getResult(); val et = en.getResult()
             if (dt.isNotBlank()) buf.add("de:$dt"); if (et.isNotBlank()) buf.add("en:$et")
 
@@ -342,34 +344,32 @@ class MainActivity : AppCompatActivity() {
                 handler.post { binding.tvModelInfo.text = "🤖 Erkannt: $l" }
             }
 
-            // Show partial
-            val p = de.getResult()
-            if (p.isNotBlank()) handler.post { binding.tvPartial.text = p; binding.tvPartial.visibility = View.VISIBLE }
+            // Show partial from DE engine during detection window
+            if (now < DETECTION_WINDOW_MS) {
+                val p = de.getResult()
+                if (p.isNotBlank()) handler.post { binding.tvPartial.text = p; binding.tvPartial.visibility = View.VISIBLE }
+            }
         }
 
         private fun feedEngine(engine: SherpaEngine, s: FloatArray) {
             engine.acceptWaveform(s)
             while (engine.isReady()) engine.decode()
+
+            val text = engine.getResult()
+
             if (engine.isEndpoint()) {
-                val t = engine.getResult()
-                if (t.isNotBlank()) {
-                    flushCurrentText()
-                    // Add new speaker segment
-                    currentSpeakerId = 0 // Default — diarization will update
-                    currentTextBuffer.append(t)
-                    handler.post {
-                        if (transcriptAdapter.itemCount == 0 || currentSpeakerId != getPreviousSpeakerId()) {
-                            // New segment needed
-                        }
-                        binding.tvPartial.text = currentTextBuffer.toString().trim()
-                    }
+                // Final result — add to transcript
+                if (text.isNotBlank()) {
+                    currentTextBuffer.append(text)
                 }
                 engine.reset()
-            } else {
-                val p = engine.getResult()
-                if (p.isNotBlank()) {
-                    currentTextBuffer.append(p)
-                    handler.post { binding.tvPartial.text = currentTextBuffer.toString().trim() }
+                flushCurrentText()
+                handler.post { binding.tvPartial.visibility = View.GONE }
+            } else if (text.isNotBlank()) {
+                // Partial result — show live, don't accumulate
+                handler.post {
+                    binding.tvPartial.text = text
+                    binding.tvPartial.visibility = View.VISIBLE
                 }
             }
         }
