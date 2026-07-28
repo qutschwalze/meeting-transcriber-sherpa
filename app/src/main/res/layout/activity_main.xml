@@ -158,6 +158,16 @@
                     android:orientation="vertical"
                     android:padding="12dp">
 
+                    <!-- Partial result (live while speaking) — AT THE TOP -->
+                    <TextView
+                        android:id="@+id/tvPartial"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:textColor="#00D4AA"
+                        android:textSize="15sp"
+                        android:visibility="gone"
+                        android:layout_marginBottom="8dp" />
+
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
@@ -175,17 +185,6 @@
                         android:layout_weight="1"
                         android:clipToPadding="false"
                         android:paddingBottom="8dp" />
-
-                    <!-- Partial result (while speaking) -->
-                    <TextView
-                        android:id="@+id/tvPartial"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:textColor="#888888"
-                        android:textSize="14sp"
-                        android:textStyle="italic"
-                        android:visibility="gone"
-                        android:layout_marginTop="4dp" />
 
                     <!-- Text Size SeekBar -->
                     <LinearLayout
