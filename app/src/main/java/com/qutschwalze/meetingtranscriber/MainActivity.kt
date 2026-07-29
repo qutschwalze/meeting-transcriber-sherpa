@@ -4,6 +4,7 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.AudioFormat
@@ -12,6 +13,7 @@ import android.media.MediaRecorder
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.view.Menu
 import android.view.MenuItem
 import android.view.View
@@ -55,9 +57,12 @@ class MainActivity : AppCompatActivity() {
     private var lastEndpointMs = 0L
     private var currentPitch = 0f
     private val pitchHistory = mutableListOf<Float>()
-    private val SPEAKER_DIFF_THRESHOLD = 15f  // Hz difference = new speaker
+    private val SPEAKER_DIFF_THRESHOLD = 15f
     private val MIN_SEGMENT_MS = 800
     private var lastAudioChunk: ShortArray? = null
+
+    // Screen-on during recording
+    private var wakeLock: PowerManager.WakeLock? = null
 
     companion object {
         private const val REQUEST_AUDIO_PERMISSION = 200
@@ -177,6 +182,12 @@ class MainActivity : AppCompatActivity() {
                 lastEndpointMs = 0
                 speakerCount = 1
                 transcriptAdapter.clear()
+
+                // Keep screen on during recording
+                val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+                wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "MeetingTranscriber:Audio")
+                wakeLock?.acquire(8 * 60 * 60 * 1000L)  // 8 hours max
+
                 audioRecord?.startRecording()
 
                 binding.tvStatus.text = getString(R.string.status_recording)
@@ -223,6 +234,10 @@ class MainActivity : AppCompatActivity() {
         binding.tvPartial.visibility = View.GONE
         binding.progressLevel.progress = 0
 
+        // Release wake lock
+        wakeLock?.release()
+        wakeLock = null
+
         val ld = if (detectedLanguage != null) " (${if (detectedLanguage == "de") "🇩🇪 DE" else "🇬🇧 EN"})" else ""
         binding.tvModelInfo.text = "Modell:$ld"
 
@@ -261,24 +276,40 @@ class MainActivity : AppCompatActivity() {
 
         private fun autoDetect(s: FloatArray, now: Long, buf: MutableList<String>) {
             val de = engineDE ?: return; val en = engineEN ?: return
-            de.acceptWaveform(s); en.acceptWaveform(s)
-            while (de.isReady()) de.decode(); while (en.isReady()) en.decode()
 
-            val dt = de.getResult(); val et = en.getResult()
-            if (dt.isNotBlank()) buf.add("de:$dt"); if (et.isNotBlank()) buf.add("en:$et")
+            // Only feed ONE engine at a time for quality
+            val current = if (detectedLanguage != null) {
+                if (detectedLanguage == "de") de else en
+            } else {
+                de  // Start with DE
+            }
 
-            if (now > DETECTION_WINDOW_MS && buf.size > 5) {
-                val dc = buf.count { it.startsWith("de:") && it.length > 4 }
-                val ec = buf.count { it.startsWith("en:") && it.length > 4 }
-                detectedLanguage = if (dc > ec) "de" else "en"
+            current.acceptWaveform(s)
+            while (current.isReady()) current.decode()
+            val text = current.getResult()
+
+            if (detectedLanguage == null && text.isNotBlank()) {
+                buf.add(text)
+            }
+
+            // After 3s, check if DE produced anything
+            if (now > DETECTION_WINDOW_MS && detectedLanguage == null) {
+                val deCount = buf.count { it.isNotBlank() && it.length > 3 }
+                if (deCount > 3) {
+                    detectedLanguage = "de"
+                } else {
+                    detectedLanguage = "en"
+                    // Feed EN with accumulated context
+                    en.acceptWaveform(s)
+                    while (en.isReady()) en.decode()
+                }
                 activeEngine = if (detectedLanguage == "de") de else en
                 val l = if (detectedLanguage == "de") "🇩🇪 DE" else "🇬🇧 EN"
                 handler.post { binding.tvModelInfo.text = "🎙️ Erkannt: $l" }
             }
 
-            if (now < DETECTION_WINDOW_MS) {
-                val p = de.getResult()
-                if (p.isNotBlank()) handler.post { binding.tvPartial.text = p; binding.tvPartial.visibility = View.VISIBLE }
+            if (detectedLanguage == null && text.isNotBlank()) {
+                handler.post { binding.tvPartial.text = text; binding.tvPartial.visibility = View.VISIBLE }
             }
         }
 
