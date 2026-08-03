@@ -74,7 +74,23 @@ class DiarizationChunkWorker(
      */
     fun processNextChunk(debug: Boolean = false): WorkerChunkResult? {
         val chunk = buffer.takeChunk(chunkSec, overlapSec) ?: return null
+        return processChunk(chunk, debug)
+    }
 
+    /**
+     * Finaler Lauf (Stop): verarbeitet den REST des Buffers – auch wenn weniger
+     * als chunkSec neues Audio seit dem letzten Chunk vorliegt. Damit gehen
+     * die letzten Sekunden einer Aufnahme nicht verloren.
+     *
+     * @return null wenn seit dem letzten Chunk nichts Neues kam; sonst das Worker-Ergebnis.
+     */
+    fun processFinalChunk(debug: Boolean = false): WorkerChunkResult? {
+        val chunk = buffer.takeRemainingChunk(chunkSec, overlapSec) ?: return null
+        return processChunk(chunk, debug)
+    }
+
+    /** Gemeinsamer Kern für [processNextChunk] und [processFinalChunk]. */
+    private fun processChunk(chunk: AudioChunk, debug: Boolean): WorkerChunkResult? {
         // ── 1+2: Engine – lokale Zeiten relativ zum Chunk-Anfang ──
         val engineSegments = diarizer.process(chunk.samples)
 
@@ -119,11 +135,13 @@ class DiarizationChunkWorker(
 
     /**
      * Schreibt den globalen Bestand fort:
-     * - Segmente VOR der Zone bleiben unverändert (Bestand aus älteren Chunks)
-     * - Segmente, die die Zone berühren, werden durch die frisch reconcilten Segmente
-     *   des neuen Chunks ERSETZT (die Zone ist der Korrektur-Bereich)
+     * - Segmente, die komplett VOR der Zone enden, bleiben unverändert
+     * - Segmente, die in die Zone ragen, werden an der Zonengrenze ZUGESCHNITTEN
+     *   (der Teil vor der Zone bleibt, der Teil in der Zone wird durch die neuen
+     *   Segmente des Chunks ersetzt)
+     * - Segmente, die komplett in/nach der Zone liegen, entfallen (werden ersetzt)
      *
-     * Das verhindert Doppelungen in der Zone und hält die Timeline lückenlos.
+     * Das hält die Timeline lückenlos und verliert keine älteren Segmente.
      */
     private fun mergeIntoGlobalBestand(
         bestand: List<SpeakerTimeRange>,
@@ -133,8 +151,18 @@ class DiarizationChunkWorker(
         val zoneStart = overlapZone.startSec - EPS
         val zoneEnd = overlapZone.endSec + EPS
 
-        // Alles, was vor der Zone endet, bleibt; der Rest (Zone-Berührung) entfällt
-        val kept = bestand.filter { it.endSec <= zoneStart }
+        // Bestand behalten, ggf. an der Zonengrenze zuschneiden
+        // EPS nur in den Vergleichen; der Zuschnitt nutzt die EXAKTE Zonengrenze.
+        val exactZoneStart = overlapZone.startSec
+        val kept = bestand.mapNotNull { seg ->
+            when {
+                seg.endSec <= zoneStart -> seg // komplett vor der Zone → unverändert
+                seg.startSec >= zoneEnd -> null // komplett in/nach der Zone → wird ersetzt
+                seg.startSec < exactZoneStart ->
+                    seg.copy(endSec = exactZoneStart) // ragt in die Zone → Teil davor behalten
+                else -> null // beginnt in der Zone → wird ersetzt
+            }
+        }
 
         val added = newMapped.map { seg ->
             SpeakerTimeRange(startSec = seg.startSec, endSec = seg.endSec, speakerId = seg.speaker)
