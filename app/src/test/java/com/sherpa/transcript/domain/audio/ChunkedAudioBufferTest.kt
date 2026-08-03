@@ -174,4 +174,48 @@ class ChunkedAudioBufferTest {
 
         assertNull("nichts Neues nach vollem Chunk", buffer.takeRemainingChunk(chunkSec = 20f, overlapSec = 5f))
     }
+
+    @Test
+    fun `gedehnte Wall-Clock-Stempel erzeugen fast leere Chunks - Sample-Zeit nicht`() {
+        // Regressions-Test für den 0.5.58-Fix:
+        // Der Capture-Loop positionierte Frames mit Wall-Clock-Zeit. Stockt der Loop
+        // (ASR-Inferenz + Pyannote unter Last), bekommen späte Frames ZU SPÄTE Stempel
+        // → die Zeitachse dehnt sich → Chunk [55,75] zeigt auf fast leere Bereiche
+        // (Log-Beweis: RMS 0.0005 bei normaler Quelle). Sample-basierte Stempel
+        // (pushedSampleCountMs) bleiben exakt an der Audio-Position.
+        val sampleRate = 16000
+        val frameSamples = 160
+
+        // 60s Audio, aber jeder Frame wird mit +20ms statt +10ms gestempelt
+        // (Simulation: Loop braucht doppelt so lange wie die Frame-Dauer)
+        val wallClockBuffer = ChunkedAudioBuffer(sampleRate = sampleRate)
+        for (i in 0 until 6000) {
+            wallClockBuffer.push(FloatArray(frameSamples) { i.toFloat() }, i * 20L)
+        }
+        // Chunks: [0,20], [20,40], [40,60] – mit gedehnten Stempeln zeigt [40,60]
+        // auf Frames bei 40-60s "Wall-Clock" = Frames 2000-3000 = echte 20-30s Audio
+        wallClockBuffer.takeChunk(20f, 5f)
+        wallClockBuffer.takeChunk(20f, 5f)
+        val thirdWall = wallClockBuffer.takeChunk(20f, 5f)
+
+        // Sample-basierte Stempel: exakt 10ms pro Frame
+        val sampleBuffer = ChunkedAudioBuffer(sampleRate = sampleRate)
+        for (i in 0 until 6000) {
+            sampleBuffer.push(FloatArray(frameSamples) { i.toFloat() }, i * 10L)
+        }
+        sampleBuffer.takeChunk(20f, 5f)
+        sampleBuffer.takeChunk(20f, 5f)
+        val thirdSample = sampleBuffer.takeChunk(20f, 5f)
+
+        assertNotNull(thirdWall)
+        assertNotNull(thirdSample)
+        // Der gedehnte Chunk [40,60] enthält nur ~10s Samples (Hälfte),
+        // der sample-basierte Chunk [40,60] enthält volle 20s
+        assertTrue(
+            "gedehnter Chunk hat deutlich weniger Samples als sample-basierter " +
+                "(wall=${thirdWall!!.samples.size} vs sample=${thirdSample!!.samples.size})",
+            thirdWall.samples.size < thirdSample.samples.size,
+        )
+        assertEquals("sample-basierter Chunk = volle 25s (20s + 5s Overlap)", 25 * sampleRate, thirdSample.samples.size)
+    }
 }
