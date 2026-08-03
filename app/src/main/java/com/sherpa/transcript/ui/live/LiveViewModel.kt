@@ -127,6 +127,10 @@ class LiveViewModel : ViewModel() {
             buffer = chunkedAudioBuffer,
             diarizer = speakerEngine::process,
             reconciler = rollingReconciler,
+            // Tuning-Hebel B: Chunk 15s + 5s Overlap (= 20s Gesamtfenster) statt 20s+5s.
+            // Kleinere Fenster → Engine arbeitet fokussierter, weniger 0-Segment-/Fragment-
+            // Ausfälle (Log-Muster: verlorene Chunks erzeugen Anker-Lücken → künstliche IDs).
+            chunkSec = 15f,
         )
     }
 
