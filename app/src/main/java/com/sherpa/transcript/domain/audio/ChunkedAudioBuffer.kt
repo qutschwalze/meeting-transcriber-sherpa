@@ -137,6 +137,34 @@ class ChunkedAudioBuffer(
         return result.toFloatArray()
     }
 
+    /**
+     * Liefert den REST-Chunk für den finalen Lauf (Stop): alles verfügbare Audio
+     * seit dem letzten Chunk – auch wenn weniger als chunkSec zusammenkam.
+     * Overlap vom vorherigen Chunk wird wie bei [takeChunk] mitgenommen.
+     * Liefert null, wenn seit dem letzten Chunk nichts Neues kam.
+     */
+    fun takeRemainingChunk(chunkSec: Float, overlapSec: Float): AudioChunk? {
+        if (frames.isEmpty()) return null
+        val prevEndMs = lastChunkEndMs ?: return takeChunk(chunkSec, overlapSec)
+        val overlapMs = (overlapSec * 1000f).toLong()
+
+        val windowStartMs = maxOf(frames.first().startMs, prevEndMs - overlapMs)
+        val windowEndMs = newestEndMs
+        if (windowEndMs <= prevEndMs) return null // nichts Neues seit letztem Chunk
+
+        val samples = collectSamples(windowStartMs, windowEndMs)
+        if (samples.isEmpty()) return null
+
+        lastChunkEndMs = windowEndMs
+        return AudioChunk(
+            samples = samples,
+            startSec = windowStartMs / 1000f,
+            endSec = windowEndMs / 1000f,
+            overlapSec = (prevEndMs - windowStartMs) / 1000f,
+            isFirstChunk = false,
+        )
+    }
+
     /** Leert den Buffer inkl. Chunk-Fortschritt (Start einer neuen Session). */
     fun clear() {
         frames.clear()

@@ -145,10 +145,10 @@ class DiarizationChunkWorkerTest {
         buffer.pushFrames(5000)
 
         // Chunk 1: [0,10] Spk 0, [10,20] Spk 1
-        // Chunk 2: [15,40] → Spk 0 in [15,20] (Zone, matcht global 0), Spk 1 in [20,40]
+        // Chunk 2: [15,40] → Spk 1 in [15,20] (Zone, matcht global 1), Spk 0 in [20,40] (neu)
         val fake = FakeDiarizer(ArrayDeque(listOf(
             listOf(localSeg(0, 0f, 10f), localSeg(1, 10f, 20f)),
-            listOf(localSeg(0, 0f, 5f), localSeg(1, 5f, 25f)),
+            listOf(localSeg(1, 0f, 5f), localSeg(0, 5f, 25f)),
         )))
         val worker = DiarizationChunkWorker(buffer, fake)
 
@@ -160,16 +160,18 @@ class DiarizationChunkWorkerTest {
         val second = worker.processNextChunk(debug = false)
         assertNotNull(second)
 
-        // Bestand nach Chunk 2:
-        // - [0,10] Spk 0 bleibt (vor Zone)
-        // - [10,20] Spk 1 wird durch Zone-Ersetzung entfernt (Zone [15,20] berührt ihn)
-        // - Neu: [15,20]→0 (Zone), [20,40]→1
+        // Bestand nach Chunk 2 (Zone [15,20]):
+        // - [0,10] Spk 0 bleibt unverändert (endet vor Zone)
+        // - [10,20] Spk 1 wird an der Zonengrenze auf [10,15] ZUGESCHNITTEN
+        // - neu: [15,20]→1 (Zone, matcht global 1), [20,40]→2 (neuer Speaker)
         val bestand = worker.globalSegments
-        assertEquals("3 Segmente im Bestand (1 alt + 2 neu)", 3, bestand.size)
+        assertEquals("4 Segmente im Bestand (2 alt/zugeschnitten + 2 neu)", 4, bestand.size)
         assertEquals("altes Segment [0,10] bleibt", 0f, bestand[0].startSec, 0.001f)
         assertEquals("altes Segment Speaker 0", 0, bestand[0].speakerId)
-        assertEquals("neues Segment startet bei 15s", 15f, bestand[1].startSec, 0.001f)
-        assertEquals("keine Überlappung/Dopplung in Zone [15,20]", 15f, bestand[1].startSec, 0.001f)
+        assertEquals("zugeschnittenes Segment endet an Zonengrenze 15s", 15f, bestand[1].endSec, 0.01f)
+        assertEquals("zugeschnittenes Segment Speaker 1", 1, bestand[1].speakerId)
+        assertEquals("Zonen-Segment startet bei 15s", 15f, bestand[2].startSec, 0.001f)
+        assertEquals("Zonen-Segment gematcht auf global 1", 1, bestand[2].speakerId)
         assertEquals("Timeline lückenlos sortiert", true,
             bestand.zipWithNext().all { (a, b) -> a.endSec <= b.startSec + 0.01f })
     }
@@ -220,5 +222,44 @@ class DiarizationChunkWorkerTest {
 
         worker.reset()
         assertTrue("Bestand leer nach reset", worker.globalSegments.isEmpty())
+    }
+
+    @Test
+    fun `processFinalChunk verarbeitet Rest-Audio nach dem letzten Chunk`() {
+        val buffer = ChunkedAudioBuffer(sampleRate = sampleRate)
+        buffer.pushFrames(3000) // 30s
+        buffer.pushFrames(600, startMs = 30_000L) // Rest bis 36s
+
+        // Chunk 1: [0,20] → Speaker 0
+        // Final:  [15,36] (5s Overlap + 6s neues Audio) → Speaker 0 bleibt
+        val fake = FakeDiarizer(ArrayDeque(listOf(
+            listOf(localSeg(0, 0f, 20f)),
+            listOf(localSeg(0, 0f, 21f)), // absolut: [15,36]
+        )))
+        val worker = DiarizationChunkWorker(buffer, fake)
+
+        worker.processNextChunk(debug = false)
+        val final = worker.processFinalChunk(debug = false)
+        assertNotNull("Final-Chunk verfügbar", final)
+        final!!
+        assertEquals("Final-Chunk [15,36]", 15f, final.chunk.startSec, 0.001f)
+        assertEquals("Final-Ende 36s", 36f, final.chunk.endSec, 0.001f)
+        assertEquals("Mapping stabil 0→0", mapOf(0 to 0), final.mapping)
+        assertEquals("Bestand wächst auf 2 (alt [0,20] → neu [15,36] ersetzt Zone)",
+            2, worker.globalSegments.size)
+    }
+
+    @Test
+    fun `processFinalChunk liefert null ohne neues Audio seit letztem Chunk`() {
+        val buffer = ChunkedAudioBuffer(sampleRate = sampleRate)
+        buffer.pushFrames(2000) // exakt 20s – Chunk 1 nimmt alles
+
+        val fake = FakeDiarizer(ArrayDeque(listOf(
+            listOf(localSeg(0, 0f, 20f)),
+        )))
+        val worker = DiarizationChunkWorker(buffer, fake)
+        worker.processNextChunk(debug = false)
+
+        assertNull("nichts Neues → kein Final-Chunk", worker.processFinalChunk(debug = false))
     }
 }

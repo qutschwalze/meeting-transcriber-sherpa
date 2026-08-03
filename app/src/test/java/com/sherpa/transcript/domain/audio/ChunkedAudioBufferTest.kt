@@ -124,4 +124,32 @@ class ChunkedAudioBufferTest {
         assertEquals("6 Chunks à 20s bei 120s", 6, chunks)
         assertEquals("Session-Ende erreicht", 120f, lastEnd, 0.01f)
     }
+
+    @Test
+    fun `takeRemainingChunk liefert Rest nach dem letzten vollen Chunk`() {
+        val buffer = ChunkedAudioBuffer(sampleRate = sampleRate)
+        buffer.pushFrames(3000) // 30s
+
+        val first = buffer.takeChunk(chunkSec = 20f, overlapSec = 5f)
+        assertNotNull(first)
+
+        // 8s Rest-Audio (28s–36s, also 6s NEUES seit Chunk-Ende bei 20s)
+        buffer.pushFrames(600, startMs = 30_000L)
+
+        val rest = buffer.takeRemainingChunk(chunkSec = 20f, overlapSec = 5f)
+        assertNotNull("Rest-Chunk verfügbar", rest)
+        rest!!
+        assertEquals("Overlap ab 15s", 15f, rest.startSec, 0.001f)
+        assertEquals("Ende = 36s", 36f, rest.endSec, 0.001f)
+        assertEquals("Overlap 5s", 5f, rest.overlapSec, 0.001f)
+    }
+
+    @Test
+    fun `takeRemainingChunk liefert null wenn nichts Neues seit letztem Chunk`() {
+        val buffer = ChunkedAudioBuffer(sampleRate = sampleRate)
+        buffer.pushFrames(2000) // exakt 20s – Chunk nimmt alles
+        buffer.takeChunk(chunkSec = 20f, overlapSec = 5f)
+
+        assertNull("nichts Neues nach vollem Chunk", buffer.takeRemainingChunk(chunkSec = 20f, overlapSec = 5f))
+    }
 }
