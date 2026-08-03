@@ -167,7 +167,9 @@ class LiveViewModel : ViewModel() {
     private var recordingStartedAt: Long = 0L
 
     // Ebene 1: Rohdaten – nie mergen
-    private val rawFinalSegments = mutableListOf<TranscriptSegment>()
+    // var: Hebel 2 (0.5.52) ersetzt die Liste atomar bei Split der Ground Truth –
+    // sicherer gegen Race mit dem Whisper-Callback als in-place clear+addAll.
+    private var rawFinalSegments = mutableListOf<TranscriptSegment>()
     // Ebene 2: mit Sprecher-Zuordnung
     private var assignedFinalSegments: List<TranscriptSegment> = emptyList()
     private var bestAssignmentQuality = AssignmentQuality(0, 0, 0)
@@ -989,21 +991,28 @@ class LiveViewModel : ViewModel() {
 
                 // Rohsegmente vor Zuordnung kompaktieren (temporäre Kopie)
                 val compactedSegs = TimelineComposer.compactRawSegmentsBeforeAssignment(rawFinalSegments)
-                // Worker liefert globale IDs → KEIN normalizeSpeakerIds nötig
-                var candidate = TimelineComposer.assignSpeakersToRawSegments(compactedSegs, diarizationSegs, debug = _uiState.value.debugMode)
-                if (candidate.isEmpty()) return@withContext
 
-                // Hebel 2 (0.5.51): Lange Whisper-Segmente (>8s) an Diarization-Grenzen
-                // splitten, BEVOR der Merge läuft. splitLongSpeakerSegments braucht eine
-                // gesetzte speakerId → deshalb NACH assignSpeakersToRawSegments, nicht davor.
-                // rawFinalSegments bleiben unverändert (Sub-Segmente haben neue UUIDs –
-                // die Dedupe-Logik arbeitet auf den alten IDs).
-                val splitCandidate = TimelineComposer.splitLongSpeakerSegments(candidate, diarizationSegs)
-                if (splitCandidate.size > candidate.size) {
-                    Log.d(TAG, "ChunkedDiarization SPLIT: ${candidate.size} → ${splitCandidate.size} Segmente " +
-                            "(Wechsel in langem Whisper-Segment an Diarization-Grenzen getrennt)")
-                    candidate = splitCandidate
+                // Hebel 2 (0.5.52): Lange Whisper-Segmente (>8s) an Diarization-Grenzen
+                // splitten – VOR dem Assignment, damit ein Wechsel im Segment nicht vom
+                // dominanten Sprecher geschluckt wird. Die Split-Ergebnisse werden in
+                // rawFinalSegments ZURÜCKGESPIEGELT (Ground Truth): Der Whisper-Dedupe
+                // matcht über Text-Overlap + Zeit (nicht über UUIDs) – solange das lange
+                // Segment in rawFinalSegments als EINES existiert, stülpt der nächste
+                // REPLACE (fullPrefix) den Text wieder darüber und der Split stirbt.
+                val splitRawSegs = TimelineComposer.splitLongSpeakerSegments(compactedSegs, diarizationSegs)
+                val finalRawForAssignment = if (splitRawSegs.size > compactedSegs.size) {
+                    Log.d(TAG, "ChunkedDiarization SPLIT(raw): ${compactedSegs.size} → ${splitRawSegs.size} " +
+                            "Segmente – Ground Truth (rawFinalSegments) aktualisiert")
+                    // Atomare Referenz-Ersetzung statt in-place clear+addAll (Race-Schutz)
+                    rawFinalSegments = splitRawSegs.toMutableList()
+                    splitRawSegs
+                } else {
+                    compactedSegs
                 }
+
+                // Worker liefert globale IDs → KEIN normalizeSpeakerIds nötig
+                val candidate = TimelineComposer.assignSpeakersToRawSegments(finalRawForAssignment, diarizationSegs, debug = _uiState.value.debugMode)
+                if (candidate.isEmpty()) return@withContext
                 val candQuality = computeQuality(candidate)
 
                 // Debug: globale IDs aus dem Worker
