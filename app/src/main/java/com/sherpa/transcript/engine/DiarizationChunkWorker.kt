@@ -291,16 +291,20 @@ class DiarizationChunkWorker(
     }
 
     /**
-     * Hebel C (0.5.55): RMS-Normalisierung gegen Pyannote-VAD-Aussetzer bei leiser Sprache.
+     * Hebel C (0.5.55/0.5.56): RMS-Normalisierung + DC-Blocker gegen Pyannote-VAD-Aussetzer.
      *
-     * Log-Befund: Chunk [55,75] liefert reproduzierbar 0 Segmente (alle Retry-Offsets
-     * scheitern), obwohl Whisper dort Text transkribiert – das Audio ist für die
-     * VAD zu leise (Mikrofonabstand, leiser Sprecher). Whisper ist robust gegen
-     * Flüstern, Pyannote bricht ab.
+     * Log-Befund 0.5.55: Chunk [55,75] liefert trotz 10,5x Boost weiterhin 0 Segmente,
+     * obwohl Whisper dort Text transkribiert. Ursache: Smartphone-Mikrofone haben einen
+     * minimalen DC-Offset (Nulllinie ≠ 0). Bei 10–23x Verstärkung wird daraus ein
+     * massiver, asymmetrischer Energie-Block → Pyannote interpretiert das als "kaputte
+     * Aufnahme"/Maschinenlärm → VAD sagt Stille.
      *
-     * Strategie: Nur VERSTÄRKEN wenn der RMS unter dem Ziel-Pegel liegt (0.1),
-     * laute Chunks bleiben unangetastet; Clipping (> 0.99 Peak) wird verhindert.
-     * Geringe Boosts (< 1.5x) werden ignoriert – nur signifikante Anhebungen lohnen.
+     * Fix: Mean Subtraction (DC-Blocker) zentriert das Signal exakt auf die Nulllinie,
+     * BEVOR der RMS berechnet und verstärkt wird. Das zentrierte Array wird IMMER
+     * zurückgegeben (auch ohne Boost) – die Engine bekommt stets DC-freies Audio.
+     *
+     * Nur VERSTÄRKEN wenn der RMS unter dem Ziel-Pegel liegt (0.1); Clipping (> 0.99)
+     * wird verhindert. Geringe Boosts (< 1.5x) werden ignoriert.
      *
      * WICHTIG: Nur der Engine-Pfad nutzt die normalisierten Samples. Die
      * Voice-Bank-Extraktion arbeitet mit dem Original-Audio, sonst würden die
@@ -310,40 +314,45 @@ class DiarizationChunkWorker(
     private fun normalizeAudio(samples: FloatArray): FloatArray {
         if (samples.isEmpty()) return samples
 
+        // 1. DC-Offset entfernen (Mean Subtraction) – zentriert auf die Nulllinie
+        var sum = 0.0
+        for (sample in samples) {
+            sum += sample
+        }
+        val mean = (sum / samples.size).toFloat()
+
+        val centeredSamples = FloatArray(samples.size)
         var sumSquares = 0f
         var maxPeak = 0f
-        for (sample in samples) {
-            val absSample = kotlin.math.abs(sample)
-            sumSquares += sample * sample
+        for (i in samples.indices) {
+            val centered = samples[i] - mean
+            centeredSamples[i] = centered
+            val absSample = kotlin.math.abs(centered)
+            sumSquares += centered * centered
             if (absSample > maxPeak) maxPeak = absSample
         }
+
         val rms = kotlin.math.sqrt((sumSquares / samples.size).toDouble()).toFloat()
+        if (rms < 0.0001f) return centeredSamples // absolute Stille
 
-        // Absolute Stille – nichts zu normalisieren
-        if (rms < 0.0001f) return samples
-
-        // Ziel-Pegel: 0.1 RMS ≈ gesunder Sprachpegel
+        // 2. Nur verstärken wenn zu leise (Ziel-Pegel 0.1), Clipping verhindern
         val targetRms = 0.1f
         var gain = 1f
         if (rms < targetRms) {
             gain = targetRms / rms
-            // Clipping verhindern: Peak darf 0.99 nicht überschreiten
             if (maxPeak * gain > 0.99f) {
                 gain = 0.99f / maxPeak
             }
         }
 
-        // Nur signifikante Boosts anwenden (> 1.5x) – kleine Anhebungen lohnen nicht
         if (gain > 1.5f) {
-            Log.d(TAG, "normalizeAudio: Boost ${String.format("%.2fx", gain)} " +
-                    "(RMS ${String.format("%.4f", rms)} → Ziel ${targetRms})")
-            val normalized = FloatArray(samples.size)
-            for (i in samples.indices) {
-                normalized[i] = samples[i] * gain
+            Log.d(TAG, "normalizeAudio: DC-Offset $mean entfernt, Boost ${String.format("%.2fx", gain)} " +
+                    "(RMS ${String.format("%.4f", rms)} → Ziel $targetRms)")
+            for (i in centeredSamples.indices) {
+                centeredSamples[i] = centeredSamples[i] * gain
             }
-            return normalized
         }
-        return samples
+        return centeredSamples
     }
 
     /**

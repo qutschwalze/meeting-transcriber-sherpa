@@ -37,16 +37,20 @@ class DiarizationChunkWorkerTest {
         }
     }
 
-    /** Fake-Embedding-Computer: Sample-Wert bestimmt die "Stimme" (1f=A, 2f=B). */
+    /**
+     * Fake-Embedding-Computer: Der RMS-Pegel bestimmt die "Stimme".
+     * WICHTIG: RMS-basiert statt samples[0]-basiert – die Bank bekommt das
+     * ORIGINAL-Audio (unzentriert), aber konstante Test-Signale (1f/2f) sind
+     * reine DC-Träger; der RMS ist der robuste Unterscheider:
+     * Pegel 1f (RMS 1.0) = Stimme A, Pegel 2f (RMS 2.0) = Stimme B.
+     */
     private class ValueComputer : SpeakerEmbeddingComputer {
         override fun computeEmbedding(samples: FloatArray): FloatArray? {
             if (samples.isEmpty()) return null
-            val v = samples[0]
-            return when {
-                v <= 1.5f -> floatArrayOf(1f, 0f, 0f) // Stimme A
-                v <= 2.5f -> floatArrayOf(0f, 1f, 0f) // Stimme B
-                else -> floatArrayOf(0f, 0f, 1f)
-            }
+            var sumSquares = 0.0
+            for (s in samples) sumSquares += s * s
+            val rms = kotlin.math.sqrt(sumSquares / samples.size)
+            return if (rms < 1.5f) floatArrayOf(1f, 0f, 0f) else floatArrayOf(0f, 1f, 0f)
         }
     }
 
@@ -55,6 +59,40 @@ class DiarizationChunkWorkerTest {
     private fun ChunkedAudioBuffer.pushValueFrames(value: Float, count: Int, startMs: Long = 0L) {
         for (i in 0 until count) {
             push(valueFrame(value), startMs + i * 10L)
+        }
+    }
+
+    /**
+     * Frame mit DC-Offset: schwingt um [offset] herum (Mean ≈ offset statt 0) –
+     * simuliert ein Smartphone-Mikrofon mit Gleichspannungsversatz.
+     */
+    private fun dcOffsetFrame(offset: Float): FloatArray =
+        FloatArray(frameSamples) { i -> if (i % 2 == 0) offset + 0.01f else offset - 0.01f }
+
+    private fun ChunkedAudioBuffer.pushDcOffsetFrames(offset: Float, count: Int, startMs: Long = 0L) {
+        for (i in 0 until count) {
+            push(dcOffsetFrame(offset), startMs + i * 10L)
+        }
+    }
+
+    /**
+     * Fake-Diarizer, der den DC-Offset der ankommenden Samples prüft:
+     * Der DC-Blocker muss den Mean auf ≈ 0 zentriert haben, bevor die Engine
+     * das Audio bekommt (sonst wäre der Mean ≈ 0.05).
+     */
+    private class MeanCheckingDiarizer(
+        private val results: ArrayDeque<List<DiarizationSegment>>,
+    ) : ChunkDiarizer {
+        var meanRemoved = false
+        override fun process(samples: FloatArray): List<DiarizationSegment> {
+            if (samples.isNotEmpty()) {
+                var sum = 0.0
+                for (s in samples) sum += s
+                val mean = (sum / samples.size).toFloat()
+                // Zentriert: |Mean| < 0.01 (bei rohem DC-Offset wäre er ≈ 0.05)
+                if (kotlin.math.abs(mean) < 0.01f) meanRemoved = true
+            }
+            return results.removeFirstOrNull() ?: emptyList()
         }
     }
 
@@ -397,6 +435,22 @@ class DiarizationChunkWorkerTest {
         assertNotNull(result)
         result!!
         assertEquals("1 Segment", 1, result.mappedSegments.size)
+    }
+
+    @Test
+    fun `DC-Offset wird vor der Engine entfernt`() {
+        // 20s Audio mit DC-Offset: Signal schwingt um 0.05 statt um 0 (wie ein
+        // Smartphone-Mikrofon mit Gleichspannungsversatz). Der DC-Blocker muss
+        // den Mean (≈0.05) abziehen, bevor die Engine das Audio bekommt.
+        val buffer = ChunkedAudioBuffer(sampleRate = sampleRate)
+        buffer.pushDcOffsetFrames(0.05f, 2000) // 0-20s, Sinus um 0.05 herum
+
+        val fake = MeanCheckingDiarizer(ArrayDeque())
+        val worker = DiarizationChunkWorker(buffer, fake)
+
+        worker.processNextChunk(debug = false)
+        // Der Fake prüft intern, dass die Samples zentriert sind (Mean ≈ 0)
+        assertTrue("DC-Offset wurde entfernt (Mean ≈ 0)", fake.meanRemoved)
     }
 
     @Test
