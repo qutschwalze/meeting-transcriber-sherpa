@@ -125,6 +125,37 @@ class RollingReconcilerTest {
     }
 
     @Test
+    fun `Fragment-Filter - winzige Segmente unter 400ms werden entfernt`() {
+        val reconciler = RollingReconciler() // Default minFragmentSec = 0.4f
+        val previous = listOf(
+            globalSeg(speaker = 0, startSec = 5f, endSec = 20f),
+            // Winziges Fragment im Bestand (0.2s) → muss ignoriert werden
+            SpeakerTimeRange(startSec = 16f, endSec = 16.2f, speakerId = 1),
+        )
+
+        // Nur winzige lokale Fragmente (0.1s + 0.3s) → komplett verworfen
+        val tinyOnly = reconciler.reconcile(
+            listOf(
+                localSeg(speaker = 0, startSec = 15f, endSec = 15.1f),
+                localSeg(speaker = 1, startSec = 15.2f, endSec = 15.5f),
+            ),
+            zone, previous, debug = false,
+        )
+        assertTrue("nur winzige Fragmente → leeres Ergebnis", tinyOnly.mappedSegments.isEmpty())
+
+        // Signifikantes Segment + winziges Fragment → nur das signifikante wird gemappt
+        val mixed = reconciler.reconcile(
+            listOf(
+                localSeg(speaker = 0, startSec = 15f, endSec = 25f), // 10s → signifikant
+                localSeg(speaker = 1, startSec = 15.2f, endSec = 15.5f), // 0.3s → Fragment
+            ),
+            zone, previous, debug = false,
+        )
+        assertEquals("nur signifikantes Segment in mappedSegments", 1, mixed.mappedSegments.size)
+        assertEquals("Fragment-Speaker 1 existiert nicht im Mapping", null, mixed.mapping[1])
+    }
+
+    @Test
     fun `Greedy - bei Kollision gewinnt der groesste Overlap`() {
         val reconciler = RollingReconciler()
         val previous = listOf(
