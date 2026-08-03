@@ -54,6 +54,8 @@ class DiarizationChunkWorker(
     private val reconciler: RollingReconciler = RollingReconciler(),
     /** Hebel G: akustische Voice-Bank gegen Engine-Drift (optional, testbar). */
     private val voiceBank: SessionVoiceBank? = null,
+    /** Chunk-Retry (0.5.53): Versatz (Sek.) beim erneuten Engine-Versuch bei 0 segments. */
+    private val retryOffsetSec: Float = 5f,
     private val chunkSec: Float = 20f,
     private val overlapSec: Float = 5f,
 ) {
@@ -66,6 +68,9 @@ class DiarizationChunkWorker(
 
         /** Sample-Rate des Audio-Streams (16 kHz) – für Segment-Audio-Extraktion. */
         private const val SAMPLE_RATE = 16000
+
+        /** Mindest-Samples für einen Retry-Versuch (10s Audio). */
+        private const val MIN_RETRY_SAMPLES = 10 * SAMPLE_RATE
     }
 
     /** Globaler Bestand: bestätigte Diarization-Segmente mit Session-weiten Speaker-IDs. */
@@ -131,13 +136,31 @@ class DiarizationChunkWorker(
     /** Gemeinsamer Kern für [processNextChunk] und [processFinalChunk]. */
     private fun processChunk(chunk: AudioChunk, debug: Boolean): WorkerChunkResult? {
         // ── 1+2: Engine – lokale Zeiten relativ zum Chunk-Anfang ──
-        val engineSegments = diarizer.process(chunk.samples)
+        var engineSegments = diarizer.process(chunk.samples)
+
+        // Chunk-Retry (0.5.53): Bei 0 segments ein versetztes Fenster versuchen.
+        // Pyannote kollabiert oft bei bestimmten Input-Mustern (VAD/Stille) – ein
+        // um retryOffsetSec verschobener Ausschnitt liefert oft doch Segmente.
+        // Der Versatz wird beim Time-Shift wieder herausgerechnet.
+        var retryOffsetSecApplied = 0f
+        if (engineSegments.isEmpty() && chunk.samples.size >= MIN_RETRY_SAMPLES) {
+            val offsetSamples = (retryOffsetSec * SAMPLE_RATE).toInt()
+            if (offsetSamples < chunk.samples.size) {
+                val retrySamples = chunk.samples.copyOfRange(offsetSamples, chunk.samples.size)
+                val retrySegments = diarizer.process(retrySamples)
+                if (retrySegments.isNotEmpty()) {
+                    Log.i(TAG, "processChunk: 0 segments → Retry mit Offset ${retryOffsetSec}s: ${retrySegments.size} Segmente")
+                    engineSegments = retrySegments
+                    retryOffsetSecApplied = retryOffsetSec
+                }
+            }
+        }
 
         // ── 3: Time-Shift auf absolute Session-Zeit ──
         val absoluteSegments = engineSegments.map { seg ->
             DiarizationSegment(
-                startSec = seg.startSec + chunk.startSec,
-                endSec = seg.endSec + chunk.startSec,
+                startSec = seg.startSec + chunk.startSec + retryOffsetSecApplied,
+                endSec = seg.endSec + chunk.startSec + retryOffsetSecApplied,
                 speaker = seg.speaker,
             )
         }

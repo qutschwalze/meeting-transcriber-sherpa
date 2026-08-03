@@ -76,18 +76,25 @@ class SherpaEmbeddingComputer(
  * Lösung: Die Bank merkt sich pro globaler Speaker-ID ein Embedding (Voiceprint)
  * und gleicht neue Kandidaten per Cosine Similarity ab:
  * - [identify]: Match über Threshold → globale ID zurückgeben (Drift aufgelöst)
- * - [enroll]:   neuer Sprecher wird eingeschrieben (erst ab minEnrollmentSec)
+ * - [enroll]:   neuer Sprecher wird eingeschrieben
  * - Rolling Update: je mehr Audio, desto stabiler das Voiceprint (gewichteter Ø)
+ *
+ * Enrollment-Härtung (0.5.53): Ein neuer Sprecher wird erst nach 2 unabhängigen
+ * Kontakten (2 Chunks) mit ähnlichem Klangbild bestätigt. Pyannote-Fehlcluster,
+ * die nur einmal auftauchen (0.5.52: 3 Speaker in Hälfte 1), werden nie zu
+ * echten Speakern – sie bleiben "pending" und sterben am Session-Ende.
  *
  * Die Bank ist bewusst AKUSTISCH und zeitunabhängig – sie ergänzt den temporalen
  * Reconciler als Fallback für die Anker-Lücken-Fälle.
  */
 class SessionVoiceBank(
     private val computer: SpeakerEmbeddingComputer,
-    /** Cosine-Similarity-Schwelle für einen Match (0.8 = konservativ). */
-    private val matchThreshold: Float = 0.8f,
+    /** Cosine-Similarity-Schwelle für einen Match (0.38 = kalibriert, s. 0.5.48/0.5.49). */
+    private val matchThreshold: Float = 0.38f,
     /** Mindest-Redezeit für ein Enrollment (verhindert Einschreiben auf Fragmente). */
-    private val minEnrollmentSec: Float = 5f,
+    private val minEnrollmentSec: Float = 2f,
+    /** Mindest-Ähnlichkeit zwischen 2 Kontakten für die Enrollment-Bestätigung. */
+    private val pendingConfirmThreshold: Float = 0.38f,
 ) {
 
     companion object {
@@ -115,15 +122,27 @@ class SessionVoiceBank(
     /** Anzahl Enrollment-Beiträge pro Speaker (für den gewichteten Durchschnitt). */
     private val enrollCounts = mutableMapOf<Int, Int>()
 
+    /**
+     * Noch NICHT bestätigte Speaker (2-Kontakt-Härtung): globale ID → Embedding.
+     * Ein Enrollment braucht 2 unabhängige Kontakte (2 Chunks) mit ähnlichem
+     * Klangbild – einmalige Pyannote-Fehlcluster werden nie eingeschrieben.
+     */
+    private class PendingEnrollment(val embedding: FloatArray)
+
+    private val pendingEnrollments = mutableMapOf<Int, PendingEnrollment>()
+
     val speakerCount: Int get() = voiceprints.size
+    val pendingCount: Int get() = pendingEnrollments.size
     val enrolledSpeakerIds: Set<Int> get() = voiceprints.keys.toSet()
 
     /**
-     * Gleicht Audio-Samples gegen die Bank ab.
+     * Gleicht Audio-Samples gegen die Bank ab – gegen bestätigte Voiceprints UND
+     * gegen pending Enrollments (Drift-Auflösung auch vor der Bestätigung).
+     * Ein Match gegen ein pending gilt als 2. Kontakt und bestätigt das Enrollment.
      * @return globale Speaker-ID bei Match über Threshold, sonst null.
      */
     fun identify(samples: FloatArray): Int? {
-        if (samples.isEmpty() || voiceprints.isEmpty()) return null
+        if (samples.isEmpty() || (voiceprints.isEmpty() && pendingEnrollments.isEmpty())) return null
         val embedding = computer.computeEmbedding(samples) ?: return null
 
         var bestId: Int? = null
@@ -133,21 +152,36 @@ class SessionVoiceBank(
         for ((id, vp) in voiceprints) {
             val sim = cosineSimilarity(embedding, vp)
             if (sims.isNotEmpty()) sims.append(", ")
-            sims.append("$id=${"%.3f".format(sim)}")
+            sims.append(String.format("%d=%.3f", id, sim))
+            if (sim > bestSim) {
+                bestSim = sim
+                bestId = id
+            }
+        }
+        // Pending Enrollments matchen ebenfalls (Drift vor Bestätigung auflösen)
+        for ((id, pending) in pendingEnrollments) {
+            val sim = cosineSimilarity(embedding, pending.embedding)
+            if (sims.isNotEmpty()) sims.append(", ")
+            sims.append(String.format("%d~=%.3f", id, sim))
             if (sim > bestSim) {
                 bestSim = sim
                 bestId = id
             }
         }
         if (bestId != null) {
-            Log.d(TAG, "identify: MATCH → global=$bestId sim=${"%.3f".format(bestSim)} " +
-                    "(threshold=$matchThreshold, [$sims])")
+            // Match gegen ein pending = 2. Kontakt → Enrollment bestätigen
+            val pending = pendingEnrollments[bestId]
+            if (pending != null) {
+                confirmPending(bestId, embedding)
+            }
+            Log.d(TAG, String.format("identify: MATCH → global=%d sim=%.3f (threshold=%.3f, [%s])",
+                    bestId, bestSim, matchThreshold, sims))
         } else {
             // Kein Match über Threshold – nur verbose (kommt bei jedem neuen Sprecher vor)
             val maxSim = voiceprints.entries.maxByOrNull { cosineSimilarity(embedding, it.value) }
             val topSim = if (maxSim != null) cosineSimilarity(embedding, maxSim.value) else 0f
-            Log.v(TAG, "identify: KEIN Match – beste Similarity=${"%.3f".format(topSim)} " +
-                    "gegen global=${maxSim?.key} (threshold=$matchThreshold, [$sims])")
+            Log.v(TAG, String.format("identify: KEIN Match – beste Similarity=%.3f gegen global=%d (threshold=%.3f, [%s])",
+                    topSim, maxSim?.key ?: -1, matchThreshold, sims))
         }
         return bestId
     }
@@ -155,10 +189,12 @@ class SessionVoiceBank(
     /**
      * Schreibt einen Sprecher ein oder aktualisiert sein Voiceprint.
      * Erst ab [minEnrollmentSec] Redezeit – verhindert Enrollment auf Fragmente.
-     * Das Voiceprint ist ein gewichteter Durchschnitt aller Enrollment-Beiträge
-     * (Rolling Fingerprint): je mehr Audio, desto stabiler.
      *
-     * @return true wenn eingeschrieben/aktualisiert, false wenn übersprungen (zu kurz / kein Embedding).
+     * 2-Kontakt-Härtung: Der 1. Kontakt legt nur ein pending an (kein Voiceprint).
+     * Erst wenn dieselbe ID in einem späteren Chunk wieder auftaucht und das
+     * Klangbild ähnlich ist ([pendingConfirmThreshold]), wird bestätigt.
+     *
+     * @return true wenn eingeschrieben/bestätigt, false wenn pending/skip/Fehler.
      */
     fun enroll(globalId: Int, samples: FloatArray, durationMs: Long): Boolean {
         if (durationMs < (minEnrollmentSec * 1000f).toLong()) {
@@ -172,26 +208,56 @@ class SessionVoiceBank(
             return false
         }
 
-        val count = (enrollCounts[globalId] ?: 0)
+        // Bereits bestätigt → Rolling Update (gewichteter Ø)
         val existing = voiceprints[globalId]
-        val updated = if (existing == null) {
-            embedding
-        } else {
-            // Gewichteter Durchschnitt: (alt * n + neu) / (n + 1)
-            FloatArray(embedding.size) { i ->
+        if (existing != null) {
+            val count = enrollCounts[globalId] ?: 1
+            val updated = FloatArray(embedding.size) { i ->
                 (existing[i] * count + embedding[i]) / (count + 1)
             }
+            voiceprints[globalId] = updated
+            enrollCounts[globalId] = count + 1
+            Log.d(TAG, "enroll: global=$globalId ($durationMs ms, Beitrag #${count + 1}) – Bank hat ${voiceprints.size} Sprecher")
+            return true
         }
-        voiceprints[globalId] = updated
-        enrollCounts[globalId] = count + 1
-        Log.d(TAG, "enroll: global=$globalId ($durationMs ms, Beitrag #${count + 1}) – Bank hat ${voiceprints.size} Sprecher")
-        return true
+
+        // 2. Kontakt derselben ID? → Ähnlichkeit prüfen und ggf. bestätigen
+        val pending = pendingEnrollments[globalId]
+        if (pending != null) {
+            val sim = cosineSimilarity(pending.embedding, embedding)
+            if (sim >= pendingConfirmThreshold) {
+                confirmPending(globalId, embedding)
+                Log.d(TAG, "enroll CONFIRMED: global=$globalId ($durationMs ms, sim=$sim) – Bank hat ${voiceprints.size} Sprecher")
+                return true
+            }
+            // Anderes Klangbild unter gleicher ID → pending ersetzen (war Fehlcluster)
+            pendingEnrollments[globalId] = PendingEnrollment(embedding)
+            Log.d(TAG, "enroll pending-ersetzt: global=$globalId – sim=$sim < $pendingConfirmThreshold")
+            return false
+        }
+
+        // 1. Kontakt: nur pending anlegen – noch KEIN Voiceprint
+        pendingEnrollments[globalId] = PendingEnrollment(embedding)
+        Log.d(TAG, "enroll pending: global=$globalId ($durationMs ms, 1. Kontakt) – wartet auf 2. Bestätigung (Bank=${voiceprints.size} bestätigt, ${pendingEnrollments.size} pending)")
+        return false
+    }
+
+    /** Bestätigt ein pending Enrollment (2. Kontakt): Voiceprint aus Ø beider Kontakte. */
+    private fun confirmPending(globalId: Int, embedding: FloatArray) {
+        val pending = pendingEnrollments.remove(globalId) ?: return
+        val merged = FloatArray(embedding.size) { i ->
+            (pending.embedding[i] + embedding[i]) / 2f
+        }
+        voiceprints[globalId] = merged
+        enrollCounts[globalId] = 2
+        Log.d(TAG, "confirmPending: global=$globalId – Voiceprint aus 2 Kontakten, Bank hat ${voiceprints.size} Sprecher")
     }
 
     /** Leert die Bank (Session-Ende). */
     fun reset() {
         voiceprints.clear()
         enrollCounts.clear()
+        pendingEnrollments.clear()
         Log.d(TAG, "reset: Bank geleert")
     }
 }

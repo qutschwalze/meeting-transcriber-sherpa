@@ -31,7 +31,9 @@ class DiarizationChunkWorkerTest {
     ) : ChunkDiarizer {
         override fun process(samples: FloatArray): List<DiarizationSegment> {
             assertTrue("FakeDiarizer: Samples vorhanden", samples.isNotEmpty())
-            return results.removeFirst()
+            // removeFirstOrNull: Chunk-Retry (2. Engine-Versuch) liefert leer,
+            // wenn keine weiteren Ergebnisse vordefiniert sind
+            return results.removeFirstOrNull() ?: emptyList()
         }
     }
 
@@ -316,6 +318,45 @@ class DiarizationChunkWorkerTest {
     // ── Hebel G: Voice-Bank-Integration ──
 
     @Test
+    fun `0 Segmente vom ersten Engine-Lauf werden per Chunk-Retry gerettet`() {
+        val buffer = ChunkedAudioBuffer(sampleRate = sampleRate)
+        buffer.pushFrames(3000) // 30s – Chunk 1 = [0,20]
+
+        // 1. Engine-Lauf: 0 Segmente (Pyannote-VAD-Aussetzer)
+        // 2. Retry-Lauf (Offset 5s): findet Sprecher 0 in [0,5] relativ zum Retry-Start
+        val fake = FakeDiarizer(ArrayDeque(listOf(
+            emptyList(),
+            listOf(localSeg(0, 0f, 5f)),
+        )))
+        val worker = DiarizationChunkWorker(buffer, fake, retryOffsetSec = 5f)
+
+        val result = worker.processNextChunk(debug = false)
+        assertNotNull("Retry liefert Ergebnis statt null", result)
+        result!!
+        assertEquals("Segment existiert nach Retry", 1, result.mappedSegments.size)
+        // Time-Shift: retryOffsetSec muss herausgerechnet sein → absolut [5,10]
+        assertEquals("Start nach Offset-Korrektur", 5f, result.mappedSegments[0].startSec, 0.01f)
+        assertEquals("Ende nach Offset-Korrektur", 10f, result.mappedSegments[0].endSec, 0.01f)
+    }
+
+    @Test
+    fun `Chunk-Retry liefert weiterhin null wenn beide Engine-Lauefe leer sind`() {
+        val buffer = ChunkedAudioBuffer(sampleRate = sampleRate)
+        buffer.pushFrames(3000) // 30s – Chunk 1 = [0,20]
+
+        val fake = FakeDiarizer(ArrayDeque(listOf(
+            emptyList(),
+            emptyList(),
+        )))
+        val worker = DiarizationChunkWorker(buffer, fake, retryOffsetSec = 5f)
+
+        val result = worker.processNextChunk(debug = false)
+        assertNotNull(result)
+        result!!
+        assertEquals("0 Segmente trotz Retry", 0, result.mappedSegments.size)
+    }
+
+    @Test
     fun `VoiceBank - Engine-Drift wird akustisch auf globalen Speaker zurueckgemappt`() {
         val buffer = ChunkedAudioBuffer(sampleRate = sampleRate)
         // 0-20s Stimme A, 15-40s weiterhin Stimme A (gleiche Person!)
@@ -335,8 +376,8 @@ class DiarizationChunkWorkerTest {
 
         val first = worker.processNextChunk(debug = false)
         assertNotNull(first)
-        assertEquals("Speaker 0 enrolled (Stimme A)", 1, voiceBank.speakerCount)
-        assertTrue("Speaker 0 in der Bank", voiceBank.enrolledSpeakerIds == setOf(0))
+        assertEquals("Speaker 0 nach 1. Kontakt: pending, noch nicht eingeschrieben", 0, voiceBank.speakerCount)
+        assertEquals("1 pending Enrollment (2-Kontakt-Härtung)", 1, voiceBank.pendingCount)
 
         val second = worker.processNextChunk(debug = false)
         assertNotNull(second)
@@ -345,8 +386,9 @@ class DiarizationChunkWorkerTest {
             mapOf(1 to 0), second.mapping)
         assertTrue("keine neue Speaker-ID nach Bank-Auflösung", second.newSpeakerIds.isEmpty())
         assertEquals("Segment auf global 0 gemappt", 0, second.mappedSegments[0].speaker)
-        assertEquals("Bank hat weiterhin nur 1 Sprecher (kein neuer eingeschrieben)",
+        assertEquals("2. Kontakt bestätigt: Bank hat jetzt 1 Sprecher",
             1, voiceBank.speakerCount)
+        assertEquals("pending durch Bestätigung aufgelöst", 0, voiceBank.pendingCount)
     }
 
     @Test
@@ -370,8 +412,42 @@ class DiarizationChunkWorkerTest {
 
         assertEquals("B bleibt neue ID 1", mapOf(1 to 1), second.mapping)
         assertTrue("B ist neuer Speaker", second.newSpeakerIds == setOf(1))
-        assertEquals("Bank hat jetzt 2 Sprecher (A + B)", 2, voiceBank.speakerCount)
-        assertTrue("Speaker 1 eingeschrieben", voiceBank.enrolledSpeakerIds == setOf(0, 1))
+        // 2-Kontakt-Härtung: B ist nach 1. Kontakt nur pending – kein Voiceprint
+        assertEquals("kein bestätigter Sprecher nach 1. Kontakt", 0, voiceBank.speakerCount)
+        assertEquals("2 pending Enrollments (A aus Chunk 1, B aus Chunk 2)", 2, voiceBank.pendingCount)
+    }
+
+    @Test
+    fun `VoiceBank - zweiter Kontakt derselben Stimme bestaetigt Enrollment`() {
+        val buffer = ChunkedAudioBuffer(sampleRate = sampleRate)
+        // 0-20s Stimme A, 20-60s Stimme B (durchgehend)
+        buffer.pushValueFrames(1f, 2000)                 // 0-20s
+        buffer.pushValueFrames(2f, 4000, startMs = 20_000L) // 20-60s
+
+        // Chunks (20s + 5s Overlap): [0,20], [15,40], [35,60]
+        // Chunk 1: A in [0,10] → pending 0 (Stimme A)
+        // Chunk 2: B in [20,35] (Zone [15,20] ohne Anker) → neue ID 1 → pending 1
+        // Chunk 3: B in [35,55] (Zone [35,40] ohne Anker, Bestand endet bei 35)
+        //   → Reconciler will neue ID 2, aber Bank matcht auf pending 1 → CONFIRMED
+        val fake = FakeDiarizer(ArrayDeque(listOf(
+            listOf(localSeg(0, 0f, 10f)),   // absolut [0,10] Stimme A
+            listOf(localSeg(1, 5f, 20f)),   // absolut [20,35] Stimme B
+            listOf(localSeg(0, 0f, 20f)),   // absolut [35,55] Stimme B erneut
+        )))
+        val voiceBank = SessionVoiceBank(ValueComputer())
+        val worker = DiarizationChunkWorker(buffer, fake, voiceBank = voiceBank)
+
+        worker.processNextChunk(debug = false)  // Chunk 1: A pending
+        val second = worker.processNextChunk(debug = false) // Chunk 2: B pending
+        assertNotNull(second)
+        assertEquals("A + B nach Chunk 2 pending", 2, voiceBank.pendingCount)
+
+        val third = worker.processNextChunk(debug = false)  // Chunk 3: B 2. Kontakt
+        assertNotNull(third)
+        third!!
+        assertEquals("2. Kontakt von B bestätigt Enrollment", 1, voiceBank.speakerCount)
+        assertTrue("B eingeschrieben", voiceBank.enrolledSpeakerIds == setOf(1))
+        assertEquals("A bleibt pending (nur 1 Kontakt)", 1, voiceBank.pendingCount)
     }
 
     @Test
