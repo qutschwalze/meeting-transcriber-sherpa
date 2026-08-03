@@ -13,12 +13,15 @@ import com.sherpa.transcript.data.local.SegmentEntity
 import com.sherpa.transcript.data.local.TranscriptEntity
 import com.sherpa.transcript.data.repository.TranscriptRepository
 import com.sherpa.transcript.domain.audio.AudioCaptureManager
+import com.sherpa.transcript.domain.audio.ChunkedAudioBuffer
 import com.sherpa.transcript.domain.model.RecordingState
 import com.sherpa.transcript.domain.model.TranscriptSegment
+import com.sherpa.transcript.engine.DiarizationChunkWorker
 import com.sherpa.transcript.engine.DiarizationClusteringMode
 import com.sherpa.transcript.engine.DiarizationSegment
 import com.sherpa.transcript.engine.FinalTranscriptComposer
 import com.sherpa.transcript.engine.ModelDownloadManager
+import com.sherpa.transcript.engine.RollingReconciler
 import com.sherpa.transcript.engine.SherpaOnnxEngine
 import com.sherpa.transcript.engine.SpeakerDiarizationEngine
 import com.sherpa.transcript.engine.SpeakerModelDownloadManager
@@ -94,6 +97,17 @@ class LiveViewModel : ViewModel() {
          * Nur die letzten N Sekunden werden verarbeitet, der Offset wird verschoben.
          */
         private const val DIARIZATION_WINDOW_SEC = 30f
+
+        /**
+         * Feature-Toggle für die Rolling-Reconciliation-Architektur (Dark Launch).
+         *
+         * false = alte Pipeline (audioAccumulator + Sliding Window + normalizeSpeakerIds)
+         * true  = neue Pipeline (ChunkedAudioBuffer + DiarizationChunkWorker + RollingReconciler)
+         *
+         * Bei true wird der audioAccumulator NICHT mehr gefüttert (Memory-Leak-Schutz):
+         * Die Weiche im Capture-Loop pusht dann ausschließlich in den ChunkedAudioBuffer.
+         */
+        private const val ENABLE_CHUNKED_DIARIZATION = false
     }
 
     private val _uiState = MutableStateFlow(LiveUiState())
@@ -103,6 +117,18 @@ class LiveViewModel : ViewModel() {
     private val engine = SherpaOnnxEngine(SherpaTranscriptApp.instance)
     private val speakerEngine = SpeakerDiarizationEngine(SherpaTranscriptApp.instance, SherpaTranscriptApp.instance.assets)
     private val repository = TranscriptRepository()
+
+    // ── Neue Rolling-Reconciliation-Pipeline (nur bei Toggle=ON aktiviert) ──
+    // Lazy-Init: bei Toggle=OFF werden diese Komponenten nie erzeugt (kein RAM/CPU).
+    private val chunkedAudioBuffer by lazy { ChunkedAudioBuffer() }
+    private val rollingReconciler by lazy { RollingReconciler() }
+    private val diarizationChunkWorker by lazy {
+        DiarizationChunkWorker(
+            buffer = chunkedAudioBuffer,
+            diarizer = speakerEngine::process,
+            reconciler = rollingReconciler,
+        )
+    }
 
     private var captureJob: Job? = null
     private var diarizationJob: Job? = null
@@ -320,16 +346,28 @@ class LiveViewModel : ViewModel() {
             firstTwoSpeakerLogged = false
             speakerEngine.resetZeroSegmentCounters()
             synchronized(audioLock) { audioAccumulator.clear(); audioBaseTimeMs = 0L }
+            if (ENABLE_CHUNKED_DIARIZATION) {
+                // Neue Pipeline zurücksetzen (Buffer-Fortschritt + globaler Speaker-Bestand)
+                chunkedAudioBuffer.clear()
+                diarizationChunkWorker.reset()
+            }
             engine.startSession()
 
             captureJob = viewModelScope.launch {
                 audioCapture.startCapture().collect { frame ->
                     val result = engine.processFrame(frame)
                     if (result != null && result.text.isNotBlank()) handleResult(result.text, result.isFinal)
-                    synchronized(audioLock) {
-                        if (audioAccumulator.isEmpty()) audioBaseTimeMs = sessionRelativeMs()
-                        audioAccumulator.addLast(frame)
-                        if (audioAccumulator.size > MAX_AUDIO_FRAMES) { audioAccumulator.removeFirst(); audioBaseTimeMs += 10L }
+                    if (ENABLE_CHUNKED_DIARIZATION) {
+                        // Gleis 2 (neu): Frame in den Chunk-Buffer – non-blocking (~20ns Lock).
+                        // Der audioAccumulator wird hier bewusst NICHT gefüttert (Memory-Leak-Schutz).
+                        chunkedAudioBuffer.push(frame, sessionRelativeMs())
+                    } else {
+                        // Gleis 2 (alt): bisheriger Accumulator-Pfad
+                        synchronized(audioLock) {
+                            if (audioAccumulator.isEmpty()) audioBaseTimeMs = sessionRelativeMs()
+                            audioAccumulator.addLast(frame)
+                            if (audioAccumulator.size > MAX_AUDIO_FRAMES) { audioAccumulator.removeFirst(); audioBaseTimeMs += 10L }
+                        }
                     }
                 }
             }
@@ -338,7 +376,10 @@ class LiveViewModel : ViewModel() {
                 diarizationJob = viewModelScope.launch {
                     while (isActive) {
                         delay(DIARIZATION_INTERVAL_MS)
-                        try { runDiarization(); deriveUiSegments() } catch (e: CancellationException) { Log.d(TAG, "Diarization cancelled"); throw e }
+                        try {
+                            if (ENABLE_CHUNKED_DIARIZATION) runChunkedDiarization() else runDiarization()
+                            deriveUiSegments()
+                        } catch (e: CancellationException) { Log.d(TAG, "Diarization cancelled"); throw e }
                           catch (t: Throwable) { Log.e(TAG, "Diarization error: ${t.message}", t); break }
                     }
                 }
@@ -855,6 +896,172 @@ class LiveViewModel : ViewModel() {
         }
     }
 
+    /**
+     * Neue Rolling-Reconciliation-Pipeline (Toggle ENABLE_CHUNKED_DIARIZATION=ON).
+     *
+     * Gleiche Epoch/Mutex/Quality-Guards wie [runDiarization], aber:
+     * - Chunk kommt vom [DiarizationChunkWorker] (20s + 5s Overlap aus dem ChunkedAudioBuffer)
+     * - Worker liefert bereits GLOBALE, session-stabile Speaker-IDs (RollingReconciler)
+     *   → normalizeSpeakerIds entfällt (kein doppelter Normalizer!)
+     * - Zeiten sind bereits absolut (Time-Shift im Worker) → kein Offset-Shift hier
+     * - forceFinal nutzt processFinalChunk() (Rest-Audio bis Stop, kein Segmentverlust)
+     */
+    private suspend fun runChunkedDiarization(forceFinal: Boolean = false) {
+        val epoch = ++diarizationEpoch
+        Log.d(TAG, "ChunkedDiarization START: epoch=$epoch raw=${rawFinalSegments.size} stopping=$isStopping saving=$isSavingFinalResult forceFinal=$forceFinal")
+
+        diarizationMutex.withLock {
+            // Early drop: Background-Lauf nach Stop verwerfen
+            if (!canApplyDiarizationResult(epoch, forceFinal)) {
+                Log.d(TAG, "ChunkedDiarization DROP_STALE: epoch=$epoch latest=$diarizationEpoch stopping=$isStopping saving=$isSavingFinalResult")
+                return
+            }
+
+            withContext(Dispatchers.IO) {
+                ensureActive()
+
+                val workerResult = if (forceFinal) {
+                    diarizationChunkWorker.processFinalChunk(debug = _uiState.value.debugMode)
+                } else {
+                    diarizationChunkWorker.processNextChunk(debug = _uiState.value.debugMode)
+                }
+                if (workerResult == null) {
+                    Log.d(TAG, "ChunkedDiarization skip: noch kein voller Chunk verfügbar (epoch=$epoch)")
+                    return@withContext
+                }
+                val diarizationSegs = workerResult.mappedSegments
+                if (diarizationSegs.isEmpty()) {
+                    // Final-Run mit 0 Segmenten: konservierten Kandidaten als Fallback übernehmen
+                    if (forceFinal) {
+                        val fallback = lastGoodDiarizationCandidate
+                        if (fallback != null) {
+                            val fbQuality = computeQuality(fallback)
+                            if (fbQuality.labeledSegments > bestAssignmentQuality.labeledSegments ||
+                                fbQuality.distinctSpeakers > bestAssignmentQuality.distinctSpeakers
+                            ) {
+                                assignedFinalSegments = fallback
+                                bestAssignmentQuality = fbQuality
+                                renumberLiveSpeakerIds()
+                                Log.w(TAG, "ChunkedDiarization FINAL_FALLBACK: epoch=$epoch worker=0 segments — restored preserved candidate " +
+                                        "(labeled=${fbQuality.labeledSegments} speakers=${fbQuality.distinctSpeakers})")
+                            }
+                        }
+                    }
+                    Log.w(TAG, "ChunkedDiarization: 0 segments from engine (epoch=$epoch, mapping=${workerResult.mapping})")
+                    return@withContext
+                }
+                lastDiarizationSegments = diarizationSegs
+
+                // Rohsegmente vor Zuordnung kompaktieren (temporäre Kopie)
+                val compactedSegs = TimelineComposer.compactRawSegmentsBeforeAssignment(rawFinalSegments)
+                // Worker liefert globale IDs → KEIN normalizeSpeakerIds nötig
+                val candidate = TimelineComposer.assignSpeakersToRawSegments(compactedSegs, diarizationSegs, debug = _uiState.value.debugMode)
+                if (candidate.isEmpty()) return@withContext
+                val candQuality = computeQuality(candidate)
+
+                // Debug: globale IDs aus dem Worker
+                val globalLabels = diarizationSegs
+                    .map { it.speaker }
+                    .distinct().sorted().joinToString(",")
+                Log.d(TAG, "ChunkedDiarization: workerSegs=${diarizationSegs.size} globalIds=[$globalLabels] " +
+                        "mapping=[${workerResult.mapping}] new=[${workerResult.newSpeakerIds.sorted().joinToString(",")}]")
+
+                val merged = mergeCandidateIntoBest(candidate)
+                val mergedQuality = computeQuality(merged)
+                val previousBest = bestAssignmentQuality
+                val prevAssigned = assignedFinalSegments
+                val diff = compareAssignments(prevAssigned, merged)
+
+                // Commit-Guard: nur anwenden, wenn dieser Lauf noch aktuell ist
+                if (!canApplyDiarizationResult(epoch, forceFinal)) {
+                    val reason = if (isSavingFinalResult) "DROP_DURING_SAVE" else if (isStopping) "DROP_STALE" else "DROP_EPOCH"
+                    // In-Flight-Ergebnis konservieren: besserer Kandidat als Fallback für Stop/Save
+                    if (isStopping && !isSavingFinalResult &&
+                        (mergedQuality.labeledSegments > bestAssignmentQuality.labeledSegments ||
+                            mergedQuality.distinctSpeakers > bestAssignmentQuality.distinctSpeakers)
+                    ) {
+                        lastGoodDiarizationCandidate = merged
+                        Log.w(TAG, "ChunkedDiarization $reason: epoch=$epoch — preserving better candidate as fallback " +
+                                "(labeled=${mergedQuality.labeledSegments} speakers=${mergedQuality.distinctSpeakers})")
+                    } else {
+                        Log.w(TAG, "ChunkedDiarization $reason: epoch=$epoch latest=$diarizationEpoch stopping=$isStopping saving=$isSavingFinalResult")
+                    }
+                    return@withContext
+                }
+
+                if (forceFinal) {
+                    Log.d(TAG, "ChunkedDiarization FINAL_RUN: epoch=$epoch raw=${rawFinalSegments.size}")
+                }
+
+                val logPrefix = if (forceFinal) "FINAL_" else ""
+                if (!diff.isMeaningfulChange) {
+                    Log.i(TAG, "ChunkedDiarization ${logPrefix}NO_CHANGE: epoch=$epoch raw=${rawFinalSegments.size} " +
+                            "candRaw=(labeled=${candQuality.labeledSegments}/${candidate.size} speakers=${candQuality.distinctSpeakers} " +
+                            "dur=${candQuality.totalLabeledDurationMs}) " +
+                            "merged=(labeled=${mergedQuality.labeledSegments}/${merged.size} speakers=${mergedQuality.distinctSpeakers} " +
+                            "dur=${mergedQuality.totalLabeledDurationMs}) " +
+                            "best=(labeled=${previousBest.labeledSegments} speakers=${previousBest.distinctSpeakers} " +
+                            "dur=${previousBest.totalLabeledDurationMs}) " +
+                            "diff=(new=${diff.newlyLabeledSegments} changed=${diff.changedSpeakerAssignments} lost=${diff.lostLabels})")
+                } else if (shouldAcceptAssignment(merged)) {
+                    if (forceFinal && previousBest.distinctSpeakers >= 2 &&
+                        mergedQuality.distinctSpeakers < previousBest.distinctSpeakers
+                    ) {
+                        Log.w(TAG, "ChunkedDiarization FINAL_SKIP_COLLAPSE: epoch=$epoch " +
+                                "${previousBest.distinctSpeakers}→${mergedQuality.distinctSpeakers} speakers " +
+                                "— keeping pre-stop best")
+                    } else {
+                        assignedFinalSegments = merged
+                        bestAssignmentQuality = mergedQuality
+                        renumberLiveSpeakerIds()
+                        // FIRST_2SPK: erster 2-Speaker-Zustand der Session – Umschaltpunkt-Marker
+                        if (!firstTwoSpeakerLogged && mergedQuality.distinctSpeakers >= 2) {
+                            firstTwoSpeakerLogged = true
+                            val prevSpeakerIds = prevAssigned
+                                .mapNotNull { it.speakerId?.takeIf { s -> s.isNotBlank() } }
+                                .distinct().toSet()
+                            val firstNew = merged.firstOrNull { seg ->
+                                seg.speakerId?.let { it.isNotBlank() && it !in prevSpeakerIds } == true
+                            }
+                            val newSpeakerId = firstNew?.speakerId
+                            val newSegs = if (newSpeakerId != null) {
+                                merged.filter { it.speakerId == newSpeakerId }
+                            } else emptyList()
+                            val newDurMs = newSegs.sumOf { it.endTimeMs - it.startTimeMs }
+                            Log.i(TAG, "FIRST_2SPK epoch=$epoch newSpeaker=${newSpeakerId ?: "?"} " +
+                                    "at=${firstNew?.startTimeMs ?: 0}ms end=${firstNew?.endTimeMs ?: 0}ms " +
+                                    "newSegs=${newSegs.size} newDur=${newDurMs}ms " +
+                                    "text=\"${firstNew?.text?.take(50) ?: ""}\"")
+                        }
+                        val mergedSpeakerIds = merged
+                            .mapNotNull { it.speakerId?.takeIf { s -> s.isNotBlank() } }
+                            .distinct().map { it.removePrefix("speaker_") }.sorted().joinToString(",")
+                        val prevSpeakerIds = prevAssigned
+                            .mapNotNull { it.speakerId?.takeIf { s -> s.isNotBlank() } }
+                            .distinct().map { it.removePrefix("speaker_") }.sorted().joinToString(",")
+                        Log.i(TAG, "ChunkedDiarization ${logPrefix}ACCEPTED_IMPROVED: epoch=$epoch raw=${rawFinalSegments.size} " +
+                                "candRaw=(labeled=${candQuality.labeledSegments}/${candidate.size} speakers=${candQuality.distinctSpeakers} " +
+                                "dur=${candQuality.totalLabeledDurationMs}) " +
+                                "merged=(labeled=${mergedQuality.labeledSegments}/${merged.size} speakers=${mergedQuality.distinctSpeakers} " +
+                                "dur=${mergedQuality.totalLabeledDurationMs} ids=[$mergedSpeakerIds]) " +
+                                "best=(labeled=${previousBest.labeledSegments} speakers=${previousBest.distinctSpeakers} " +
+                                "dur=${previousBest.totalLabeledDurationMs} ids=[$prevSpeakerIds]) " +
+                                "diff=(new=${diff.newlyLabeledSegments} changed=${diff.changedSpeakerAssignments} lost=${diff.lostLabels})")
+                    }
+                } else {
+                    Log.w(TAG, "ChunkedDiarization ${logPrefix}REJECTED: epoch=$epoch raw=${rawFinalSegments.size} " +
+                            "candRaw=(labeled=${candQuality.labeledSegments}/${candidate.size} speakers=${candQuality.distinctSpeakers} " +
+                            "dur=${candQuality.totalLabeledDurationMs}) " +
+                            "merged=(labeled=${mergedQuality.labeledSegments}/${merged.size} speakers=${mergedQuality.distinctSpeakers} " +
+                            "dur=${mergedQuality.totalLabeledDurationMs}) " +
+                            "best=(labeled=${previousBest.labeledSegments} speakers=${previousBest.distinctSpeakers} " +
+                            "dur=${previousBest.totalLabeledDurationMs}) " +
+                            "diff=(new=${diff.newlyLabeledSegments} changed=${diff.changedSpeakerAssignments} lost=${diff.lostLabels})")
+                }
+            }
+        }
+    }
+
     private fun computeQuality(segments: List<TranscriptSegment>): AssignmentQuality {
         val labeled = segments.filter { !it.speakerId.isNullOrBlank() }
         return AssignmentQuality(
@@ -1009,7 +1216,7 @@ class LiveViewModel : ViewModel() {
 
             // Finaler Lauf: forceFinal=true passiert den Guard, weil !isSavingFinalResult
             Log.d(TAG, "stopRecording: final diarization")
-            runDiarization(forceFinal = true)
+            if (ENABLE_CHUNKED_DIARIZATION) runChunkedDiarization(forceFinal = true) else runDiarization(forceFinal = true)
             deriveUiSegments()
 
             // Offenes Partial als finales Segment sichern, falls vorhanden
@@ -1162,5 +1369,13 @@ class LiveViewModel : ViewModel() {
     fun onScrollToLatest() { _uiState.update { it.copy(autoScrollEnabled = true) } }
     fun onFontSizeChanged(newSize: Float) { _uiState.update { it.copy(fontSize = newSize) } }
 
-    override fun onCleared() { super.onCleared(); captureJob?.cancel(); diarizationJob?.cancel(); audioCapture.stopCapture(); engine.release(); speakerEngine.release() }
+    override fun onCleared() {
+        super.onCleared()
+        captureJob?.cancel(); diarizationJob?.cancel()
+        audioCapture.stopCapture(); engine.release(); speakerEngine.release()
+        if (ENABLE_CHUNKED_DIARIZATION) {
+            chunkedAudioBuffer.clear()
+            diarizationChunkWorker.reset()
+        }
+    }
 }

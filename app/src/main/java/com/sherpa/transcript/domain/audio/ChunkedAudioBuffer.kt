@@ -32,8 +32,10 @@ data class AudioChunk(
  * Zeitbasis: Frames werden mit ihrer absoluten Session-Startzeit (ms) gepusht –
  * dieselbe Basis wie `audioBaseTimeMs` im LiveViewModel (session-relative Zeit).
  *
- * Threading: nicht synchronisiert – Aufrufe erfolgen serialisiert über den
- * Capture-Kanal bzw. den Diarization-Loop (wie bisher im ViewModel).
+ * Threading: synchronisiert (internes Lock). Push kommt aus dem Capture-Loop
+ * (alle 10ms), takeChunk/takeRemainingChunk aus dem Diarization-Loop –
+ * ohne Lock wäre das eine Data-Race. Ein uncontended synchronized kostet
+ * ~20ns, bleibt also im 10ms-Takt non-blocking.
  */
 class ChunkedAudioBuffer(
     /** Maximales Audio-Fenster in Sekunden, das im Speicher gehalten wird. */
@@ -41,6 +43,8 @@ class ChunkedAudioBuffer(
     /** Sample-Rate des Audio-Streams (16 kHz). */
     private val sampleRate: Int = 16000,
 ) {
+
+    private val lock = Any()
 
     private data class TimedFrame(val samples: FloatArray, val startMs: Long)
 
@@ -54,17 +58,17 @@ class ChunkedAudioBuffer(
 
     /** Dauer des aktuell gepufferten Audios in Sekunden. */
     val bufferedSec: Float
-        get() {
-            if (frames.isEmpty()) return 0f
-            return (newestEndMs - frames.first().startMs) / 1000f
+        get() = synchronized(lock) {
+            if (frames.isEmpty()) return@synchronized 0f
+            (newestEndMs - frames.first().startMs) / 1000f
         }
 
     /**
      * Pusht einen Audio-Frame mit seiner absoluten Session-Startzeit.
      * Verwirft älteste Frames, sobald das Fenster maxWindowSec überschreitet.
      */
-    fun push(frame: FloatArray, absoluteStartMs: Long) {
-        if (frame.isEmpty()) return
+    fun push(frame: FloatArray, absoluteStartMs: Long) = synchronized(lock) {
+        if (frame.isEmpty()) return@synchronized
         frames.addLast(TimedFrame(frame, absoluteStartMs))
         newestEndMs = absoluteStartMs + (frame.size * 1000L / sampleRate)
 
@@ -85,8 +89,8 @@ class ChunkedAudioBuffer(
      * Der Overlap-Bereich ist "best effort": wurde er bereits aus dem Fenster
      * verworfen, wird der Chunk mit dem verfügbaren Audio geliefert.
      */
-    fun takeChunk(chunkSec: Float, overlapSec: Float): AudioChunk? {
-        if (frames.isEmpty()) return null
+    fun takeChunk(chunkSec: Float, overlapSec: Float): AudioChunk? = synchronized(lock) {
+        if (frames.isEmpty()) return@synchronized null
         val chunkMs = (chunkSec * 1000f).toLong()
         val overlapMs = (overlapSec * 1000f).toLong()
 
@@ -94,17 +98,17 @@ class ChunkedAudioBuffer(
         val nextEndMs = (prevEndMs ?: 0L) + chunkMs
 
         // Noch nicht genug neues Audio seit dem letzten Chunk?
-        if (newestEndMs < nextEndMs) return null
+        if (newestEndMs < nextEndMs) return@synchronized null
 
         val isFirst = prevEndMs == null
         val windowStartMs = if (isFirst) maxOf(0L, nextEndMs - chunkMs) else nextEndMs - chunkMs - overlapMs
 
         // Samples im Fenster [windowStartMs, nextEndMs) extrahieren
         val samples = collectSamples(windowStartMs, nextEndMs)
-        if (samples.isEmpty()) return null
+        if (samples.isEmpty()) return@synchronized null
 
         lastChunkEndMs = nextEndMs
-        return AudioChunk(
+        AudioChunk(
             samples = samples,
             startSec = windowStartMs / 1000f,
             endSec = nextEndMs / 1000f,
@@ -143,20 +147,20 @@ class ChunkedAudioBuffer(
      * Overlap vom vorherigen Chunk wird wie bei [takeChunk] mitgenommen.
      * Liefert null, wenn seit dem letzten Chunk nichts Neues kam.
      */
-    fun takeRemainingChunk(chunkSec: Float, overlapSec: Float): AudioChunk? {
-        if (frames.isEmpty()) return null
-        val prevEndMs = lastChunkEndMs ?: return takeChunk(chunkSec, overlapSec)
+    fun takeRemainingChunk(chunkSec: Float, overlapSec: Float): AudioChunk? = synchronized(lock) {
+        if (frames.isEmpty()) return@synchronized null
+        val prevEndMs = lastChunkEndMs ?: return@synchronized takeChunk(chunkSec, overlapSec)
         val overlapMs = (overlapSec * 1000f).toLong()
 
         val windowStartMs = maxOf(frames.first().startMs, prevEndMs - overlapMs)
         val windowEndMs = newestEndMs
-        if (windowEndMs <= prevEndMs) return null // nichts Neues seit letztem Chunk
+        if (windowEndMs <= prevEndMs) return@synchronized null // nichts Neues seit letztem Chunk
 
         val samples = collectSamples(windowStartMs, windowEndMs)
-        if (samples.isEmpty()) return null
+        if (samples.isEmpty()) return@synchronized null
 
         lastChunkEndMs = windowEndMs
-        return AudioChunk(
+        AudioChunk(
             samples = samples,
             startSec = windowStartMs / 1000f,
             endSec = windowEndMs / 1000f,
@@ -166,7 +170,7 @@ class ChunkedAudioBuffer(
     }
 
     /** Leert den Buffer inkl. Chunk-Fortschritt (Start einer neuen Session). */
-    fun clear() {
+    fun clear() = synchronized(lock) {
         frames.clear()
         lastChunkEndMs = null
         newestEndMs = 0L
