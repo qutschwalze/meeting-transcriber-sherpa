@@ -108,6 +108,19 @@ class LiveViewModel : ViewModel() {
          * Die Weiche im Capture-Loop pusht dann ausschließlich in den ChunkedAudioBuffer.
          */
         private const val ENABLE_CHUNKED_DIARIZATION = true
+
+        /**
+         * Tuning-Hebel F (Diagnose): neue Speaker-IDs zulassen statt strippen.
+         *
+         * false = protectFromNewIds aktiv: Kandidaten-IDs, die nicht im Best-Set sind,
+         *         werden verworfen (strikt, aber verhindert Drift-Schutz bei Engine-
+         *         Inflation nach 60s – Segmente bleiben ungelabelt)
+         * true  = neue IDs kommen in den UI-Bestand (UI zeigt temporär mehr Sprecher);
+         *         der Speaker-Merger (Folge-Baustein) führt sie am Ende wieder zusammen.
+         *         Zusätzlich wird Regel 5 im Quality-Gate gelockert (Coverage 0.7→0.5),
+         *         sonst blockt shouldAcceptAssignment den Kandidaten trotzdem.
+         */
+        private const val ALLOW_NEW_SPEAKER_IDS = true
     }
 
     private val _uiState = MutableStateFlow(LiveUiState())
@@ -502,7 +515,10 @@ class LiveViewModel : ViewModel() {
         val candHasNewIds = candidate
             .mapNotNull { it.speakerId?.takeIf { s -> s.isNotBlank() } }
             .distinct().any { it !in bestSpeakerIds }
-        val shouldStripNewIds = protectExistingLabels || (bestSpeakerCount >= 2 && candHasNewIds)
+        // Hebel F: bei ALLOW_NEW_SPEAKER_IDS wird der Strip-Guard deaktiviert –
+        // neue IDs (Engine-Drift nach 60s) kommen in den UI-Bestand, der
+        // Speaker-Merger (Folge-Baustein) führt sie am Ende wieder zusammen.
+        val shouldStripNewIds = !ALLOW_NEW_SPEAKER_IDS && (protectExistingLabels || (bestSpeakerCount >= 2 && candHasNewIds))
 
         // Zweite Schutzschicht: neue IDs aus Kandidaten entfernen
         var strippedCount = 0
@@ -1110,10 +1126,14 @@ class LiveViewModel : ViewModel() {
 
         // Regel 5: Neue Sprecher fördern
         if (candQuality.distinctSpeakers > bestAssignmentQuality.distinctSpeakers) {
+            // Hebel F: bei ALLOW_NEW_SPEAKER_IDS wird die Coverage-Schwelle von
+            // 0.7 auf 0.5 gesenkt, damit Engine-Drift-IDs (nach 60s) durchkommen
+            // und der spätere Speaker-Merger sie zusammenführen kann.
+            val coverageThreshold = if (ALLOW_NEW_SPEAKER_IDS) 0.5f else 0.7f
             // 1→2-Übergang: früheres Onboarding mit niedrigerer Coverage-Schwelle (0.5 statt 0.7),
             // aber nur mit Mindest-Evidenz für den NEUEN Sprecher (kein Zufalls-Label)
             val isFirst2Speaker = bestAssignmentQuality.distinctSpeakers == 1 && candQuality.distinctSpeakers == 2
-            val threshold = if (isFirst2Speaker) 0.5f else 0.7f
+            val threshold = if (isFirst2Speaker) 0.5f else coverageThreshold
             if (candQuality.labeledSegments >= bestAssignmentQuality.labeledSegments * threshold &&
                 (!isFirst2Speaker || newSpeakerHasEvidence(candidate))
             ) return true
