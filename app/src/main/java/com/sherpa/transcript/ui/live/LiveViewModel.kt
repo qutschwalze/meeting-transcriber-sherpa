@@ -1,0 +1,1166 @@
+package com.sherpa.transcript.ui.live
+
+import android.Manifest
+import android.app.AppOpsManager
+import android.content.pm.PackageManager
+import android.os.Build
+import android.os.Process
+import android.util.Log
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import com.sherpa.transcript.SherpaTranscriptApp
+import com.sherpa.transcript.data.local.SegmentEntity
+import com.sherpa.transcript.data.local.TranscriptEntity
+import com.sherpa.transcript.data.repository.TranscriptRepository
+import com.sherpa.transcript.domain.audio.AudioCaptureManager
+import com.sherpa.transcript.domain.model.RecordingState
+import com.sherpa.transcript.domain.model.TranscriptSegment
+import com.sherpa.transcript.engine.DiarizationClusteringMode
+import com.sherpa.transcript.engine.DiarizationSegment
+import com.sherpa.transcript.engine.FinalTranscriptComposer
+import com.sherpa.transcript.engine.ModelDownloadManager
+import com.sherpa.transcript.engine.SherpaOnnxEngine
+import com.sherpa.transcript.engine.SpeakerDiarizationEngine
+import com.sherpa.transcript.engine.SpeakerModelDownloadManager
+import com.sherpa.transcript.engine.TimelineComposer
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+
+data class LiveUiState(
+    val recordingState: RecordingState = RecordingState.Idle,
+    val segments: List<TranscriptSegment> = emptyList(),
+    val latestSegmentId: String? = null,
+    val autoScrollEnabled: Boolean = true,
+    val fontSize: Float = 16f,
+    val isModelReady: Boolean = false,
+    val isDownloading: Boolean = false,
+    val downloadProgress: Float = 0f,
+    val downloadMessage: String = "",
+    val error: String? = null,
+    val debugMode: Boolean = false,
+    val remappedSegmentIds: Set<String> = emptySet(),
+    val rawCount: Int = 0,
+    val labeledCount: Int = 0,
+    val displayCount: Int = 0,
+)
+
+data class AssignmentQuality(
+    val labeledSegments: Int,
+    val unlabeledSegments: Int,
+    val distinctSpeakers: Int,
+    val totalLabeledDurationMs: Long = 0L,
+)
+
+/**
+ * Unterschied zwischen zwei Speaker-Zuordnungen.
+ * Wird verwendet, um ACCEPTED_IMPROVED vs NO_CHANGE zu unterscheiden.
+ */
+data class AssignmentDiff(
+    val newlyLabeledSegments: Int,
+    val changedSpeakerAssignments: Int,
+    val lostLabels: Int,
+    val distinctSpeakersBefore: Int,
+    val distinctSpeakersAfter: Int,
+) {
+    val isMeaningfulChange: Boolean get() =
+        newlyLabeledSegments > 0 || distinctSpeakersAfter > distinctSpeakersBefore || changedSpeakerAssignments > 0
+}
+
+class LiveViewModel : ViewModel() {
+
+    companion object {
+        private const val TAG = "LiveViewModel"
+        private const val ASR_MODEL = "kroko-de"
+        private const val DIARIZATION_INTERVAL_MS = 10_000L
+        private const val MAX_AUDIO_FRAMES = 72_000
+        private const val ENABLE_DIARIZATION = true
+        private const val MIN_DIARIZATION_FRAMES = 2_000
+        /**
+         * Sliding-Window-Länge für die Diarization (Sekunden).
+         * pyannote-segmentation degradiert bei sehr langen Eingabe-Buffern massiv
+         * (beobachtet: bei 60s+ liefert die Engine nur noch winzige oder 0 Segmente).
+         * Nur die letzten N Sekunden werden verarbeitet, der Offset wird verschoben.
+         */
+        private const val DIARIZATION_WINDOW_SEC = 30f
+    }
+
+    private val _uiState = MutableStateFlow(LiveUiState())
+    val uiState: StateFlow<LiveUiState> = _uiState.asStateFlow()
+
+    private val audioCapture = AudioCaptureManager()
+    private val engine = SherpaOnnxEngine(SherpaTranscriptApp.instance)
+    private val speakerEngine = SpeakerDiarizationEngine(SherpaTranscriptApp.instance, SherpaTranscriptApp.instance.assets)
+    private val repository = TranscriptRepository()
+
+    private var captureJob: Job? = null
+    private var diarizationJob: Job? = null
+    private var currentTranscriptId: String? = null
+    private var recordingStartedAt: Long = 0L
+
+    // Ebene 1: Rohdaten – nie mergen
+    private val rawFinalSegments = mutableListOf<TranscriptSegment>()
+    // Ebene 2: mit Sprecher-Zuordnung
+    private var assignedFinalSegments: List<TranscriptSegment> = emptyList()
+    private var bestAssignmentQuality = AssignmentQuality(0, 0, 0)
+    // Ebene 3: UI – nur abgeleitet
+    private var livePartial: TranscriptSegment? = null
+
+    private val audioAccumulator = ArrayDeque<FloatArray>()
+    private val audioLock = Any()
+    private var audioBaseTimeMs: Long = 0L
+    private var currentUtteranceStartMs: Long? = null
+    private var lastPartialText: String = ""
+    private var lastForcedFlushTime: Long = 0L
+    private var lastForcedFlushText: String = ""
+
+    /**
+     * Prüft vor dem Hinzufügen eines neuen Segments, ob es mit dem letzten
+     * Segment in rawFinalSegments zusammengeführt werden kann (Text-Overlap + zeitliche Nähe).
+     * @return true wenn gemerged (kein add nötig), false wenn normal hinzugefügt werden soll
+     */
+    private fun dedupeOrMergeIntoLastSegment(newText: String, startMs: Long, endMs: Long): Boolean {
+        val last = rawFinalSegments.lastOrNull() ?: return false
+        // Zeitliche Nähe: Pause zwischen Segmenten (nicht Start-Abstand!)
+        val pauseMs = startMs - last.endTimeMs
+        val startOffsetMs = startMs - last.startTimeMs
+        if (startOffsetMs !in 1..59999L) return false
+
+        val existingWords = last.text.trim().split("\\s+".toRegex())
+        val newWords = newText.trim().split("\\s+".toRegex())
+        val existingStr = existingWords.joinToString(" ")
+        val newStr = newWords.joinToString(" ")
+
+        // ===== Check 0: Micro-Segment (< 500ms UND < 2 Wörter) → immer mergen =====
+        val newDurationMs = endMs - startMs
+        if (newDurationMs < 500L && newWords.size < 2 && pauseMs < 1500L) {
+            val resultWords = existingWords.size + newWords.size
+            rawFinalSegments[rawFinalSegments.lastIndex] = last.copy(
+                text = existingStr + " " + newStr,
+                endTimeMs = maxOf(last.endTimeMs, endMs),
+            )
+            Log.d(TAG, "rawFinalSegments MERGE (micro): #${rawFinalSegments.size} old=${existingWords.size} new=${newWords.size} res=$resultWords \"${newText.take(30)}\"")
+            return true
+        }
+
+        // ===== Check 1: Suffix-Overlap (existing endet wie new beginnt) → MERGE =====
+        val maxOverlap = minOf(existingWords.size, newWords.size)
+        var overlapWords = 0
+        for (checkLen in maxOverlap downTo 1) {
+            val suffix = existingWords.takeLast(checkLen).joinToString(" ")
+            val prefix = newWords.take(checkLen).joinToString(" ")
+            if (suffix.equals(prefix, ignoreCase = true)) { overlapWords = checkLen; break }
+        }
+        if (overlapWords >= 2) {
+            // Volle Prefix-Überlappung + new ist länger → new gewinnt (ersetzt old)
+            val isFullPrefix = overlapWords >= existingWords.size
+            val mergedText = if (isFullPrefix && newWords.size > existingWords.size) {
+                newStr
+            } else if (overlapWords >= maxOverlap) {
+                existingStr
+            } else {
+                existingStr + " " + newWords.drop(overlapWords).joinToString(" ")
+            }
+            val resultWords = mergedText.trim().split("\\s+".toRegex()).size
+            val action = when {
+                isFullPrefix && newWords.size > existingWords.size -> "REPLACE (fullPrefix)"
+                isFullPrefix -> "NOOP (fullOverlap)"
+                else -> "MERGE"
+            }
+            rawFinalSegments[rawFinalSegments.lastIndex] = last.copy(
+                text = mergedText.trim(), endTimeMs = maxOf(last.endTimeMs, endMs),
+            )
+            Log.d(TAG, "rawFinalSegments $action: #${rawFinalSegments.size} old=${existingWords.size} new=${newWords.size} res=$resultWords gap=${pauseMs}ms overlap=${overlapWords}words")
+            return true
+        }
+
+        // ===== Check 2: Prefix-Match (new beginnt wie existing) → REPLACE/DROP =====
+        val matchLen = minOf(existingWords.size, newWords.size)
+        var commonPrefixWords = 0
+        for (i in 0 until matchLen) {
+            if (existingWords[i].equals(newWords[i], ignoreCase = true)) commonPrefixWords++ else break
+        }
+        if (commonPrefixWords >= 3) {
+            if (newWords.size > existingWords.size) {
+                rawFinalSegments[rawFinalSegments.lastIndex] = last.copy(
+                    text = newStr, endTimeMs = maxOf(last.endTimeMs, endMs),
+                )
+                Log.d(TAG, "rawFinalSegments REPLACE: #${rawFinalSegments.size} old=${existingWords.size} new=${newWords.size} res=${newWords.size} prefix=${commonPrefixWords}words")
+            } else {
+                rawFinalSegments[rawFinalSegments.lastIndex] = last.copy(
+                    endTimeMs = maxOf(last.endTimeMs, endMs),
+                )
+                Log.d(TAG, "rawFinalSegments DROP: #${rawFinalSegments.size} old=${existingWords.size} new=${newWords.size} res=${existingWords.size} replay prefix=${commonPrefixWords}words")
+            }
+            return true
+        }
+
+        // ===== Check 3: Containment (einer ist substring des anderen) → DROP =====
+        val exLower = existingStr.lowercase()
+        val newLower = newStr.lowercase()
+        if (exLower.contains(newLower) || newLower.contains(exLower)) {
+            val longer = if (existingWords.size >= newWords.size) existingStr else newStr
+            val longerWords = longer.split("\\s+".toRegex()).size
+            rawFinalSegments[rawFinalSegments.lastIndex] = last.copy(
+                text = longer, endTimeMs = maxOf(last.endTimeMs, endMs),
+            )
+            Log.d(TAG, "rawFinalSegments DROP: #${rawFinalSegments.size} old=${existingWords.size} new=${newWords.size} res=$longerWords containment")
+            return true
+        }
+
+        return false
+    }
+
+    /** Aktueller Clustering-Testmodus, wird an SpeakerDiarizationEngine durchgereicht. */
+    var clusteringMode: DiarizationClusteringMode = DiarizationClusteringMode.FIXED_2
+
+    // ── Diarization-Serialisierung ──
+    private val diarizationMutex = Mutex()
+    private var diarizationEpoch = 0L
+    private var isStopping = false
+    private var isSavingFinalResult = false
+
+    /** Letzte Diarization-Segmente – für Segment-Splitting im Save-Pfad */
+    private var lastDiarizationSegments: List<DiarizationSegment> = emptyList()
+
+    /**
+     * Bester gemergter Kandidat eines verworfenen (DROP_STALE) Laufs.
+     * Wird beim Stoppen als Fallback übernommen, wenn der Final-Run
+     * 0 Segmente liefert (verhindert Verlust eines guten 2-Speaker-Stands).
+     */
+    private var lastGoodDiarizationCandidate: List<TranscriptSegment>? = null
+
+    init { checkModels() }
+
+    private fun checkModels() {
+        val ctx = SherpaTranscriptApp.instance
+        if (ModelDownloadManager.isModelDownloaded(ctx, ASR_MODEL)) { engine.initialize(ASR_MODEL); _uiState.update { it.copy(isModelReady = true) } }
+        if (SpeakerModelDownloadManager.areModelsDownloaded()) { speakerEngine.initialize(clusteringMode) }
+    }
+
+    /**
+     * Loggt Permission- und AppOps-Zustand für Mikrofonzugriff.
+     * Hilft bei MIUI-Problemen wie "App op 27 missing, silencing record".
+     */
+    private fun logRecordPermissionState(context: android.content.Context = SherpaTranscriptApp.instance) {
+        val permission = if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) "GRANTED" else "DENIED"
+        val appOpMode = try {
+            val appOps = context.getSystemService(android.content.Context.APP_OPS_SERVICE) as AppOpsManager
+            val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                appOps.unsafeCheckOpNoThrow(AppOpsManager.OPSTR_RECORD_AUDIO, Process.myUid(), context.packageName)
+            } else {
+                @Suppress("DEPRECATION")
+                appOps.checkOpNoThrow(AppOpsManager.OPSTR_RECORD_AUDIO, Process.myUid(), context.packageName)
+            }
+            when (mode) {
+                AppOpsManager.MODE_ALLOWED -> "MODE_ALLOWED"
+                AppOpsManager.MODE_FOREGROUND -> "MODE_FOREGROUND"
+                AppOpsManager.MODE_IGNORED -> "MODE_IGNORED"
+                else -> "MODE_$mode"
+            }
+        } catch (t: Throwable) { "ERR:${t.message}" }
+        val foreground = try {
+            val am = context.getSystemService(android.content.Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+            am.runningAppProcesses?.any { it.pid == Process.myPid() && it.importance == android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND } == true
+        } catch (t: Throwable) { false }
+        Log.i(TAG, "recordPermissionState: permission=$permission appOp=$appOpMode foreground=$foreground")
+    }
+
+    fun startRecording() {
+        val currentState = _uiState.value.recordingState
+        if (currentState is RecordingState.Listening || currentState is RecordingState.Processing || currentState is RecordingState.Initializing) return
+        logRecordPermissionState()
+        _uiState.update { it.copy(recordingState = RecordingState.Initializing, error = null) }
+        // Foreground-Service starten: hält Mikrofon-AppOp aktiv (MIUI-"silencing" Schutz)
+        com.sherpa.transcript.service.RecordingService.start(SherpaTranscriptApp.instance)
+
+        viewModelScope.launch {
+            if (!engine.isInitialized) {
+                downloadWithProgress("ASR", "Lade Spracherkennungsmodell…") {
+                    val ctx = SherpaTranscriptApp.instance
+                    if (!ModelDownloadManager.isModelDownloaded(ctx, ASR_MODEL)) ModelDownloadManager.downloadModel(ctx, ASR_MODEL) { done, total -> _uiState.update { it.copy(downloadProgress = if (total > 0) done.toFloat() / total else 0f) } }
+                    else true
+                }
+                if (!ModelDownloadManager.isModelDownloaded(SherpaTranscriptApp.instance, ASR_MODEL)) { _uiState.update { it.copy(recordingState = RecordingState.Error("ASR-Download fehlgeschlagen")) }; return@launch }
+                engine.initialize(ASR_MODEL); _uiState.update { it.copy(isModelReady = true) }
+            }
+            if (!speakerEngine.isInitialized) {
+                downloadWithProgress("Speaker", "Lade Sprechererkennung…") {
+                    if (!SpeakerModelDownloadManager.areModelsDownloaded()) SpeakerModelDownloadManager.downloadModels { _, done, total -> _uiState.update { it.copy(downloadProgress = if (total > 0) done.toFloat() / total else 0f) } }
+                    else true
+                }
+                if (!SpeakerModelDownloadManager.areModelsDownloaded()) { _uiState.update { it.copy(recordingState = RecordingState.Error("Speaker-Download fehlgeschlagen")) }; return@launch }
+                speakerEngine.initialize(clusteringMode)
+            }
+
+            _uiState.update { it.copy(segments = emptyList(), latestSegmentId = null, recordingState = RecordingState.Listening) }
+            currentTranscriptId = java.util.UUID.randomUUID().toString()
+            recordingStartedAt = System.currentTimeMillis()
+            rawFinalSegments.clear()
+            assignedFinalSegments = emptyList()
+            bestAssignmentQuality = AssignmentQuality(0, 0, 0)
+            livePartial = null
+            currentUtteranceStartMs = null; lastPartialText = ""; lastForcedFlushTime = 0L; lastForcedFlushText = ""
+            // Flags zurücksetzen (sonst läuft nächste Session sofort in DROP_STALE)
+            isStopping = false; isSavingFinalResult = false
+            lastDiarizationSegments = emptyList()
+            lastGoodDiarizationCandidate = null
+            lastShownSpeakerIds.clear()
+            firstTwoSpeakerLogged = false
+            speakerEngine.resetZeroSegmentCounters()
+            synchronized(audioLock) { audioAccumulator.clear(); audioBaseTimeMs = 0L }
+            engine.startSession()
+
+            captureJob = viewModelScope.launch {
+                audioCapture.startCapture().collect { frame ->
+                    val result = engine.processFrame(frame)
+                    if (result != null && result.text.isNotBlank()) handleResult(result.text, result.isFinal)
+                    synchronized(audioLock) {
+                        if (audioAccumulator.isEmpty()) audioBaseTimeMs = sessionRelativeMs()
+                        audioAccumulator.addLast(frame)
+                        if (audioAccumulator.size > MAX_AUDIO_FRAMES) { audioAccumulator.removeFirst(); audioBaseTimeMs += 10L }
+                    }
+                }
+            }
+
+            if (speakerEngine.isInitialized && ENABLE_DIARIZATION) {
+                diarizationJob = viewModelScope.launch {
+                    while (isActive) {
+                        delay(DIARIZATION_INTERVAL_MS)
+                        try { runDiarization(); deriveUiSegments() } catch (e: CancellationException) { Log.d(TAG, "Diarization cancelled"); throw e }
+                          catch (t: Throwable) { Log.e(TAG, "Diarization error: ${t.message}", t); break }
+                    }
+                }
+            }
+        }
+    }
+
+    private suspend fun downloadWithProgress(type: String, msg: String, block: suspend () -> Boolean) {
+        _uiState.update { it.copy(isDownloading = true, downloadMessage = msg, downloadProgress = 0f) }
+        val ok = block()
+        _uiState.update { it.copy(isDownloading = false, downloadProgress = 0f) }
+        if (!ok) _uiState.update { it.copy(recordingState = RecordingState.Error("$type-Download fehlgeschlagen")) }
+    }
+
+    private var lastUiLogSignature: String? = null
+
+    /** Letzter angezeigter speakerId pro segmentId – für Remap-Erkennung in der UI */
+    private val lastShownSpeakerIds = mutableMapOf<String, String>()
+
+    /** Session-Flag: wurde der erste 2-Speaker-Zustand bereits erreicht? (für FIRST_2SPK-Marker) */
+    private var firstTwoSpeakerLogged = false
+
+    fun toggleDebugMode() {
+        _uiState.update { it.copy(debugMode = !it.debugMode) }
+    }
+
+    private fun deriveUiSegments() {
+        // UI-Basis: rawFinalSegments + Speaker-Labels aus assignedFinalSegments
+        val assignedById = assignedFinalSegments.associateBy { it.segmentId }
+        val uiFinals = rawFinalSegments.map { raw ->
+            val assigned = assignedById[raw.segmentId]
+            if (assigned != null && assigned.speakerId != null) {
+                raw.copy(speakerId = assigned.speakerId, speakerLabel = assigned.speakerLabel)
+            } else {
+                raw
+            }
+        }
+
+        // Remap-Erkennung: segmentId, deren speakerId sich seit dem letzten UI-Update geändert hat
+        val remapped = mutableSetOf<String>()
+        for (seg in uiFinals) {
+            val sid = seg.speakerId?.takeIf { it.isNotBlank() } ?: continue
+            val prev = lastShownSpeakerIds[seg.segmentId]
+            if (prev != null && prev != sid) {
+                remapped.add(seg.segmentId)
+                if (_uiState.value.debugMode) {
+                    Log.d(TAG, "LIVE_DBG_REMAP id=${seg.segmentId.take(8)} from=$prev to=$sid start=${seg.startTimeMs} end=${seg.endTimeMs}")
+                }
+            }
+            lastShownSpeakerIds[seg.segmentId] = sid
+        }
+
+        val mergedFinals = TimelineComposer.mergeSegmentsForDisplay(uiFinals)
+        val displaySegments = if (livePartial != null) {
+            (mergedFinals + livePartial!!).sortedBy { it.startTimeMs }
+        } else {
+            mergedFinals
+        }
+
+        val latestId = displaySegments.lastOrNull()?.segmentId
+        val current = _uiState.value
+        if (current.segments == displaySegments && current.latestSegmentId == latestId &&
+            current.remappedSegmentIds == remapped
+        ) return
+
+        _uiState.update {
+            it.copy(
+                segments = displaySegments,
+                latestSegmentId = latestId,
+                remappedSegmentIds = remapped,
+                rawCount = rawFinalSegments.size,
+                labeledCount = assignedFinalSegments.count { !it.speakerId.isNullOrBlank() },
+                displayCount = displaySegments.size,
+            )
+        }
+        if (_uiState.value.debugMode) {
+            Log.d(TAG, "LIVE_DBG_UI raw=${rawFinalSegments.size} labeled=${assignedFinalSegments.count { !it.speakerId.isNullOrBlank() }} display=${displaySegments.size} partial=${livePartial != null} latest=${latestId?.take(8) ?: "-"}")
+        }
+        logUiState(rawFinalSegments.size, assignedFinalSegments.size, displaySegments.size, livePartial != null)
+        if (remapped.isNotEmpty()) {
+            Log.d(TAG, "deriveUiSegments: speaker remapped for ${remapped.size} segment(s)")
+        }
+    }
+
+    private fun logUiState(raw: Int, assigned: Int, display: Int, hasPartial: Boolean) {
+        val sig = "$raw|$assigned|$display|$hasPartial"
+        if (sig == lastUiLogSignature) return
+        lastUiLogSignature = sig
+        Log.d(TAG, "deriveUiSegments: raw=$raw assigned=$assigned display=$display partial=$hasPartial")
+    }
+
+    /**
+     * Führt einen neuen Diarization-Kandidaten inkrementell mit dem bisherigen
+     * Bestand zusammen. Basis ist immer rawFinalSegments.
+     *
+     * - Wenn candidate für ein Segment ein Label hat → übernehmen
+     * - Wenn candidate kein Label hat, aber bestAssigned eines hat → behalten
+     * - Sonst → unlabeled
+     * - Matching per segmentId, Ergebnis = exakt rawFinalSegments.size Segmente
+     */
+    private fun mergeCandidateIntoBest(candidate: List<TranscriptSegment>): List<TranscriptSegment> {
+        val bestById = assignedFinalSegments.associateBy { it.segmentId }
+        val candById = candidate.associateBy { it.segmentId }
+
+        // Bestehende Speaker-IDs
+        val bestSpeakerIds = assignedFinalSegments
+            .mapNotNull { it.speakerId?.takeIf { s -> s.isNotBlank() } }
+            .distinct().toSet()
+        val bestSpeakerCount = bestSpeakerIds.size
+        val candSpeakerCount = candidate
+            .mapNotNull { it.speakerId?.takeIf { s -> s.isNotBlank() } }
+            .distinct().size
+        val protectExistingLabels = bestSpeakerCount >= 2 && candSpeakerCount < bestSpeakerCount
+
+        // Zusätzlicher Schutz: gleiche Speakerzahl, aber Candidate führt IDs ein, die nicht in best sind
+        val candHasNewIds = candidate
+            .mapNotNull { it.speakerId?.takeIf { s -> s.isNotBlank() } }
+            .distinct().any { it !in bestSpeakerIds }
+        val shouldStripNewIds = protectExistingLabels || (bestSpeakerCount >= 2 && candHasNewIds)
+
+        // Zweite Schutzschicht: neue IDs aus Kandidaten entfernen
+        var strippedCount = 0
+        val result = rawFinalSegments.map { raw ->
+            val cand = candById[raw.segmentId]
+            val best = bestById[raw.segmentId]
+            val candLabel = cand?.takeIf { !it.speakerId.isNullOrBlank() }
+            val bestLabel = best?.takeIf { !it.speakerId.isNullOrBlank() }
+
+            // Schutz: cand hat Label mit neuer ID (nicht in best) → verwerfen
+            val effectiveCandLabel = if (shouldStripNewIds && candLabel != null &&
+                candLabel.speakerId !in bestSpeakerIds
+            ) {
+                strippedCount++
+                null
+            } else candLabel
+
+            when {
+                effectiveCandLabel != null && bestLabel == null ->
+                    raw.copy(speakerId = effectiveCandLabel.speakerId, speakerLabel = effectiveCandLabel.speakerLabel)
+                effectiveCandLabel != null && bestLabel != null ->
+                    if (shouldStripNewIds) {
+                        raw.copy(speakerId = bestLabel.speakerId, speakerLabel = bestLabel.speakerLabel)
+                    } else {
+                        raw.copy(speakerId = effectiveCandLabel.speakerId, speakerLabel = effectiveCandLabel.speakerLabel)
+                    }
+                bestLabel != null ->
+                    raw.copy(speakerId = bestLabel.speakerId, speakerLabel = bestLabel.speakerLabel)
+                else -> raw
+            }
+        }
+
+        if (strippedCount > 0) {
+            Log.d(TAG, "mergeCandidateIntoBest: stripped $strippedCount new-label segments (protectFromNewIds)")
+        }
+        return result
+    }
+
+    /**
+     * Nummeriert Speaker-IDs in assignedFinalSegments nach erstem Auftreten neu.
+     * Stellt sicher, dass die IDs immer bei 0 beginnen (keine Lücken wie [1,2]).
+     * Wird nach jedem ACCEPTED_IMPROVED aufgerufen.
+     */
+    private fun renumberLiveSpeakerIds() {
+        val order = linkedMapOf<String, String>() // old speakerId → new speakerLabel
+        for (seg in assignedFinalSegments) {
+            val sid = seg.speakerId?.takeIf { it.isNotBlank() } ?: continue
+            if (sid !in order) {
+                val num = order.size
+                order[sid] = "Sprecher ${num + 1}"
+            }
+        }
+        if (order.isEmpty() || order.size == 1) return
+
+        // Prüfen, ob eine Lücke besteht (z. B. speaker_1, speaker_2 statt speaker_0, speaker_1)
+        val currentMin = order.keys.mapNotNull {
+            it.removePrefix("speaker_").toIntOrNull()
+        }.minOrNull() ?: return
+        // Nur umnummerieren, wenn die IDs nicht sauber bei 0 beginnen
+        if (currentMin == 0) {
+            val expectedIds = (0 until order.size).map { "speaker_$it" }.toSet()
+            val actualIds = order.keys.toSet()
+            if (actualIds == expectedIds) return // bereits sauber
+        }
+
+        val oldToNew = linkedMapOf<String, String>()
+        for ((i, entry) in order.entries.withIndex()) {
+            oldToNew[entry.key] = "speaker_$i"
+        }
+
+        assignedFinalSegments = assignedFinalSegments.map { seg ->
+            val oldId = seg.speakerId ?: return@map seg
+            val newId = oldToNew[oldId] ?: return@map seg
+            val newLabel = order[oldId] ?: return@map seg
+            seg.copy(speakerId = newId, speakerLabel = newLabel)
+        }
+        Log.d(TAG, "renumberLiveSpeakerIds: ${oldToNew.size} speakers remapped (old=${oldToNew.keys.map { it.removePrefix("speaker_") }.sorted().joinToString(",")} → new=0..${oldToNew.size - 1})")
+    }
+
+    /**
+     * Baut aus allen rawFinalSegments die aktuell beste Speaker-Overlay-Liste auf.
+     * Verlustfrei: jedes Rohsegment ist enthalten, ggf. mit Label aus assignedFinalSegments.
+     */
+    private fun buildAssignedOverlayForAllRawSegments(): List<TranscriptSegment> {
+        val bestById = assignedFinalSegments.associateBy { it.segmentId }
+        return rawFinalSegments.map { raw ->
+            val best = bestById[raw.segmentId]
+            if (best != null && !best.speakerId.isNullOrBlank()) {
+                raw.copy(speakerId = best.speakerId, speakerLabel = best.speakerLabel)
+            } else {
+                raw
+            }
+        }
+    }
+
+    /**
+     * Vergleicht zwei Speaker-Zuordnungen und liefert den Unterschied.
+     * Basis ist rawFinalSegments (die Segmentmenge). previous und next
+     * werden per segmentId verglichen.
+     */
+    private fun compareAssignments(
+        previous: List<TranscriptSegment>,
+        next: List<TranscriptSegment>,
+    ): AssignmentDiff {
+        val prevById = previous.associateBy { it.segmentId }
+        val nextById = next.associateBy { it.segmentId }
+        var newlyLabeled = 0
+        var changed = 0
+        var lost = 0
+        val allIds = (prevById.keys + nextById.keys)
+        for (id in allIds) {
+            val prevSpeaker = prevById[id]?.speakerId?.takeIf { it.isNotBlank() }
+            val nextSpeaker = nextById[id]?.speakerId?.takeIf { it.isNotBlank() }
+            when {
+                prevSpeaker == null && nextSpeaker != null -> newlyLabeled++
+                prevSpeaker != null && nextSpeaker == null -> lost++
+                prevSpeaker != null && nextSpeaker != null && prevSpeaker != nextSpeaker -> changed++
+            }
+        }
+        return AssignmentDiff(
+            newlyLabeledSegments = newlyLabeled,
+            changedSpeakerAssignments = changed,
+            lostLabels = lost,
+            distinctSpeakersBefore = previous.mapNotNull { it.speakerId?.takeIf { s -> s.isNotBlank() } }.distinct().size,
+            distinctSpeakersAfter = next.mapNotNull { it.speakerId?.takeIf { s -> s.isNotBlank() } }.distinct().size,
+        )
+    }
+
+    /**
+     * Prüft, ob ein Diarization-Ergebnis noch angewendet werden darf.
+     *
+     * - isSavingFinalResult = true → nichts mehr, auch kein forceFinal
+     * - epoch != diarizationEpoch → stale, neuerer Lauf existiert
+     * - isStopping && !forceFinal → Background-Lauf nach Stop verwerfen
+     * - forceFinal läuft auch bei isStopping=true durch (der finale Lauf selbst)
+     */
+    private fun canApplyDiarizationResult(epoch: Long, forceFinal: Boolean): Boolean {
+        if (isSavingFinalResult) return false
+        if (currentTranscriptId == null) return false
+        if (epoch != diarizationEpoch) return false
+        if (!forceFinal && isStopping) return false
+        return true
+    }
+
+    private suspend fun runDiarization(forceFinal: Boolean = false) {
+        val epoch = ++diarizationEpoch
+        Log.d(TAG, "Diarization START: epoch=$epoch raw=${rawFinalSegments.size} stopping=$isStopping saving=$isSavingFinalResult forceFinal=$forceFinal")
+
+        diarizationMutex.withLock {
+            // Early drop: Background-Lauf nach Stop verwerfen
+            if (!canApplyDiarizationResult(epoch, forceFinal)) {
+                Log.d(TAG, "Diarization DROP_STALE: epoch=$epoch latest=$diarizationEpoch stopping=$isStopping saving=$isSavingFinalResult")
+                return
+            }
+
+            withContext(Dispatchers.IO) {
+                ensureActive()
+
+                val snapshot: List<FloatArray>
+                val offsetSec: Float
+                synchronized(audioLock) {
+                    if (!forceFinal && audioAccumulator.size < MIN_DIARIZATION_FRAMES) {
+                        Log.d(TAG, "Diarization skip: only ${audioAccumulator.size} frames"); return@withContext
+                    }
+                    snapshot = audioAccumulator.toList(); offsetSec = audioBaseTimeMs / 1000f
+                }
+                if (snapshot.isEmpty()) return@withContext
+
+                val totalSamples = snapshot.sumOf { it.size }
+                val audioDurationSec = totalSamples / 16000f
+                Log.d(TAG, "Diarization audio buffer: ${snapshot.size} frames, ${totalSamples} samples (${
+                    "%.1f".format(audioDurationSec)
+                }s)")
+                val allAudio = FloatArray(totalSamples); var writeOffset = 0
+                for (frame in snapshot) { frame.copyInto(allAudio, writeOffset); writeOffset += frame.size }
+
+                // Sliding Window: pyannote degradiert bei langen Buffern → nur die letzten
+                // DIARIZATION_WINDOW_SEC Sekunden verarbeiten, Offset entsprechend verschieben.
+                val windowStartSample = maxOf(0, totalSamples - (DIARIZATION_WINDOW_SEC * 16000f).toInt())
+                val windowAudio = allAudio.copyOfRange(windowStartSample, totalSamples)
+                val windowOffsetSec = offsetSec + windowStartSample / 16000f
+                val windowDurSec = windowAudio.size / 16000f
+                if (windowStartSample > 0) {
+                    Log.d(TAG, "Diarization sliding window: ${"%.1f".format(windowDurSec)}s (offset=+${"%.1f".format(windowStartSample / 16000f)}s)")
+                }
+
+                try {
+                    val rawSegs = speakerEngine.process(windowAudio)
+                    if (rawSegs.isEmpty()) {
+                        // Final-Run mit 0 Segmenten: konservierten Kandidaten als Fallback übernehmen,
+                        // statt auf einen schlechteren Stand zurückzufallen
+                        if (forceFinal) {
+                            val fallback = lastGoodDiarizationCandidate
+                            if (fallback != null) {
+                                val fbQuality = computeQuality(fallback)
+                                if (fbQuality.labeledSegments > bestAssignmentQuality.labeledSegments ||
+                                    fbQuality.distinctSpeakers > bestAssignmentQuality.distinctSpeakers
+                                ) {
+                                    assignedFinalSegments = fallback
+                                    bestAssignmentQuality = fbQuality
+                                    renumberLiveSpeakerIds()
+                                    Log.w(TAG, "Diarization FINAL_FALLBACK: epoch=$epoch engine=0 segments — restored preserved candidate " +
+                                            "(labeled=${fbQuality.labeledSegments} speakers=${fbQuality.distinctSpeakers})")
+                                } else {
+                                    Log.w(TAG, "Diarization FINAL_FALLBACK: epoch=$epoch engine=0 segments, fallback not better " +
+                                            "(labeled=${fbQuality.labeledSegments} speakers=${fbQuality.distinctSpeakers} vs best ${bestAssignmentQuality.labeledSegments}/${bestAssignmentQuality.distinctSpeakers})")
+                                }
+                            } else {
+                                Log.w(TAG, "Diarization FINAL_FALLBACK: epoch=$epoch engine=0 segments, no preserved candidate available")
+                            }
+                        }
+                        Log.w(TAG, "Diarization: 0 segments from engine")
+                        return@withContext
+                    }
+
+                    val diarizationSegs = rawSegs.map { DiarizationSegment(it.startSec + windowOffsetSec, it.endSec + windowOffsetSec, it.speaker) }
+                    lastDiarizationSegments = diarizationSegs
+
+                    // Rohsegmente vor Zuordnung kompaktieren (temporäre Kopie)
+                    val compactedSegs = TimelineComposer.compactRawSegmentsBeforeAssignment(rawFinalSegments)
+                    val candidate = TimelineComposer.assignSpeakersToRawSegments(compactedSegs, diarizationSegs, debug = _uiState.value.debugMode)
+                    if (candidate.isEmpty()) return@withContext
+                    val candQuality = computeQuality(candidate)
+
+                    // Speaker-IDs über Läufe hinweg normalisieren
+                    val normalizedCandidate = TimelineComposer.normalizeSpeakerIds(candidate, assignedFinalSegments)
+                    // Debug: normalized labels vor Merge
+                    val normLabels = normalizedCandidate
+                        .mapNotNull { it.speakerId?.takeIf { s -> s.isNotBlank() } }
+                        .distinct().map { it.removePrefix("speaker_") }.sorted().joinToString(",")
+                    Log.d(TAG, "runDiarization: normalized=$normLabels candRaw=${
+                        candidate.mapNotNull { it.speakerId?.takeIf { s -> s.isNotBlank() } }
+                            .distinct().map { it.removePrefix("speaker_") }.sorted().joinToString(",")
+                    } best=${
+                        assignedFinalSegments.mapNotNull { it.speakerId?.takeIf { s -> s.isNotBlank() } }
+                            .distinct().map { it.removePrefix("speaker_") }.sorted().joinToString(",")
+                    }")
+                    val merged = mergeCandidateIntoBest(normalizedCandidate)
+                    val mergedQuality = computeQuality(merged)
+                    val previousBest = bestAssignmentQuality
+                    val prevAssigned = assignedFinalSegments
+                    val diff = compareAssignments(prevAssigned, merged)
+
+                    // Schutzstatus für Logs: Welcher Schutzmechanismus ist aktiv?
+                    val protectActive = previousBest.distinctSpeakers >= 2 &&
+                            candQuality.distinctSpeakers < previousBest.distinctSpeakers
+                    val bestSpeakerIdSet = prevAssigned
+                        .mapNotNull { it.speakerId?.takeIf { s -> s.isNotBlank() } }
+                        .distinct().toSet()
+                    val candNewIds = normalizedCandidate
+                        .mapNotNull { it.speakerId?.takeIf { s -> s.isNotBlank() } }
+                        .distinct().filter { it !in bestSpeakerIdSet }
+                    val stripActive = previousBest.distinctSpeakers >= 2 && candNewIds.isNotEmpty()
+                    val protectInfo = buildString {
+                        append("protect=").append(if (protectActive) "active" else "inactive")
+                        append(" bestSpeakers=").append(previousBest.distinctSpeakers)
+                        append(" candSpeakers=").append(candQuality.distinctSpeakers)
+                        if (stripActive) append(" strip=active newIds=[${candNewIds.map { it.removePrefix("speaker_") }.joinToString(",")}]")
+                    }
+
+                    // Commit-Guard: nur anwenden, wenn dieser Lauf noch aktuell ist
+                    if (!canApplyDiarizationResult(epoch, forceFinal)) {
+                        val reason = if (isSavingFinalResult) "DROP_DURING_SAVE" else if (isStopping) "DROP_STALE" else "DROP_EPOCH"
+                        // In-Flight-Ergebnis konservieren: besserer Kandidat als Fallback für Stop/Save
+                        if (isStopping && !isSavingFinalResult &&
+                            (mergedQuality.labeledSegments > bestAssignmentQuality.labeledSegments ||
+                                mergedQuality.distinctSpeakers > bestAssignmentQuality.distinctSpeakers)
+                        ) {
+                            lastGoodDiarizationCandidate = merged
+                            Log.w(TAG, "Diarization $reason: epoch=$epoch — preserving better candidate as fallback " +
+                                    "(labeled=${mergedQuality.labeledSegments} speakers=${mergedQuality.distinctSpeakers})")
+                            if (_uiState.value.debugMode) {
+                                val labelDist = merged.mapNotNull { it.speakerId }.groupingBy { it }.eachCount()
+                                    .entries.joinToString(",") { (k, v) -> "$k=$v" }
+                                Log.d(TAG, "LIVE_DBG_FALLBACK epoch=$epoch labeled=${mergedQuality.labeledSegments}/${merged.size} speakers=${mergedQuality.distinctSpeakers} labels=[$labelDist]")
+                            }
+                        } else {
+                            Log.w(TAG, "Diarization $reason: epoch=$epoch latest=$diarizationEpoch stopping=$isStopping saving=$isSavingFinalResult")
+                        }
+                        return@withContext
+                    }
+
+                    if (forceFinal) {
+                        Log.d(TAG, "Diarization FINAL_RUN: epoch=$epoch raw=${rawFinalSegments.size}")
+                    }
+
+                    val logPrefix = if (forceFinal) "FINAL_" else ""
+                    if (!diff.isMeaningfulChange) {
+                        Log.i(TAG, "Diarization ${logPrefix}NO_CHANGE: epoch=$epoch raw=${rawFinalSegments.size} " +
+                                "candRaw=(labeled=${candQuality.labeledSegments}/${candidate.size} speakers=${candQuality.distinctSpeakers} " +
+                                "dur=${candQuality.totalLabeledDurationMs}) " +
+                                "merged=(labeled=${mergedQuality.labeledSegments}/${merged.size} speakers=${mergedQuality.distinctSpeakers} " +
+                                "dur=${mergedQuality.totalLabeledDurationMs}) " +
+                                "best=(labeled=${previousBest.labeledSegments} speakers=${previousBest.distinctSpeakers} " +
+                                "dur=${previousBest.totalLabeledDurationMs}) " +
+                                "diff=(new=${diff.newlyLabeledSegments} changed=${diff.changedSpeakerAssignments} lost=${diff.lostLabels}) " +
+                                "$protectInfo")
+                    } else if (shouldAcceptAssignment(merged)) {
+                        // Final-Run: Speaker-Verlust verhindern – der finale Lauf darf
+                        // die Sprecherzahl nicht reduzieren, nur neue Labels ergänzen
+                        if (forceFinal && previousBest.distinctSpeakers >= 2 &&
+                            mergedQuality.distinctSpeakers < previousBest.distinctSpeakers
+                        ) {
+                            Log.w(TAG, "Diarization FINAL_SKIP_COLLAPSE: epoch=$epoch " +
+                                    "${previousBest.distinctSpeakers}→${mergedQuality.distinctSpeakers} speakers " +
+                                    "candRaw=(labeled=${candQuality.labeledSegments}/${candidate.size} " +
+                                    "speakers=${candQuality.distinctSpeakers}) — keeping pre-stop best")
+                        } else {
+                            assignedFinalSegments = merged
+                            bestAssignmentQuality = mergedQuality
+                            renumberLiveSpeakerIds()
+                            // FIRST_2SPK: erster 2-Speaker-Zustand der Session – Umschaltpunkt-Marker
+                            if (!firstTwoSpeakerLogged && mergedQuality.distinctSpeakers >= 2) {
+                                firstTwoSpeakerLogged = true
+                                val prevSpeakerIds = prevAssigned
+                                    .mapNotNull { it.speakerId?.takeIf { s -> s.isNotBlank() } }
+                                    .distinct().toSet()
+                                val firstNew = merged.firstOrNull { seg ->
+                                    seg.speakerId?.let { it.isNotBlank() && it !in prevSpeakerIds } == true
+                                }
+                                // Stärke der Einführung: wie viele Segmente/Dauer trägt der neue Speaker im Commit?
+                                val newSpeakerId = firstNew?.speakerId
+                                val newSegs = if (newSpeakerId != null) {
+                                    merged.filter { it.speakerId == newSpeakerId }
+                                } else emptyList()
+                                val newDurMs = newSegs.sumOf { it.endTimeMs - it.startTimeMs }
+                                Log.i(TAG, "FIRST_2SPK epoch=$epoch newSpeaker=${newSpeakerId ?: "?"} " +
+                                        "at=${firstNew?.startTimeMs ?: 0}ms end=${firstNew?.endTimeMs ?: 0}ms " +
+                                        "newSegs=${newSegs.size} newDur=${newDurMs}ms " +
+                                        "text=\"${firstNew?.text?.take(50) ?: ""}\"")
+                            }
+                            // LIVE_DBG_LABEL_NEW / LIVE_DBG_REMAP: betroffene Segmente nach Commit
+                            // - from=none → erstmals gelabelt (newly labeled)
+                            // - from=anderer Speaker → echte Umentscheidung (changed)
+                            if (_uiState.value.debugMode) {
+                                val prevById = prevAssigned.associateBy { it.segmentId }
+                                for (m in merged) {
+                                    val prevSpk = prevById[m.segmentId]?.speakerId?.takeIf { it.isNotBlank() }
+                                    val newSpk = m.speakerId?.takeIf { it.isNotBlank() }
+                                    when {
+                                        newSpk != null && prevSpk == null ->
+                                            Log.d(TAG, "LIVE_DBG_LABEL_NEW id=${m.segmentId.take(8)} from=none to=$newSpk start=${m.startTimeMs} end=${m.endTimeMs} text=\"${m.text.take(40)}\"")
+                                        newSpk != null && prevSpk != null && prevSpk != newSpk ->
+                                            Log.d(TAG, "LIVE_DBG_REMAP id=${m.segmentId.take(8)} from=$prevSpk to=$newSpk start=${m.startTimeMs} end=${m.endTimeMs} text=\"${m.text.take(40)}\"")
+                                    }
+                                }
+                            }
+                            // Speaker-Detail für Debug
+                            val mergedSpeakerIds = merged
+                                .mapNotNull { it.speakerId?.takeIf { s -> s.isNotBlank() } }
+                                .distinct().map { it.removePrefix("speaker_") }.sorted().joinToString(",")
+                            val prevSpeakerIds = prevAssigned
+                                .mapNotNull { it.speakerId?.takeIf { s -> s.isNotBlank() } }
+                                .distinct().map { it.removePrefix("speaker_") }.sorted().joinToString(",")
+                            val newSpeakerIds = merged
+                                .mapNotNull { it.speakerId?.takeIf { s -> s.isNotBlank() } }
+                                .distinct()
+                                .filter { id -> prevAssigned.none { it.speakerId == id } }
+                                .map { it.removePrefix("speaker_") }.sorted().joinToString(",")
+                            val lostSpeakerIds = prevAssigned
+                                .mapNotNull { it.speakerId?.takeIf { s -> s.isNotBlank() } }
+                                .distinct()
+                                .filter { id -> merged.none { it.speakerId == id } }
+                                .map { it.removePrefix("speaker_") }.sorted().joinToString(",")
+
+                            Log.i(TAG, "Diarization ${logPrefix}ACCEPTED_IMPROVED: epoch=$epoch raw=${rawFinalSegments.size} " +
+                                    "candRaw=(labeled=${candQuality.labeledSegments}/${candidate.size} speakers=${candQuality.distinctSpeakers} " +
+                                    "dur=${candQuality.totalLabeledDurationMs}) " +
+                                    "merged=(labeled=${mergedQuality.labeledSegments}/${merged.size} speakers=${mergedQuality.distinctSpeakers} " +
+                                    "dur=${mergedQuality.totalLabeledDurationMs} ids=[$mergedSpeakerIds]) " +
+                                    "best=(labeled=${previousBest.labeledSegments} speakers=${previousBest.distinctSpeakers} " +
+                                    "dur=${previousBest.totalLabeledDurationMs} ids=[$prevSpeakerIds]) " +
+                                    "diff=(new=${diff.newlyLabeledSegments} changed=${diff.changedSpeakerAssignments} lost=${diff.lostLabels})" +
+                                    if (newSpeakerIds.isNotEmpty()) " newIds=[$newSpeakerIds]" else "" +
+                                    if (lostSpeakerIds.isNotEmpty()) " lostIds=[$lostSpeakerIds]" else "" +
+                                    " $protectInfo")
+                        }
+                    } else {
+                        Log.w(TAG, "Diarization ${logPrefix}REJECTED: epoch=$epoch raw=${rawFinalSegments.size} " +
+                                "candRaw=(labeled=${candQuality.labeledSegments}/${candidate.size} speakers=${candQuality.distinctSpeakers} " +
+                                "dur=${candQuality.totalLabeledDurationMs}) " +
+                                "merged=(labeled=${mergedQuality.labeledSegments}/${merged.size} speakers=${mergedQuality.distinctSpeakers} " +
+                                "dur=${mergedQuality.totalLabeledDurationMs}) " +
+                                "best=(labeled=${previousBest.labeledSegments} speakers=${previousBest.distinctSpeakers} " +
+                                "dur=${previousBest.totalLabeledDurationMs}) " +
+                                "diff=(new=${diff.newlyLabeledSegments} changed=${diff.changedSpeakerAssignments} lost=${diff.lostLabels}) " +
+                                "$protectInfo")
+                    }
+                } catch (e: CancellationException) {
+                    Log.d(TAG, "Diarization cancelled during IO: epoch=$epoch"); throw e
+                } catch (e: Exception) {
+                    Log.e(TAG, "Diarization error: epoch=$epoch ${e.message}", e)
+                }
+            }
+        }
+    }
+
+    private fun computeQuality(segments: List<TranscriptSegment>): AssignmentQuality {
+        val labeled = segments.filter { !it.speakerId.isNullOrBlank() }
+        return AssignmentQuality(
+            labeledSegments = labeled.size,
+            unlabeledSegments = segments.size - labeled.size,
+            distinctSpeakers = labeled.mapNotNull { it.speakerId }.distinct().size,
+            totalLabeledDurationMs = labeled.sumOf { it.endTimeMs - it.startTimeMs },
+        )
+    }
+
+    /**
+     * Quality Gate: entscheidet, ob ein gemergter Kandidat den bisherigen Beststand ersetzt.
+     *
+     * Priorität der Bewertung:
+     * 1. Erster Lauf → immer akzeptieren
+     * 2. Kandidat hat 0 Labels, current hat welche → ablehnen
+     * 3. Speaker-Rückschritt (2→1, 3→1, 3→2) → immer ablehnen
+     * 4. Coverage-Einbruch (< 50% Labels oder Dauer) → ablehnen
+     * 5. Neue Sprecher: mehr distinctSpeakers als best + Coverage ≥ 70% → akzeptieren
+     * 6. Gleiche Sprecherzahl: höhere labeled duration gewinnt (oder mind. 20% besser + 80% Duration)
+     */
+    private fun shouldAcceptAssignment(candidate: List<TranscriptSegment>): Boolean {
+        // Regel 1
+        if (bestAssignmentQuality.labeledSegments == 0 && bestAssignmentQuality.distinctSpeakers == 0) return true
+
+        val candQuality = computeQuality(candidate)
+
+        // Regel 2: 0 Labels obwohl current welche hat
+        if (bestAssignmentQuality.labeledSegments > 0 && candQuality.labeledSegments == 0) return false
+
+        // Regel 3: Speaker-Rückschritt – weniger Speaker als best → immer ablehnen
+        if (bestAssignmentQuality.distinctSpeakers >= 2 &&
+            candQuality.distinctSpeakers < bestAssignmentQuality.distinctSpeakers
+        ) return false
+
+        // Regel 4a: Labelanzahl < 50 %
+        if (candQuality.labeledSegments < bestAssignmentQuality.labeledSegments * 0.5f) return false
+        // Regel 4b: Labeled Duration < 50 %
+        if (bestAssignmentQuality.totalLabeledDurationMs > 0 &&
+            candQuality.totalLabeledDurationMs < bestAssignmentQuality.totalLabeledDurationMs * 0.5f
+        ) return false
+
+        // Regel 5: Neue Sprecher fördern
+        if (candQuality.distinctSpeakers > bestAssignmentQuality.distinctSpeakers) {
+            // 1→2-Übergang: früheres Onboarding mit niedrigerer Coverage-Schwelle (0.5 statt 0.7),
+            // aber nur mit Mindest-Evidenz für den NEUEN Sprecher (kein Zufalls-Label)
+            val isFirst2Speaker = bestAssignmentQuality.distinctSpeakers == 1 && candQuality.distinctSpeakers == 2
+            val threshold = if (isFirst2Speaker) 0.5f else 0.7f
+            if (candQuality.labeledSegments >= bestAssignmentQuality.labeledSegments * threshold &&
+                (!isFirst2Speaker || newSpeakerHasEvidence(candidate))
+            ) return true
+        }
+
+        // Regel 6: Gleiche Speakerzahl – höhere Coverage gewinnt
+        if (candQuality.distinctSpeakers == bestAssignmentQuality.distinctSpeakers) {
+            if (candQuality.labeledSegments >= bestAssignmentQuality.labeledSegments &&
+                candQuality.totalLabeledDurationMs >= bestAssignmentQuality.totalLabeledDurationMs
+            ) return true
+            // Coverage deutlich besser, Duration nur leicht schlechter
+            if (candQuality.labeledSegments > bestAssignmentQuality.labeledSegments * 1.2f &&
+                candQuality.totalLabeledDurationMs >= bestAssignmentQuality.totalLabeledDurationMs * 0.8f
+            ) return true
+            return false // sonst: best war besser
+        }
+
+        return true
+    }
+
+    /**
+     * Mindest-Evidenz für einen NEUEN Sprecher beim 1→2-Übergang:
+     * Der neue Speaker muss >= 2 gelabelte Segmente ODER >= 3s Label-Dauer tragen,
+     * damit ein einzelnes Zufalls-Label keinen zweiten Sprecher materialisiert.
+     */
+    private fun newSpeakerHasEvidence(candidate: List<TranscriptSegment>): Boolean {
+        val bestSpeakerIds = assignedFinalSegments.mapNotNull { it.speakerId?.takeIf { s -> s.isNotBlank() } }.toSet()
+        if (bestSpeakerIds.isEmpty()) return false
+        val newSpeakerSegs = candidate.filter { seg ->
+            val sid = seg.speakerId?.takeIf { it.isNotBlank() } ?: return@filter false
+            sid !in bestSpeakerIds
+        }
+        if (newSpeakerSegs.isEmpty()) return false
+        val newDuration = newSpeakerSegs.sumOf { it.endTimeMs - it.startTimeMs }
+        val hasEvidence = newSpeakerSegs.size >= 2 || newDuration >= 3000L
+        if (!hasEvidence) {
+            Log.d(TAG, "shouldAcceptAssignment: 1→2 rejected – new speaker lacks evidence (${newSpeakerSegs.size} segs, ${newDuration}ms)")
+        }
+        return hasEvidence
+    }
+
+    /** Loggt Speaker-Set einer Save-Phase, um 2→1-Kollaps im Persistierungs-Pfad zu finden. */
+    private fun logSaveSpeakerStage(stage: String, segments: List<TranscriptSegment>) {
+        val labeled = segments.count { !it.speakerId.isNullOrBlank() }
+        val labeledDurMs = segments
+            .filter { !it.speakerId.isNullOrBlank() }
+            .sumOf { it.endTimeMs - it.startTimeMs }
+        val ids = segments
+            .mapNotNull { it.speakerId?.takeIf { s -> s.isNotBlank() } }
+            .distinct().map { it.removePrefix("speaker_") }.sorted()
+        Log.i(TAG, "saveStage $stage: segments=${segments.size} labeled=$labeled labeledDur=${labeledDurMs}ms speakers=${ids.size} ids=[${ids.joinToString(",")}]")
+        // DBG: Segment-Dump pro Stage – zeigt, welche IDs/Grenzen die Pipeline verändert
+        if (_uiState.value.debugMode) {
+            for (seg in segments) {
+                Log.d(TAG, "SAVE_DBG_${stage.replace(" ", "_")} id=${seg.segmentId.take(8)} t=${seg.startTimeMs}-${seg.endTimeMs} spk=${seg.speakerId ?: "-"} text=\"${seg.text.take(30)}\"")
+            }
+        }
+    }
+
+    /** DBG: Delta zwischen zwei Save-Stages – welche Segment-IDs verschwinden/neu entstehen */
+    private fun logSaveStageDelta(stageFrom: String, from: List<TranscriptSegment>, stageTo: String, to: List<TranscriptSegment>) {
+        if (!_uiState.value.debugMode) return
+        val fromIds = from.map { it.segmentId }.toSet()
+        val toIds = to.map { it.segmentId }.toSet()
+        val gone = from.filter { it.segmentId !in toIds }
+        val added = to.filter { it.segmentId !in fromIds }
+        for (g in gone) {
+            Log.d(TAG, "SAVE_DBG_DELTA $stageFrom→$stageTo GONE id=${g.segmentId.take(8)} t=${g.startTimeMs}-${g.endTimeMs} spk=${g.speakerId ?: "-"} text=\"${g.text.take(30)}\"")
+        }
+        for (a in added) {
+            Log.d(TAG, "SAVE_DBG_DELTA $stageFrom→$stageTo NEW id=${a.segmentId.take(8)} t=${a.startTimeMs}-${a.endTimeMs} spk=${a.speakerId ?: "-"} text=\"${a.text.take(30)}\"")
+        }
+        // Auch geänderte Speaker-Zuordnung bei gleicher ID anzeigen
+        val toById = to.associateBy { it.segmentId }
+        for (f in from) {
+            val t2 = toById[f.segmentId] ?: continue
+            val fs = f.speakerId?.takeIf { it.isNotBlank() }
+            val ts = t2.speakerId?.takeIf { it.isNotBlank() }
+            if (fs != ts) {
+                Log.d(TAG, "SAVE_DBG_DELTA $stageFrom→$stageTo SPK_CHANGE id=${f.segmentId.take(8)} from=${fs ?: "none"} to=${ts ?: "none"} text=\"${f.text.take(30)}\"")
+            }
+        }
+        Log.d(TAG, "SAVE_DBG_DELTA $stageFrom→$stageTo: gone=${gone.size} added=${added.size}")
+    }
+
+    fun stopRecording() {
+        isStopping = true
+        _uiState.update { it.copy(recordingState = RecordingState.Idle) }
+        audioCapture.stopCapture(); engine.stopSession()
+        // Foreground-Service beenden
+        com.sherpa.transcript.service.RecordingService.stop(SherpaTranscriptApp.instance)
+        logRecordPermissionState()
+
+        viewModelScope.launch {
+            Log.d(TAG, "stopRecording: cancel capture")
+            captureJob?.cancel()
+            captureJob?.join()
+            captureJob = null
+
+            Log.d(TAG, "stopRecording: cancel diarization loop")
+            diarizationJob?.cancel()
+            diarizationJob?.join()
+            diarizationJob = null
+
+            // Finaler Lauf: forceFinal=true passiert den Guard, weil !isSavingFinalResult
+            Log.d(TAG, "stopRecording: final diarization")
+            runDiarization(forceFinal = true)
+            deriveUiSegments()
+
+            // Offenes Partial als finales Segment sichern, falls vorhanden
+            livePartial?.let { partial ->
+                if (partial.text.isNotBlank()) {
+                    val flushed = partial.copy(isFinal = true, isNew = true)
+                    if (!dedupeOrMergeIntoLastSegment(flushed.text, flushed.startTimeMs, flushed.endTimeMs)) {
+                        rawFinalSegments.add(flushed)
+                    }
+                    livePartial = null
+                    deriveUiSegments()
+                    Log.d(TAG, "stopRecording: flushed partial to rawFinalSegments (#${rawFinalSegments.size}): \"${partial.text.take(40)}\"")
+                }
+            }
+
+            // Ab hier Save-Phase – keine Commits mehr erlaubt
+            isSavingFinalResult = true
+            val overlay = buildAssignedOverlayForAllRawSegments()
+            logSaveSpeakerStage("beforeSave overlay", overlay)
+            // Segment-Splitting: lange ASR-Segmente an Diarization-Grenzen aufteilen
+            val splitOverlay = if (lastDiarizationSegments.isNotEmpty()) {
+                TimelineComposer.splitLongSpeakerSegments(overlay, lastDiarizationSegments)
+            } else overlay
+            logSaveSpeakerStage("afterSplit", splitOverlay)
+            // Finale Konsolidierung (Post-Processing) für History
+            val segmentsToSave = if (splitOverlay.size >= 3) {
+                FinalTranscriptComposer.enrichAssignmentForSave(splitOverlay)
+            } else {
+                splitOverlay
+            }
+            logSaveSpeakerStage("afterEnrich", segmentsToSave)
+            // DBG: Delta-Analyse – welche Segmente/Speaker verändert die Save-Pipeline?
+            logSaveStageDelta("beforeSave", overlay, "afterSplit", splitOverlay)
+            logSaveStageDelta("afterSplit", splitOverlay, "afterEnrich", segmentsToSave)
+            val transcriptId = currentTranscriptId
+            if (segmentsToSave.isNotEmpty() && transcriptId != null) {
+                val labeledCount = segmentsToSave.count { !it.speakerId.isNullOrBlank() }
+                val speakerCount = segmentsToSave.mapNotNull { it.speakerId }.distinct().size
+                val sourceCount = rawFinalSegments.size
+                Log.i(TAG, "stopRecording: saveSegments sourceCount=$sourceCount persistedCount=${segmentsToSave.size} ($labeledCount labeled, $speakerCount speakers, zeroSegments=${speakerEngine.zeroSegmentCount}, engineOrThreshold=${speakerEngine.engineOrThresholdCount})")
+                if (_uiState.value.debugMode) {
+                    Log.d(TAG, "LIVE_DBG_SAVE raw=$sourceCount labeled=$labeledCount speakers=$speakerCount persisted=${segmentsToSave.size}")
+                }
+                saveTranscript(transcriptId, segmentsToSave)
+            }
+            currentTranscriptId = null; currentUtteranceStartMs = null; lastPartialText = ""; lastForcedFlushTime = 0L; lastForcedFlushText = ""
+        }
+    }
+
+    private fun saveTranscript(transcriptId: String, segments: List<TranscriptSegment>) {
+        viewModelScope.launch { withContext(Dispatchers.IO) {
+            val now = System.currentTimeMillis()
+            val durationMs = if (recordingStartedAt > 0) now - recordingStartedAt else 0L
+            val firstText = segments.firstOrNull()?.text?.take(60)?.trim() ?: "Transkript"
+            val title = if (firstText.length > 3) firstText else "Transkript vom ${java.text.SimpleDateFormat("dd.MM.yy HH:mm", java.util.Locale.getDefault()).format(java.util.Date())}"
+            val speakerCount = segments.mapNotNull { it.speakerId }.distinct().size
+            val labeledCount = segments.count { !it.speakerId.isNullOrBlank() }
+            val totalDurationMs = if (recordingStartedAt > 0) now - recordingStartedAt else segments.lastOrNull()?.endTimeMs ?: 0L
+            val transcript = TranscriptEntity(transcriptId = transcriptId, title = title, durationMs = durationMs, speakerCount = speakerCount, createdAt = recordingStartedAt, updatedAt = now)
+            val segEntities = segments.mapIndexed { i, s -> SegmentEntity(segmentId = s.segmentId, transcriptId = transcriptId, startTimeMs = s.startTimeMs, endTimeMs = s.endTimeMs, text = s.text, speakerId = s.speakerId, speakerLabel = if (s.speakerId != null) (s.speakerLabel ?: "Sprecher 1") else null, isFinal = true, sequenceIndex = i, createdAt = s.timestamp) }
+            val entitySpeakerIds = segEntities.mapNotNull { it.speakerId }.distinct().map { it.removePrefix("speaker_") }.sorted()
+            Log.i(TAG, "saveStage beforeEntityInsert: entities=${segEntities.size} labeled=${segEntities.count { it.speakerId != null }} speakers=${entitySpeakerIds.size} ids=[${entitySpeakerIds.joinToString(",")}]")
+            repository.saveTranscriptWithSegments(transcript, segEntities)
+            Log.i(TAG, "Saved '$title' — ${segEntities.size} Segmente, ${labeledCount}/$speakerCount labeled, $speakerCount Sprecher, ${totalDurationMs / 1000}s Aufnahme")
+        }}
+    }
+
+    private fun handleResult(text: String, isFinal: Boolean) {
+        val normalizedText = text.trim()
+        if (normalizedText.isBlank()) return
+        val now = sessionRelativeMs()
+
+        if (!isFinal) {
+            // Dedup: identischen Partial-Text nicht erneut verarbeiten (Sicherheitsebene)
+            if (normalizedText == lastPartialText) return
+            if (currentUtteranceStartMs == null) currentUtteranceStartMs = now
+
+            // Forced Final: Utterance länger als 6s → als finales Segment sichern
+            val utteranceDuration = now - (currentUtteranceStartMs ?: now)
+            if (utteranceDuration > 6000L) {
+                val forcedFinal = TranscriptSegment(
+                    text = normalizedText,
+                    startTimeMs = currentUtteranceStartMs ?: now,
+                    endTimeMs = now,
+                    isFinal = true,
+                    isNew = true,
+                )
+                if (!dedupeOrMergeIntoLastSegment(forcedFinal.text, forcedFinal.startTimeMs, forcedFinal.endTimeMs)) {
+                    rawFinalSegments.add(forcedFinal)
+                    Log.d(TAG, "rawFinalSegments add (FORCED_FLUSH >6s): \"${normalizedText.take(40)}\" at ${currentUtteranceStartMs}ms-${now}ms (#${rawFinalSegments.size})")
+                }
+                lastForcedFlushTime = now
+                lastForcedFlushText = normalizedText
+                currentUtteranceStartMs = null
+                lastPartialText = ""
+                livePartial = null
+                _uiState.update { it.copy(recordingState = RecordingState.Listening) }
+                deriveUiSegments()
+                return
+            }
+
+            lastPartialText = normalizedText
+            livePartial = TranscriptSegment(
+                text = normalizedText,
+                startTimeMs = currentUtteranceStartMs ?: now,
+                endTimeMs = now,
+                isFinal = false,
+                isNew = false,
+            )
+            deriveUiSegments()
+            _uiState.update { it.copy(recordingState = RecordingState.Processing) }
+            return
+        }
+
+        // Final
+        val finalText = normalizedText.ifBlank { lastPartialText }.trim()
+        if (finalText.isBlank()) return
+        val startMs = currentUtteranceStartMs ?: now
+        lastForcedFlushTime = 0L; lastForcedFlushText = ""
+
+        // 0-ms-Segmente auf Mindestdauer von 100ms clampen
+        val effectiveEndMs = maxOf(now, startMs + 100L)
+
+        // Zentrale Dedupe: gegen letztes rawFinalSegment prüfen
+        if (!dedupeOrMergeIntoLastSegment(finalText, startMs, effectiveEndMs)) {
+            val finalSeg = TranscriptSegment(
+                text = finalText,
+                startTimeMs = startMs,
+                endTimeMs = effectiveEndMs,
+                isFinal = true,
+                isNew = true,
+            )
+            rawFinalSegments.add(finalSeg)
+            val durationMs = effectiveEndMs - startMs
+            Log.d(TAG, "rawFinalSegments add: \"${finalText.take(40)}\" at ${startMs}ms-${effectiveEndMs}ms (#${rawFinalSegments.size})" +
+                    if (durationMs > 8000L) " LONG_SEGMENT=${durationMs}ms" else if (durationMs == 0L) " ZERO_MS" else "")
+        }
+
+        // Live zurücksetzen
+        currentUtteranceStartMs = null
+        lastPartialText = ""
+        livePartial = null
+
+        _uiState.update { it.copy(recordingState = RecordingState.Listening) }
+        deriveUiSegments()
+    }
+
+    private fun sessionRelativeMs(): Long = System.currentTimeMillis() - recordingStartedAt
+    fun onUserScroll() { _uiState.update { it.copy(autoScrollEnabled = false) } }
+    fun onScrollToLatest() { _uiState.update { it.copy(autoScrollEnabled = true) } }
+    fun onFontSizeChanged(newSize: Float) { _uiState.update { it.copy(fontSize = newSize) } }
+
+    override fun onCleared() { super.onCleared(); captureJob?.cancel(); diarizationJob?.cancel(); audioCapture.stopCapture(); engine.release(); speakerEngine.release() }
+}
