@@ -128,15 +128,27 @@ class SessionVoiceBank(
 
         var bestId: Int? = null
         var bestSim = matchThreshold // nur Matches ÜBER der Schwelle zählen
+        // Diagnose: Similarity-Verteilung sichtbar machen (auch unter Threshold)
+        val sims = StringBuilder()
         for ((id, vp) in voiceprints) {
             val sim = cosineSimilarity(embedding, vp)
+            if (sims.isNotEmpty()) sims.append(", ")
+            sims.append("$id=${"%.3f".format(sim)}")
             if (sim > bestSim) {
                 bestSim = sim
                 bestId = id
             }
         }
         if (bestId != null) {
-            Log.d(TAG, "identify: match=$bestId sim=${"%.3f".format(bestSim)} (threshold=$matchThreshold)")
+            Log.d(TAG, "identify: MATCH → global=$bestId sim=${"%.3f".format(bestSim)} " +
+                    "(threshold=$matchThreshold, [$sims])")
+        } else {
+            // Kein Match über Threshold – aber wir loggen die beste Similarity,
+            // um den Threshold kalibrieren zu können
+            val maxSim = voiceprints.entries.maxByOrNull { cosineSimilarity(embedding, it.value) }
+            val topSim = if (maxSim != null) cosineSimilarity(embedding, maxSim.value) else 0f
+            Log.d(TAG, "identify: KEIN Match – beste Similarity=${"%.3f".format(topSim)} " +
+                    "gegen global=${maxSim?.key} (threshold=$matchThreshold, [$sims])")
         }
         return bestId
     }
