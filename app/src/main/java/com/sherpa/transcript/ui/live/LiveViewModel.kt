@@ -153,14 +153,11 @@ class LiveViewModel : ViewModel() {
             diarizer = speakerEngine::process,
             reconciler = rollingReconciler,
             voiceBank = sessionVoiceBank,
-            // Tuning-Hebel 1 (0.5.50): Chunk 30s + 10s Overlap (= 40s Gesamtfenster).
-            // Log-Befund 0.5.49: Pyannote fragmentiert den Wechsel-Bereich (60-73s)
-            // in 421ms-Stücke → zu kurz für Enrollment-Gate (2s) und ASR-Overlap
-            // (35%) → Switch ging verloren. Mehr Kontext soll längere, konsolidierte
-            // Segmente liefern. ACHTUNG Risiko: 40s-Fenster könnte 0-segments-Events
-            // wiederbringen (0.5.42-Kollaps bei 29.8s) – deshalb als A/B messen.
-            chunkSec = 30f,
-            overlapSec = 10f,
+            // Tuning-Hebel 1 rückgängig (0.5.51): Chunk zurück auf 15s + 5s Overlap.
+            // Log-Befund 0.5.50: 30s+10s lieferte ein 30,9s-Monster-Segment (beide
+            // Sprecher verschmolzen) → speakers=1, kein FIRST_2SPK. Bei 15s+5s hatte
+            // Pyannote den Wechsel eindeutig gefunden – das war der bessere Stand.
+            chunkSec = 15f,
         )
     }
 
@@ -993,8 +990,20 @@ class LiveViewModel : ViewModel() {
                 // Rohsegmente vor Zuordnung kompaktieren (temporäre Kopie)
                 val compactedSegs = TimelineComposer.compactRawSegmentsBeforeAssignment(rawFinalSegments)
                 // Worker liefert globale IDs → KEIN normalizeSpeakerIds nötig
-                val candidate = TimelineComposer.assignSpeakersToRawSegments(compactedSegs, diarizationSegs, debug = _uiState.value.debugMode)
+                var candidate = TimelineComposer.assignSpeakersToRawSegments(compactedSegs, diarizationSegs, debug = _uiState.value.debugMode)
                 if (candidate.isEmpty()) return@withContext
+
+                // Hebel 2 (0.5.51): Lange Whisper-Segmente (>8s) an Diarization-Grenzen
+                // splitten, BEVOR der Merge läuft. splitLongSpeakerSegments braucht eine
+                // gesetzte speakerId → deshalb NACH assignSpeakersToRawSegments, nicht davor.
+                // rawFinalSegments bleiben unverändert (Sub-Segmente haben neue UUIDs –
+                // die Dedupe-Logik arbeitet auf den alten IDs).
+                val splitCandidate = TimelineComposer.splitLongSpeakerSegments(candidate, diarizationSegs)
+                if (splitCandidate.size > candidate.size) {
+                    Log.d(TAG, "ChunkedDiarization SPLIT: ${candidate.size} → ${splitCandidate.size} Segmente " +
+                            "(Wechsel in langem Whisper-Segment an Diarization-Grenzen getrennt)")
+                    candidate = splitCandidate
+                }
                 val candQuality = computeQuality(candidate)
 
                 // Debug: globale IDs aus dem Worker
