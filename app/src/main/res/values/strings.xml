@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Sherpa Transcript</string>
+
+    <!-- Live Screen -->
+    <string name="live_title">Live-Transkription</string>
+    <string name="btn_start">Aufnahme starten</string>
+    <string name="btn_stop">Stopp</string>
+    <string name="status_idle">Bereit</string>
+    <string name="status_listening">Hört zu…</string>
+    <string name="status_processing">Verarbeitet…</string>
+    <string name="status_initializing">Initialisiere…</string>
+    <string name="scroll_to_latest">Zum Live-Ende</string>
+    <string name="font_size_label">Schriftgröße</string>
+    <string name="no_segments_yet">Noch keine Transkription. Tippen Sie auf „Aufnahme starten".</string>
+    <string name="permission_microphone_denied">Mikrofonberechtigung erforderlich. Bitte in den Systemeinstellungen aktivieren.</string>
+
+    <!-- History -->
+    <string name="history_title">Verlauf</string>
+    <string name="history_empty">Noch keine Transkriptionen gespeichert.</string>
+    <string name="search_hint">Transkripte durchsuchen…</string>
+
+    <!-- Detail -->
+    <string name="detail_title">Transkript</string>
+    <string name="btn_delete">Löschen</string>
+    <string name="btn_rename">Umbenennen</string>
+    <string name="btn_share">Teilen</string>
+    <string name="btn_copy">Kopieren</string>
+    <string name="btn_export_json">Als JSON exportieren</string>
+
+    <!-- Settings -->
+    <string name="settings_title">Einstellungen</string>
+    <string name="pref_model">ASR-Modell</string>
+    <string name="pref_language">Sprache</string>
+    <string name="pref_font_size">Standardschriftgröße</string>
+    <string name="pref_dark_mode">Dark Mode</string>
+    <string name="pref_export_format">Standard-Exportformat</string>
+    <string name="pref_privacy">Datenschutz</string>
+    <string name="pref_delete_audio">Audio nach Export löschen</string>
+    <string name="pref_debug">Debug-Infos anzeigen</string>
+
+    <!-- General -->
+    <string name="btn_cancel">Abbrechen</string>
+    <string name="btn_save">Speichern</string>
+    <string name="btn_confirm">Bestätigen</string>
+</resources>
