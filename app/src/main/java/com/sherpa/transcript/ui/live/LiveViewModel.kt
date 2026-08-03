@@ -153,10 +153,14 @@ class LiveViewModel : ViewModel() {
             diarizer = speakerEngine::process,
             reconciler = rollingReconciler,
             voiceBank = sessionVoiceBank,
-            // Tuning-Hebel B: Chunk 15s + 5s Overlap (= 20s Gesamtfenster) statt 20s+5s.
-            // Kleinere Fenster → Engine arbeitet fokussierter, weniger 0-Segment-/Fragment-
-            // Ausfälle (Log-Muster: verlorene Chunks erzeugen Anker-Lücken → künstliche IDs).
-            chunkSec = 15f,
+            // Tuning-Hebel 1 (0.5.50): Chunk 30s + 10s Overlap (= 40s Gesamtfenster).
+            // Log-Befund 0.5.49: Pyannote fragmentiert den Wechsel-Bereich (60-73s)
+            // in 421ms-Stücke → zu kurz für Enrollment-Gate (2s) und ASR-Overlap
+            // (35%) → Switch ging verloren. Mehr Kontext soll längere, konsolidierte
+            // Segmente liefern. ACHTUNG Risiko: 40s-Fenster könnte 0-segments-Events
+            // wiederbringen (0.5.42-Kollaps bei 29.8s) – deshalb als A/B messen.
+            chunkSec = 30f,
+            overlapSec = 10f,
         )
     }
 
