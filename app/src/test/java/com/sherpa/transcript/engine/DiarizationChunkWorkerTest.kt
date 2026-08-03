@@ -363,6 +363,42 @@ class DiarizationChunkWorkerTest {
         assertEquals("0 Segmente trotz aller Retries", 0, result.mappedSegments.size)
     }
 
+    // ── Hebel C: Audio-Normalisierung (RMS-Boost) ──
+
+    @Test
+    fun `leises Audio wird per RMS-Boost angehoben`() {
+        // 20s Audio mit sehr kleinem Pegel (0.01) – wie ein leiser Sprecher
+        val buffer = ChunkedAudioBuffer(sampleRate = sampleRate)
+        buffer.pushValueFrames(0.01f, 2000) // 0-20s, RMS ~0.01
+
+        val fake = FakeDiarizer(ArrayDeque(listOf(
+            listOf(localSeg(0, 0f, 10f)),
+        )))
+        val worker = DiarizationChunkWorker(buffer, fake)
+
+        val result = worker.processNextChunk(debug = false)
+        assertNotNull("normalisiertes Audio liefert Segmente", result)
+        result!!
+        assertEquals("Sprecher gefunden nach Boost", 1, result.mappedSegments.size)
+    }
+
+    @Test
+    fun `lautes Audio bleibt unveraendert`() {
+        // 20s Audio mit Pegel 0.5 – kein Boost nötig, Sample-Array unverändert
+        val buffer = ChunkedAudioBuffer(sampleRate = sampleRate)
+        buffer.pushValueFrames(0.5f, 2000) // 0-20s, RMS ~0.5
+
+        val fake = FakeDiarizer(ArrayDeque(listOf(
+            listOf(localSeg(0, 0f, 10f)),
+        )))
+        val worker = DiarizationChunkWorker(buffer, fake)
+
+        val result = worker.processNextChunk(debug = false)
+        assertNotNull(result)
+        result!!
+        assertEquals("1 Segment", 1, result.mappedSegments.size)
+    }
+
     @Test
     fun `VoiceBank - Engine-Drift wird akustisch auf globalen Speaker zurueckgemappt`() {
         val buffer = ChunkedAudioBuffer(sampleRate = sampleRate)
