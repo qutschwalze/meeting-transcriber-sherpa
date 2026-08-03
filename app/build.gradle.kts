@@ -71,4 +71,7 @@ dependencies {
 
     // Apache Commons Compress (für tar.bz2-Entpackung der Speaker-Modelle)
     implementation("org.apache.commons:commons-compress:1.27.1")
+
+    // Unit-Tests
+    testImplementation("junit:junit:4.13.2")
 }
