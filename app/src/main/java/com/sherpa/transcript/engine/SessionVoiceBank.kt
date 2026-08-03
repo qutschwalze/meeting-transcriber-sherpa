@@ -143,11 +143,10 @@ class SessionVoiceBank(
             Log.d(TAG, "identify: MATCH → global=$bestId sim=${"%.3f".format(bestSim)} " +
                     "(threshold=$matchThreshold, [$sims])")
         } else {
-            // Kein Match über Threshold – aber wir loggen die beste Similarity,
-            // um den Threshold kalibrieren zu können
+            // Kein Match über Threshold – nur verbose (kommt bei jedem neuen Sprecher vor)
             val maxSim = voiceprints.entries.maxByOrNull { cosineSimilarity(embedding, it.value) }
             val topSim = if (maxSim != null) cosineSimilarity(embedding, maxSim.value) else 0f
-            Log.d(TAG, "identify: KEIN Match – beste Similarity=${"%.3f".format(topSim)} " +
+            Log.v(TAG, "identify: KEIN Match – beste Similarity=${"%.3f".format(topSim)} " +
                     "gegen global=${maxSim?.key} (threshold=$matchThreshold, [$sims])")
         }
         return bestId
