@@ -46,7 +46,12 @@ class SherpaEmbeddingComputer(
             val stream = extractor.createStream()
             stream.acceptWaveform(samples, sampleRate)
             stream.inputFinished()
-            val embedding = extractor.compute(stream)
+            val embedding = if (extractor.isReady(stream)) {
+                extractor.compute(stream)
+            } else {
+                Log.w(TAG, "computeEmbedding: Stream nicht bereit (${samples.size} samples)")
+                null
+            }
             stream.release()
             embedding
         } catch (t: Throwable) {
@@ -141,14 +146,20 @@ class SessionVoiceBank(
      * Erst ab [minEnrollmentSec] Redezeit – verhindert Enrollment auf Fragmente.
      * Das Voiceprint ist ein gewichteter Durchschnitt aller Enrollment-Beiträge
      * (Rolling Fingerprint): je mehr Audio, desto stabiler.
+     *
+     * @return true wenn eingeschrieben/aktualisiert, false wenn übersprungen (zu kurz / kein Embedding).
      */
-    fun enroll(globalId: Int, samples: FloatArray, durationMs: Long) {
+    fun enroll(globalId: Int, samples: FloatArray, durationMs: Long): Boolean {
         if (durationMs < (minEnrollmentSec * 1000f).toLong()) {
             Log.d(TAG, "enroll skip: global=$globalId nur ${durationMs}ms (< ${minEnrollmentSec}s)")
-            return
+            return false
         }
-        if (samples.isEmpty()) return
-        val embedding = computer.computeEmbedding(samples) ?: return
+        if (samples.isEmpty()) return false
+        val embedding = computer.computeEmbedding(samples)
+        if (embedding == null) {
+            Log.w(TAG, "enroll: global=$globalId – computeEmbedding lieferte null (Extractor-Fehler?)")
+            return false
+        }
 
         val count = (enrollCounts[globalId] ?: 0)
         val existing = voiceprints[globalId]
@@ -163,6 +174,7 @@ class SessionVoiceBank(
         voiceprints[globalId] = updated
         enrollCounts[globalId] = count + 1
         Log.d(TAG, "enroll: global=$globalId ($durationMs ms, Beitrag #${count + 1}) – Bank hat ${voiceprints.size} Sprecher")
+        return true
     }
 
     /** Leert die Bank (Session-Ende). */
