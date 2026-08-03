@@ -171,7 +171,7 @@ class DiarizationChunkWorker(
                 val samples = extractSegmentSamples(chunk, best)
                 if (samples.isEmpty()) {
                     skippedCount++
-                    Log.i(TAG, "VOICE_BANK check: local=$localId – kein Audio extrahierbar (skip)")
+                    Log.d(TAG, "VOICE_BANK check: local=$localId – kein Audio extrahierbar (skip)")
                     continue
                 }
                 val durationMs = ((best.endSec - best.startSec) * 1000f).toLong()
@@ -182,7 +182,7 @@ class DiarizationChunkWorker(
                     finalMapping = finalMapping + (localId to matchedGlobalId)
                     finalNewSpeakerIds = finalNewSpeakerIds - localId
                     driftResolvedCount++
-                    Log.i(TAG, "VOICE_BANK resolve: local=$localId → global=$matchedGlobalId " +
+                    Log.d(TAG, "VOICE_BANK resolve: local=$localId → global=$matchedGlobalId " +
                             "(dur=${durationMs}ms, statt neue ID ${result.mapping[localId]})")
                 } else {
                     // Wirklich neuer Sprecher → in die Bank einschreiben
@@ -192,14 +192,14 @@ class DiarizationChunkWorker(
                 }
             }
             if (driftResolvedCount > 0 || enrolledCount > 0) {
-                Log.i(TAG, "VOICE_BANK: $driftResolvedCount Drift-ID(s) aufgelöst, " +
+                Log.d(TAG, "VOICE_BANK: $driftResolvedCount Drift-ID(s) aufgelöst, " +
                         "$enrolledCount enrolled, $skippedCount skipped (Bank=${voiceBank.speakerCount} Sprecher)")
             }
         } else if (voiceBank != null && result.newSpeakerIds.isEmpty()) {
             // Diagnose: Bank ist aktiv, aber der Reconciler meldet keine neuen IDs
-            Log.i(TAG, "VOICE_BANK check: keine neuen IDs in diesem Chunk (Bank=${voiceBank.speakerCount} Sprecher)")
+            Log.d(TAG, "VOICE_BANK check: keine neuen IDs in diesem Chunk (Bank=${voiceBank.speakerCount} Sprecher)")
         } else if (voiceBank == null) {
-            Log.i(TAG, "VOICE_BANK check: Bank NICHT aktiv (voiceBank=null) – Drift-Schutz aus!")
+            Log.d(TAG, "VOICE_BANK check: Bank NICHT aktiv (voiceBank=null) – Drift-Schutz aus!")
         }
         // Mapping auf die (evtl. korrigierten) globalen IDs anwenden
         val correctedSegments = if (finalMapping == result.mapping) {

@@ -139,12 +139,11 @@ class LiveViewModel : ViewModel() {
     private val rollingReconciler by lazy { RollingReconciler() }
     /** Hebel G: akustische Voice-Bank gegen Engine-Drift (embedding.onnx aus Assets). */
     private val sessionVoiceBank by lazy {
-        // Tuning (0.5.48): matchThreshold testweise 0.8 → 0.4 – NeMo-Titanet-Similarity
-        // in freier Wildbahn liegt oft unter 0.8, obwohl es derselbe Sprecher ist.
-        // minEnrollmentSec 2s (Diagnose-Build 0.5.47) bleibt – hat sich bewährt.
+        // Kalibriert aus 0.5.48-Testlauf: Intra-Speaker-Similarity ~0.42-0.53,
+        // Inter-Speaker ~0.32 → Sweet Spot 0.38 (Puffer in beide Richtungen).
         SessionVoiceBank(
             computer = SherpaEmbeddingComputer(SherpaTranscriptApp.instance.assets),
-            matchThreshold = 0.4f,
+            matchThreshold = 0.38f,
             minEnrollmentSec = 2f,
         )
     }
