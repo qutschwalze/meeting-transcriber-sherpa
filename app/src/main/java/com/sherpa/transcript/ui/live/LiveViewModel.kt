@@ -23,6 +23,8 @@ import com.sherpa.transcript.engine.FinalTranscriptComposer
 import com.sherpa.transcript.engine.ModelDownloadManager
 import com.sherpa.transcript.engine.RollingReconciler
 import com.sherpa.transcript.engine.SherpaOnnxEngine
+import com.sherpa.transcript.engine.SherpaEmbeddingComputer
+import com.sherpa.transcript.engine.SessionVoiceBank
 import com.sherpa.transcript.engine.SpeakerDiarizationEngine
 import com.sherpa.transcript.engine.SpeakerModelDownloadManager
 import com.sherpa.transcript.engine.TimelineComposer
@@ -135,11 +137,16 @@ class LiveViewModel : ViewModel() {
     // Lazy-Init: bei Toggle=OFF werden diese Komponenten nie erzeugt (kein RAM/CPU).
     private val chunkedAudioBuffer by lazy { ChunkedAudioBuffer() }
     private val rollingReconciler by lazy { RollingReconciler() }
+    /** Hebel G: akustische Voice-Bank gegen Engine-Drift (embedding.onnx aus Assets). */
+    private val sessionVoiceBank by lazy {
+        SessionVoiceBank(SherpaEmbeddingComputer(SherpaTranscriptApp.instance.assets))
+    }
     private val diarizationChunkWorker by lazy {
         DiarizationChunkWorker(
             buffer = chunkedAudioBuffer,
             diarizer = speakerEngine::process,
             reconciler = rollingReconciler,
+            voiceBank = sessionVoiceBank,
             // Tuning-Hebel B: Chunk 15s + 5s Overlap (= 20s Gesamtfenster) statt 20s+5s.
             // Kleinere Fenster → Engine arbeitet fokussierter, weniger 0-Segment-/Fragment-
             // Ausfälle (Log-Muster: verlorene Chunks erzeugen Anker-Lücken → künstliche IDs).
@@ -364,9 +371,10 @@ class LiveViewModel : ViewModel() {
             speakerEngine.resetZeroSegmentCounters()
             synchronized(audioLock) { audioAccumulator.clear(); audioBaseTimeMs = 0L }
             if (ENABLE_CHUNKED_DIARIZATION) {
-                // Neue Pipeline zurücksetzen (Buffer-Fortschritt + globaler Speaker-Bestand)
+                // Neue Pipeline zurücksetzen (Buffer-Fortschritt + globaler Speaker-Bestand + Voice-Bank)
                 chunkedAudioBuffer.clear()
                 diarizationChunkWorker.reset()
+                sessionVoiceBank.reset()
             }
             engine.startSession()
 
@@ -1400,6 +1408,7 @@ class LiveViewModel : ViewModel() {
         if (ENABLE_CHUNKED_DIARIZATION) {
             chunkedAudioBuffer.clear()
             diarizationChunkWorker.reset()
+            sessionVoiceBank.reset()
         }
     }
 }
