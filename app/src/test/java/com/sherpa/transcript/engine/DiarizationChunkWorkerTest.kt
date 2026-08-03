@@ -323,37 +323,44 @@ class DiarizationChunkWorkerTest {
         buffer.pushFrames(3000) // 30s – Chunk 1 = [0,20]
 
         // 1. Engine-Lauf: 0 Segmente (Pyannote-VAD-Aussetzer)
-        // 2. Retry-Lauf (Offset 5s): findet Sprecher 0 in [0,5] relativ zum Retry-Start
+        // Retry-Offsets [3,5,7,10]: 3s und 5s liefern auch 0, erst 7s findet Sprecher
+        // Segment [0,5] relativ zum Retry-Start (7s) → absolut [7,12]
         val fake = FakeDiarizer(ArrayDeque(listOf(
-            emptyList(),
-            listOf(localSeg(0, 0f, 5f)),
+            emptyList(),                    // Original-Lauf
+            emptyList(),                    // Retry 3s
+            emptyList(),                    // Retry 5s
+            listOf(localSeg(0, 0f, 5f)),    // Retry 7s → SUCCESS
         )))
-        val worker = DiarizationChunkWorker(buffer, fake, retryOffsetSec = 5f)
+        val worker = DiarizationChunkWorker(buffer, fake)
 
         val result = worker.processNextChunk(debug = false)
         assertNotNull("Retry liefert Ergebnis statt null", result)
         result!!
         assertEquals("Segment existiert nach Retry", 1, result.mappedSegments.size)
-        // Time-Shift: retryOffsetSec muss herausgerechnet sein → absolut [5,10]
-        assertEquals("Start nach Offset-Korrektur", 5f, result.mappedSegments[0].startSec, 0.01f)
-        assertEquals("Ende nach Offset-Korrektur", 10f, result.mappedSegments[0].endSec, 0.01f)
+        // Time-Shift: Offset 7s muss herausgerechnet sein → absolut [7,12]
+        assertEquals("Start nach Offset-Korrektur", 7f, result.mappedSegments[0].startSec, 0.01f)
+        assertEquals("Ende nach Offset-Korrektur", 12f, result.mappedSegments[0].endSec, 0.01f)
     }
 
     @Test
-    fun `Chunk-Retry liefert weiterhin null wenn beide Engine-Lauefe leer sind`() {
+    fun `Chunk-Retry liefert weiterhin 0 wenn alle Engine-Lauefe leer sind`() {
         val buffer = ChunkedAudioBuffer(sampleRate = sampleRate)
         buffer.pushFrames(3000) // 30s – Chunk 1 = [0,20]
 
+        // Original + 4 Retry-Offsets (3/5/7/10s) – alle leer
         val fake = FakeDiarizer(ArrayDeque(listOf(
             emptyList(),
             emptyList(),
+            emptyList(),
+            emptyList(),
+            emptyList(),
         )))
-        val worker = DiarizationChunkWorker(buffer, fake, retryOffsetSec = 5f)
+        val worker = DiarizationChunkWorker(buffer, fake)
 
         val result = worker.processNextChunk(debug = false)
         assertNotNull(result)
         result!!
-        assertEquals("0 Segmente trotz Retry", 0, result.mappedSegments.size)
+        assertEquals("0 Segmente trotz aller Retries", 0, result.mappedSegments.size)
     }
 
     @Test
