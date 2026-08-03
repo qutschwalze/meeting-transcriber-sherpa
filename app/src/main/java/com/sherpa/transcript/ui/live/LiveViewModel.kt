@@ -107,7 +107,7 @@ class LiveViewModel : ViewModel() {
          * Bei true wird der audioAccumulator NICHT mehr gefüttert (Memory-Leak-Schutz):
          * Die Weiche im Capture-Loop pusht dann ausschließlich in den ChunkedAudioBuffer.
          */
-        private const val ENABLE_CHUNKED_DIARIZATION = false
+        private const val ENABLE_CHUNKED_DIARIZATION = true
     }
 
     private val _uiState = MutableStateFlow(LiveUiState())
