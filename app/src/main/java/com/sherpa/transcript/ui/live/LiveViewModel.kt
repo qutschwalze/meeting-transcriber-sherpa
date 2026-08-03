@@ -112,17 +112,18 @@ class LiveViewModel : ViewModel() {
         private const val ENABLE_CHUNKED_DIARIZATION = true
 
         /**
-         * Tuning-Hebel F (Diagnose): neue Speaker-IDs zulassen statt strippen.
+         * Tuning-Hebel F (Diagnose, 0.5.45) – seit 0.5.53 überholt:
+         * ALLOW_NEW_SPEAKER_IDS=false reaktiviert den Strip-Guard.
          *
-         * false = protectFromNewIds aktiv: Kandidaten-IDs, die nicht im Best-Set sind,
-         *         werden verworfen (strikt, aber verhindert Drift-Schutz bei Engine-
-         *         Inflation nach 60s – Segmente bleiben ungelabelt)
-         * true  = neue IDs kommen in den UI-Bestand (UI zeigt temporär mehr Sprecher);
-         *         der Speaker-Merger (Folge-Baustein) führt sie am Ende wieder zusammen.
-         *         Zusätzlich wird Regel 5 im Quality-Gate gelockert (Coverage 0.7→0.5),
-         *         sonst blockt shouldAcceptAssignment den Kandidaten trotzdem.
+         * false = protectFromNewIds aktiv: unbestätigte Kandidaten-IDs werden
+         *         verworfen. Bestätigte Voice-Bank-Sprecher (2-Kontakt-Härtung,
+         *         confirmedBankIds-Ausnahme in mergeCandidateIntoBest) kommen
+         *         trotzdem durch – sie sind echte neue Sprecher.
+         *         Log-Befund 0.5.55: speakers=4 bei nur 1 bestätigtem
+         *         Bank-Sprecher (global=2,3 pending) → Guard wieder scharf.
+         * true  = Diagnose-Modus (0.5.45): alle neuen IDs in den UI-Bestand.
          */
-        private const val ALLOW_NEW_SPEAKER_IDS = true
+        private const val ALLOW_NEW_SPEAKER_IDS = false
     }
 
     private val _uiState = MutableStateFlow(LiveUiState())
@@ -528,13 +529,18 @@ class LiveViewModel : ViewModel() {
             .distinct().size
         val protectExistingLabels = bestSpeakerCount >= 2 && candSpeakerCount < bestSpeakerCount
 
-        // Zusätzlicher Schutz: gleiche Speakerzahl, aber Candidate führt IDs ein, die nicht in best sind
+        // Hebel F (0.5.45 Diagnose) ist mit der Enrollment-Härtung (0.5.53+)
+        // überholt: ALLOW_NEW_SPEAKER_IDS=false reaktiviert den Strip-Guard.
+        // ABER: bestätigte Voice-Bank-Sprecher (2-Kontakt-Härtung) sind echte
+        // neue Sprecher und werden NIE gestrippt – nur unbestätigte Fehlcluster.
+        // Log-Befund 0.5.55: speakers=4 am Ende, obwohl die Bank nur 1 bestätigt
+        // hat (global=2,3 pending) – die unbestätigten IDs kamen durch den Guard.
+        val confirmedBankIds = if (ENABLE_CHUNKED_DIARIZATION) {
+            sessionVoiceBank.enrolledSpeakerIds.map { "speaker_$it" }.toSet()
+        } else emptySet()
         val candHasNewIds = candidate
             .mapNotNull { it.speakerId?.takeIf { s -> s.isNotBlank() } }
-            .distinct().any { it !in bestSpeakerIds }
-        // Hebel F: bei ALLOW_NEW_SPEAKER_IDS wird der Strip-Guard deaktiviert –
-        // neue IDs (Engine-Drift nach 60s) kommen in den UI-Bestand, der
-        // Speaker-Merger (Folge-Baustein) führt sie am Ende wieder zusammen.
+            .distinct().any { it !in bestSpeakerIds && it !in confirmedBankIds }
         val shouldStripNewIds = !ALLOW_NEW_SPEAKER_IDS && (protectExistingLabels || (bestSpeakerCount >= 2 && candHasNewIds))
 
         // Zweite Schutzschicht: neue IDs aus Kandidaten entfernen
