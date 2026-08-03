@@ -27,6 +27,11 @@ data class WorkerChunkResult(
     val mapping: Map<Int, Int>,
     val newSpeakerIds: Set<Int>,
     val allGlobalSegments: List<SpeakerTimeRange>,
+    /** Hebel-G-Diagnose: wie oft die Voice-Bank aufgelöst / eingeschrieben / übersprungen hat. */
+    val voiceBankResolvedCount: Int = 0,
+    val voiceBankEnrolledCount: Int = 0,
+    val voiceBankSkipCount: Int = 0,
+    val voiceBankSize: Int = 0,
 )
 
 /**
@@ -156,12 +161,19 @@ class DiarizationChunkWorker(
         var finalMapping = result.mapping
         var finalNewSpeakerIds = result.newSpeakerIds
         var driftResolvedCount = 0
+        var enrolledCount = 0
+        var skippedCount = 0
+        val bankSize = voiceBank?.speakerCount ?: 0
         if (voiceBank != null && result.newSpeakerIds.isNotEmpty()) {
             for (localId in result.newSpeakerIds) {
                 val segsOfSpeaker = absoluteSegments.filter { it.speaker == localId }
                 val best = segsOfSpeaker.maxByOrNull { it.endSec - it.startSec } ?: continue
                 val samples = extractSegmentSamples(chunk, best)
-                if (samples.isEmpty()) continue
+                if (samples.isEmpty()) {
+                    skippedCount++
+                    Log.i(TAG, "VOICE_BANK check: local=$localId – kein Audio extrahierbar (skip)")
+                    continue
+                }
                 val durationMs = ((best.endSec - best.startSec) * 1000f).toLong()
 
                 val matchedGlobalId = voiceBank.identify(samples)
@@ -170,17 +182,24 @@ class DiarizationChunkWorker(
                     finalMapping = finalMapping + (localId to matchedGlobalId)
                     finalNewSpeakerIds = finalNewSpeakerIds - localId
                     driftResolvedCount++
-                    Log.d(TAG, "VOICE_BANK resolve: local=$localId → global=$matchedGlobalId " +
+                    Log.i(TAG, "VOICE_BANK resolve: local=$localId → global=$matchedGlobalId " +
                             "(dur=${durationMs}ms, statt neue ID ${result.mapping[localId]})")
                 } else {
                     // Wirklich neuer Sprecher → in die Bank einschreiben
                     val newGlobalId = result.mapping[localId] ?: continue
-                    voiceBank.enroll(newGlobalId, samples, durationMs)
+                    val enrolled = voiceBank.enroll(newGlobalId, samples, durationMs)
+                    if (enrolled) enrolledCount++ else skippedCount++
                 }
             }
-            if (driftResolvedCount > 0) {
-                Log.d(TAG, "VOICE_BANK: $driftResolvedCount Drift-ID(s) aufgelöst (Bank=${voiceBank.speakerCount} Sprecher)")
+            if (driftResolvedCount > 0 || enrolledCount > 0) {
+                Log.i(TAG, "VOICE_BANK: $driftResolvedCount Drift-ID(s) aufgelöst, " +
+                        "$enrolledCount enrolled, $skippedCount skipped (Bank=${voiceBank.speakerCount} Sprecher)")
             }
+        } else if (voiceBank != null && result.newSpeakerIds.isEmpty()) {
+            // Diagnose: Bank ist aktiv, aber der Reconciler meldet keine neuen IDs
+            Log.i(TAG, "VOICE_BANK check: keine neuen IDs in diesem Chunk (Bank=${voiceBank.speakerCount} Sprecher)")
+        } else if (voiceBank == null) {
+            Log.i(TAG, "VOICE_BANK check: Bank NICHT aktiv (voiceBank=null) – Drift-Schutz aus!")
         }
         // Mapping auf die (evtl. korrigierten) globalen IDs anwenden
         val correctedSegments = if (finalMapping == result.mapping) {
@@ -208,6 +227,10 @@ class DiarizationChunkWorker(
             mapping = finalMapping,
             newSpeakerIds = finalNewSpeakerIds,
             allGlobalSegments = globalSegments,
+            voiceBankResolvedCount = driftResolvedCount,
+            voiceBankEnrolledCount = enrolledCount,
+            voiceBankSkipCount = skippedCount,
+            voiceBankSize = bankSize,
         )
     }
 

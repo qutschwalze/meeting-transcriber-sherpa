@@ -139,7 +139,11 @@ class LiveViewModel : ViewModel() {
     private val rollingReconciler by lazy { RollingReconciler() }
     /** Hebel G: akustische Voice-Bank gegen Engine-Drift (embedding.onnx aus Assets). */
     private val sessionVoiceBank by lazy {
-        SessionVoiceBank(SherpaEmbeddingComputer(SherpaTranscriptApp.instance.assets))
+        // Tuning: minEnrollmentSec testweise 2s (Diagnose-Build 0.5.47) – war 5s
+        SessionVoiceBank(
+            computer = SherpaEmbeddingComputer(SherpaTranscriptApp.instance.assets),
+            minEnrollmentSec = 2f,
+        )
     }
     private val diarizationChunkWorker by lazy {
         DiarizationChunkWorker(
@@ -992,7 +996,9 @@ class LiveViewModel : ViewModel() {
                     .map { it.speaker }
                     .distinct().sorted().joinToString(",")
                 Log.d(TAG, "ChunkedDiarization: workerSegs=${diarizationSegs.size} globalIds=[$globalLabels] " +
-                        "mapping=[${workerResult.mapping}] new=[${workerResult.newSpeakerIds.sorted().joinToString(",")}]")
+                        "mapping=[${workerResult.mapping}] new=[${workerResult.newSpeakerIds.sorted().joinToString(",")}] " +
+                        "vb=(bank=${workerResult.voiceBankSize} resolve=${workerResult.voiceBankResolvedCount} " +
+                        "enroll=${workerResult.voiceBankEnrolledCount} skip=${workerResult.voiceBankSkipCount})")
 
                 val merged = mergeCandidateIntoBest(candidate)
                 val mergedQuality = computeQuality(merged)
