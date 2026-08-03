@@ -145,6 +145,28 @@ class ChunkedAudioBufferTest {
     }
 
     @Test
+    fun `takeRemainingChunk begrenzt auf max chunkSec+overlapSec - nie monolithisch`() {
+        val buffer = ChunkedAudioBuffer(sampleRate = sampleRate)
+        buffer.pushFrames(6000) // 60s
+        buffer.takeChunk(chunkSec = 20f, overlapSec = 5f) // Chunk [0,20]
+
+        // 40s Rest! Darf NICHT als 40s-Block kommen (pyannote würde kollabieren)
+        val rest = buffer.takeRemainingChunk(chunkSec = 20f, overlapSec = 5f)
+        assertNotNull("Rest-Chunk verfügbar", rest)
+        rest!!
+        assertEquals("Start = 15s (Overlap)", 15f, rest.startSec, 0.001f)
+        assertEquals("Ende = 40s (max chunkSec+overlapSec)", 40f, rest.endSec, 0.001f)
+        assertEquals("Dauer <= 25s", true, rest.samples.size <= 25 * sampleRate)
+
+        // Zweiter Aufruf holt den nächsten begrenzten Rest
+        val rest2 = buffer.takeRemainingChunk(chunkSec = 20f, overlapSec = 5f)
+        assertNotNull("zweiter Rest-Chunk", rest2)
+        rest2!!
+        assertEquals("zweiter Rest [35,60]", 35f, rest2.startSec, 0.001f)
+        assertEquals("zweiter Rest Ende 60s", 60f, rest2.endSec, 0.001f)
+    }
+
+    @Test
     fun `takeRemainingChunk liefert null wenn nichts Neues seit letztem Chunk`() {
         val buffer = ChunkedAudioBuffer(sampleRate = sampleRate)
         buffer.pushFrames(2000) // exakt 20s – Chunk nimmt alles

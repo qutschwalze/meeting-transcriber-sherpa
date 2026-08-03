@@ -78,15 +78,44 @@ class DiarizationChunkWorker(
     }
 
     /**
-     * Finaler Lauf (Stop): verarbeitet den REST des Buffers – auch wenn weniger
-     * als chunkSec neues Audio seit dem letzten Chunk vorliegt. Damit gehen
-     * die letzten Sekunden einer Aufnahme nicht verloren.
+     * Finaler Lauf (Stop): verarbeitet ALLES verbleibende Audio.
+     *
+     * 1. Erst alle vollen Chunks via [processNextChunk] (können bei langem Stop
+     *    mehrere sein – pyannote darf nie > chunkSec+overlapSec auf einmal sehen).
+     * 2. Dann den Rest (< chunkSec) als letzten Chunk.
+     * 3. Ergebnis: mappedSegments = der KOMPLETTE konsolidierte globale Bestand
+     *    (alle Speaker, alle Zeiten absolut) – damit der Save-Pfad alle ASR-
+     *    Segmente gegen die volle Timeline labeln kann, nicht nur den letzten Chunk.
      *
      * @return null wenn seit dem letzten Chunk nichts Neues kam; sonst das Worker-Ergebnis.
      */
     fun processFinalChunk(debug: Boolean = false): WorkerChunkResult? {
-        val chunk = buffer.takeRemainingChunk(chunkSec, overlapSec) ?: return null
-        return processChunk(chunk, debug)
+        // 1) Alle vollen Chunks verarbeiten (können bei langem Stop mehrere sein)
+        var lastResult = processNextChunk(debug)
+        while (true) {
+            val next = processNextChunk(debug) ?: break
+            lastResult = next
+        }
+
+        // 2) Rest (< chunkSec) als letzten Chunk
+        val restChunk = buffer.takeRemainingChunk(chunkSec, overlapSec)
+        if (restChunk != null) {
+            val restResult = processChunk(restChunk, debug)
+            if (restResult != null) lastResult = restResult
+        }
+
+        // 3) Kompletten konsolidierten Bestand als mappedSegments liefern
+        val finalResult = lastResult ?: return null
+        val fullBestand = globalSegments.map { seg ->
+            DiarizationSegment(startSec = seg.startSec, endSec = seg.endSec, speaker = seg.speakerId)
+        }
+        if (fullBestand.isEmpty()) return finalResult
+
+        if (debug) {
+            val speakers = fullBestand.map { it.speaker }.distinct().sorted().joinToString(",")
+            Log.d(TAG, "processFinalChunk: fullBestand=${fullBestand.size} segments, speakers=[$speakers]")
+        }
+        return finalResult.copy(mappedSegments = fullBestand)
     }
 
     /** Gemeinsamer Kern für [processNextChunk] und [processFinalChunk]. */
