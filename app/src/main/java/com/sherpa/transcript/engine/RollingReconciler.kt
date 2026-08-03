@@ -73,6 +73,16 @@ class RollingReconciler(
      * (Abgestimmt auf TimelineComposer.MIN_CONFIDENCE_OVERLAP_MS = 300ms.)
      */
     private val minMatchOverlapSec: Float = 0.3f,
+    /**
+     * Winzige Fragmente unter dieser Dauer (Sekunden) werden VOR dem Matching
+     * aus beiden Inputs entfernt (Hebel E – Tuning).
+     *
+     * Begründung: assignSpeakersToRawSegments verlangt >= 300ms Overlap ODER
+     * >= 35% der ASR-Segmentdauer. Ein Fragment < 400ms kann ein ASR-Segment
+     * von > 1.1s nie mit 35% abdecken – es erzeugt nur Votes-Rauschen im
+     * Greedy-Matching und künstliche neue IDs, ohne je ein Label zu liefern.
+     */
+    private val minFragmentSec: Float = 0.4f,
 ) {
 
     companion object {
@@ -97,10 +107,24 @@ class RollingReconciler(
             return ReconcilerResult(emptyList(), emptyMap(), emptyMap(), emptySet(), 0f)
         }
 
+        // ── 0. Fragment-Filter (Hebel E): winzige Fragmente aus BEIDEN Inputs ──
+        // Sie können ASR-Segmente nie mit >= 35% abdecken → nur Votes-Rauschen
+        // und künstliche neue IDs. Gefilterte lokale Segmente erscheinen auch
+        // nicht in mappedSegments → der Worker-Bestand bleibt frei von Rauschen.
+        val significantLocal = localSegments.filter { (it.endSec - it.startSec) >= minFragmentSec }
+        val significantGlobal = previousGlobalSegments.filter { (it.endSec - it.startSec) >= minFragmentSec }
+        if (significantLocal.isEmpty()) {
+            return ReconcilerResult(emptyList(), emptyMap(), emptyMap(), emptySet(), 0f)
+        }
+        if (debug && significantLocal.size != localSegments.size) {
+            Log.d(TAG, "reconcile: fragment filter removed ${localSegments.size - significantLocal.size} local + " +
+                    "${previousGlobalSegments.size - significantGlobal.size} global tiny segments (<${minFragmentSec}s)")
+        }
+
         // ── 1. Globale Speaker + ihre Zeitbereiche aus dem Bestand extrahieren ──
         val globalRanges = mutableMapOf<Int, MutableList<TimeRange>>()
         var maxGlobalId = -1
-        for (seg in previousGlobalSegments) {
+        for (seg in significantGlobal) {
             if (seg.endSec <= seg.startSec) continue
             globalRanges.getOrPut(seg.speakerId) { mutableListOf() }.add(
                 TimeRange(seg.startSec, seg.endSec)
@@ -114,7 +138,7 @@ class RollingReconciler(
         val votes = mutableMapOf<Int, MutableMap<Int, Float>>()
         var zoneOverlapTotal = 0f
 
-        for (localSeg in localSegments) {
+        for (localSeg in significantLocal) {
             val localId = localSeg.speaker
             val localRange = TimeRange(localSeg.startSec, localSeg.endSec)
             val clippedZone = TimeRange(
@@ -159,7 +183,7 @@ class RollingReconciler(
         val newSpeakerIds = mutableSetOf<Int>()
         val nextFreeId = maxGlobalId + 1
         var nextNewId = nextFreeId
-        val allLocalIds = localSegments.map { it.speaker }.distinct().sorted()
+        val allLocalIds = significantLocal.map { it.speaker }.distinct().sorted()
         for (localId in allLocalIds) {
             if (localId !in assignedLocals) {
                 mapping[localId] = nextNewId
@@ -168,8 +192,8 @@ class RollingReconciler(
             }
         }
 
-        // ── 5. Mapping auf alle lokalen Segmente anwenden ──
-        val mappedSegments = localSegments.map { seg ->
+        // ── 5. Mapping auf alle signifikanten lokalen Segmente anwenden ──
+        val mappedSegments = significantLocal.map { seg ->
             seg.copy(speaker = mapping[seg.speaker] ?: seg.speaker)
         }
 
