@@ -225,13 +225,13 @@ class DiarizationChunkWorkerTest {
     }
 
     @Test
-    fun `processFinalChunk verarbeitet Rest-Audio nach dem letzten Chunk`() {
+    fun `processFinalChunk liefert konsolidierten Gesamtbestand statt nur Rest`() {
         val buffer = ChunkedAudioBuffer(sampleRate = sampleRate)
         buffer.pushFrames(3000) // 30s
         buffer.pushFrames(600, startMs = 30_000L) // Rest bis 36s
 
         // Chunk 1: [0,20] → Speaker 0
-        // Final:  [15,36] (5s Overlap + 6s neues Audio) → Speaker 0 bleibt
+        // Final-Rest: [15,36] (5s Overlap + 6s neues Audio) → Speaker 0 bleibt
         val fake = FakeDiarizer(ArrayDeque(listOf(
             listOf(localSeg(0, 0f, 20f)),
             listOf(localSeg(0, 0f, 21f)), // absolut: [15,36]
@@ -242,11 +242,40 @@ class DiarizationChunkWorkerTest {
         val final = worker.processFinalChunk(debug = false)
         assertNotNull("Final-Chunk verfügbar", final)
         final!!
-        assertEquals("Final-Chunk [15,36]", 15f, final.chunk.startSec, 0.001f)
-        assertEquals("Final-Ende 36s", 36f, final.chunk.endSec, 0.001f)
         assertEquals("Mapping stabil 0→0", mapOf(0 to 0), final.mapping)
-        assertEquals("Bestand wächst auf 2 (alt [0,20] → neu [15,36] ersetzt Zone)",
-            2, worker.globalSegments.size)
+        // mappedSegments = KOMPLETTER Bestand: [0,15] (zugeschnitten) + [15,36]
+        assertEquals("Gesamtbestand als mappedSegments", 2, final.mappedSegments.size)
+        assertEquals("Segment 1 beginnt bei 0s", 0f, final.mappedSegments[0].startSec, 0.001f)
+        assertEquals("Segment 1 endet an Zonengrenze 15s", 15f, final.mappedSegments[0].endSec, 0.01f)
+        assertEquals("Segment 2 reicht bis 36s", 36f, final.mappedSegments[1].endSec, 0.001f)
+        assertEquals("Bestand wächst auf 2", 2, worker.globalSegments.size)
+    }
+
+    @Test
+    fun `processFinalChunk verarbeitet mehrere volle Chunks bei langem Rest`() {
+        val buffer = ChunkedAudioBuffer(sampleRate = sampleRate)
+        buffer.pushFrames(6500) // 65s
+
+        // Chunk 1: [0,20] → Spk 0
+        // Chunk 2 (Final-Schleife): [15,40] → Spk 0 bleibt (Zone-Match)
+        // Chunk 3 (Final-Rest):    [35,60] → Spk 0 bleibt (Zone-Match)
+        // Es bleibt Rest bis 65s → [60,65] wird per takeRemainingChunk begrenzt
+        val fake = FakeDiarizer(ArrayDeque(listOf(
+            listOf(localSeg(0, 0f, 20f)),
+            listOf(localSeg(0, 0f, 25f)), // absolut: [15,40]
+            listOf(localSeg(0, 0f, 25f)), // absolut: [35,60]
+            listOf(localSeg(0, 0f, 10f)), // absolut: [55,65] – Rest (Chunk [55,65])
+        )))
+        val worker = DiarizationChunkWorker(buffer, fake)
+
+        worker.processNextChunk(debug = false)
+        val final = worker.processFinalChunk(debug = false)
+        assertNotNull("Final verfügbar", final)
+        final!!
+        // Bestand: [0,15] + [15,40] + [40,60] + [60,65] (jeweils Zonen-Zuschnitt)
+        assertEquals("alle Chunks konsolidiert", 4, final.mappedSegments.size)
+        assertEquals("letztes Segment endet bei 65s", 65f, final.mappedSegments.last().endSec, 0.01f)
+        assertEquals("alle Speaker stabil 0", setOf(0), final.mappedSegments.map { it.speaker }.toSet())
     }
 
     @Test

@@ -142,8 +142,11 @@ class ChunkedAudioBuffer(
     }
 
     /**
-     * Liefert den REST-Chunk für den finalen Lauf (Stop): alles verfügbare Audio
-     * seit dem letzten Chunk – auch wenn weniger als chunkSec zusammenkam.
+     * Liefert den REST-Chunk für den finalen Lauf (Stop): verfügbares Audio seit
+     * dem letzten Chunk, aber BEGRENZT auf max chunkSec+overlapSec.
+     * Die Begrenzung ist kritisch: pyannote degradiert bei >25s Eingabe massiv
+     * (0 Segmente, cause=engineOrThreshold) – ein monolithischer Rest-Chunk von
+     * z.B. 30s würde die Engine zum Kollabieren bringen.
      * Overlap vom vorherigen Chunk wird wie bei [takeChunk] mitgenommen.
      * Liefert null, wenn seit dem letzten Chunk nichts Neues kam.
      */
@@ -151,9 +154,12 @@ class ChunkedAudioBuffer(
         if (frames.isEmpty()) return@synchronized null
         val prevEndMs = lastChunkEndMs ?: return@synchronized takeChunk(chunkSec, overlapSec)
         val overlapMs = (overlapSec * 1000f).toLong()
+        val chunkMs = (chunkSec * 1000f).toLong()
 
         val windowStartMs = maxOf(frames.first().startMs, prevEndMs - overlapMs)
-        val windowEndMs = newestEndMs
+        // KERN-FIX: Fenster auf max chunkSec+overlapSec begrenzen – niemals größer
+        // als ein regulärer Chunk, sonst bricht pyannote zusammen.
+        val windowEndMs = minOf(newestEndMs, prevEndMs + chunkMs)
         if (windowEndMs <= prevEndMs) return@synchronized null // nichts Neues seit letztem Chunk
 
         val samples = collectSamples(windowStartMs, windowEndMs)
