@@ -54,8 +54,6 @@ class DiarizationChunkWorker(
     private val reconciler: RollingReconciler = RollingReconciler(),
     /** Hebel G: akustische Voice-Bank gegen Engine-Drift (optional, testbar). */
     private val voiceBank: SessionVoiceBank? = null,
-    /** Chunk-Retry (0.5.53): Versatz (Sek.) beim erneuten Engine-Versuch bei 0 segments. */
-    private val retryOffsetSec: Float = 5f,
     private val chunkSec: Float = 20f,
     private val overlapSec: Float = 5f,
 ) {
@@ -71,6 +69,13 @@ class DiarizationChunkWorker(
 
         /** Mindest-Samples für einen Retry-Versuch (10s Audio). */
         private const val MIN_RETRY_SAMPLES = 10 * SAMPLE_RATE
+
+        /**
+         * Chunk-Retry (0.5.54): Mehrere Versätze für den 2. Engine-Versuch.
+         * Log-Befund 0.5.53: Chunk [55,75] liefert reproduzierbar 0 Segmente –
+         * ein einzelner 5s-Versatz reicht nicht, mehrere Fenster werden probiert.
+         */
+        private val RETRY_OFFSETS_SEC = floatArrayOf(3f, 5f, 7f, 10f)
     }
 
     /** Globaler Bestand: bestätigte Diarization-Segmente mit Session-weiten Speaker-IDs. */
@@ -138,21 +143,27 @@ class DiarizationChunkWorker(
         // ── 1+2: Engine – lokale Zeiten relativ zum Chunk-Anfang ──
         var engineSegments = diarizer.process(chunk.samples)
 
-        // Chunk-Retry (0.5.53): Bei 0 segments ein versetztes Fenster versuchen.
-        // Pyannote kollabiert oft bei bestimmten Input-Mustern (VAD/Stille) – ein
-        // um retryOffsetSec verschobener Ausschnitt liefert oft doch Segmente.
-        // Der Versatz wird beim Time-Shift wieder herausgerechnet.
+        // Chunk-Retry (0.5.53+): Bei 0 segments mehrere versetzte Fenster versuchen.
+        // Log-Befund: Chunk [55,75] liefert reproduzierbar 0 Segmente – ein einzelner
+        // 5s-Versatz reicht nicht. Wir probieren mehrere Offsets (3s/7s/10s), bis die
+        // Engine liefert. Fehlschläge werden geloggt, damit der Retry sichtbar ist.
         var retryOffsetSecApplied = 0f
         if (engineSegments.isEmpty() && chunk.samples.size >= MIN_RETRY_SAMPLES) {
-            val offsetSamples = (retryOffsetSec * SAMPLE_RATE).toInt()
-            if (offsetSamples < chunk.samples.size) {
+            for (offset in RETRY_OFFSETS_SEC) {
+                val offsetSamples = (offset * SAMPLE_RATE).toInt()
+                if (offsetSamples >= chunk.samples.size) continue
                 val retrySamples = chunk.samples.copyOfRange(offsetSamples, chunk.samples.size)
                 val retrySegments = diarizer.process(retrySamples)
                 if (retrySegments.isNotEmpty()) {
-                    Log.i(TAG, "processChunk: 0 segments → Retry mit Offset ${retryOffsetSec}s: ${retrySegments.size} Segmente")
+                    Log.i(TAG, "processChunk: Retry SUCCESS – Offset ${offset}s: ${retrySegments.size} Segmente")
                     engineSegments = retrySegments
-                    retryOffsetSecApplied = retryOffsetSec
+                    retryOffsetSecApplied = offset
+                    break
                 }
+                Log.d(TAG, "processChunk: Retry Offset ${offset}s fehlgeschlagen (0 Segmente)")
+            }
+            if (engineSegments.isEmpty()) {
+                Log.w(TAG, "processChunk: ALLE Retry-Offsets fehlgeschlagen – Chunk bleibt ohne Diarization")
             }
         }
 
