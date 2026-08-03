@@ -141,18 +141,27 @@ class DiarizationChunkWorker(
     /** Gemeinsamer Kern für [processNextChunk] und [processFinalChunk]. */
     private fun processChunk(chunk: AudioChunk, debug: Boolean): WorkerChunkResult? {
         // ── 1+2: Engine – lokale Zeiten relativ zum Chunk-Anfang ──
-        var engineSegments = diarizer.process(chunk.samples)
+        // Hebel C (0.5.55): Audio normalisieren, bevor es an Pyannote geht.
+        // Log-Befund 0.5.54: Chunk [55,75] liefert auch nach 4 Retry-Offsets 0
+        // Segmente – Whisper transkribiert dort aber Text → zu leise für die
+        // Pyannote-VAD. RMS-Boost hebt leise Passagen auf einen gesunden Pegel.
+        // WICHTIG: Nur der Engine-Pfad nutzt die normalisierten Samples – die
+        // Voice-Bank-Extraktion (extractSegmentSamples) arbeitet weiter mit dem
+        // Original-Audio, sonst würden die Embeddings durch den Boost verzerrt.
+        val normalizedSamples = normalizeAudio(chunk.samples)
+        var engineSegments = diarizer.process(normalizedSamples)
 
         // Chunk-Retry (0.5.53+): Bei 0 segments mehrere versetzte Fenster versuchen.
         // Log-Befund: Chunk [55,75] liefert reproduzierbar 0 Segmente – ein einzelner
         // 5s-Versatz reicht nicht. Wir probieren mehrere Offsets (3s/7s/10s), bis die
         // Engine liefert. Fehlschläge werden geloggt, damit der Retry sichtbar ist.
         var retryOffsetSecApplied = 0f
-        if (engineSegments.isEmpty() && chunk.samples.size >= MIN_RETRY_SAMPLES) {
+        if (engineSegments.isEmpty() && normalizedSamples.size >= MIN_RETRY_SAMPLES) {
             for (offset in RETRY_OFFSETS_SEC) {
                 val offsetSamples = (offset * SAMPLE_RATE).toInt()
-                if (offsetSamples >= chunk.samples.size) continue
-                val retrySamples = chunk.samples.copyOfRange(offsetSamples, chunk.samples.size)
+                if (offsetSamples >= normalizedSamples.size) continue
+                // Retry-Samples aus dem NORMALISIERTEN Audio schneiden (Boost bleibt aktiv)
+                val retrySamples = normalizedSamples.copyOfRange(offsetSamples, normalizedSamples.size)
                 val retrySegments = diarizer.process(retrySamples)
                 if (retrySegments.isNotEmpty()) {
                     Log.i(TAG, "processChunk: Retry SUCCESS – Offset ${offset}s: ${retrySegments.size} Segmente")
@@ -279,6 +288,62 @@ class DiarizationChunkWorker(
         val endIdx = (relEnd * SAMPLE_RATE).toInt().coerceIn(startIdx, chunk.samples.size)
         if (endIdx <= startIdx) return FloatArray(0)
         return chunk.samples.copyOfRange(startIdx, endIdx)
+    }
+
+    /**
+     * Hebel C (0.5.55): RMS-Normalisierung gegen Pyannote-VAD-Aussetzer bei leiser Sprache.
+     *
+     * Log-Befund: Chunk [55,75] liefert reproduzierbar 0 Segmente (alle Retry-Offsets
+     * scheitern), obwohl Whisper dort Text transkribiert – das Audio ist für die
+     * VAD zu leise (Mikrofonabstand, leiser Sprecher). Whisper ist robust gegen
+     * Flüstern, Pyannote bricht ab.
+     *
+     * Strategie: Nur VERSTÄRKEN wenn der RMS unter dem Ziel-Pegel liegt (0.1),
+     * laute Chunks bleiben unangetastet; Clipping (> 0.99 Peak) wird verhindert.
+     * Geringe Boosts (< 1.5x) werden ignoriert – nur signifikante Anhebungen lohnen.
+     *
+     * WICHTIG: Nur der Engine-Pfad nutzt die normalisierten Samples. Die
+     * Voice-Bank-Extraktion arbeitet mit dem Original-Audio, sonst würden die
+     * Speaker-Embeddings durch den Boost verzerrt (gleicher Sprecher, andere
+     * Lautstärke → verfälschte Cosine-Similarity).
+     */
+    private fun normalizeAudio(samples: FloatArray): FloatArray {
+        if (samples.isEmpty()) return samples
+
+        var sumSquares = 0f
+        var maxPeak = 0f
+        for (sample in samples) {
+            val absSample = kotlin.math.abs(sample)
+            sumSquares += sample * sample
+            if (absSample > maxPeak) maxPeak = absSample
+        }
+        val rms = kotlin.math.sqrt((sumSquares / samples.size).toDouble()).toFloat()
+
+        // Absolute Stille – nichts zu normalisieren
+        if (rms < 0.0001f) return samples
+
+        // Ziel-Pegel: 0.1 RMS ≈ gesunder Sprachpegel
+        val targetRms = 0.1f
+        var gain = 1f
+        if (rms < targetRms) {
+            gain = targetRms / rms
+            // Clipping verhindern: Peak darf 0.99 nicht überschreiten
+            if (maxPeak * gain > 0.99f) {
+                gain = 0.99f / maxPeak
+            }
+        }
+
+        // Nur signifikante Boosts anwenden (> 1.5x) – kleine Anhebungen lohnen nicht
+        if (gain > 1.5f) {
+            Log.d(TAG, "normalizeAudio: Boost ${String.format("%.2fx", gain)} " +
+                    "(RMS ${String.format("%.4f", rms)} → Ziel ${targetRms})")
+            val normalized = FloatArray(samples.size)
+            for (i in samples.indices) {
+                normalized[i] = samples[i] * gain
+            }
+            return normalized
+        }
+        return samples
     }
 
     /**
