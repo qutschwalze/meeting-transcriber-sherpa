@@ -47,6 +47,8 @@ class DiarizationChunkWorker(
     private val buffer: ChunkedAudioBuffer,
     private val diarizer: ChunkDiarizer,
     private val reconciler: RollingReconciler = RollingReconciler(),
+    /** Hebel G: akustische Voice-Bank gegen Engine-Drift (optional, testbar). */
+    private val voiceBank: SessionVoiceBank? = null,
     private val chunkSec: Float = 20f,
     private val overlapSec: Float = 5f,
 ) {
@@ -56,6 +58,9 @@ class DiarizationChunkWorker(
 
         /** Toleranz für Float-Grenzenvergleiche (Sekunden). */
         private const val EPS = 0.01f
+
+        /** Sample-Rate des Audio-Streams (16 kHz) – für Segment-Audio-Extraktion. */
+        private const val SAMPLE_RATE = 16000
     }
 
     /** Globaler Bestand: bestätigte Diarization-Segmente mit Session-weiten Speaker-IDs. */
@@ -142,24 +147,81 @@ class DiarizationChunkWorker(
             debug = debug,
         )
 
+        // ── 4b (Hebel G): Voice-Bank-Fallback für "neue" IDs ──
+        // Wenn der Reconciler eine ID als NEU deklariert hat (Anker-Lücke in der
+        // Zone), fragt die Bank akustisch nach: Ist das vielleicht ein bekannter
+        // Sprecher, dessen Stimme die Engine nur neu geclustert hat?
+        // - Match über Threshold → Drift aufgelöst, ID wird zurückgemappt
+        // - Kein Match → wirklich neuer Sprecher → wird eingeschrieben (enroll)
+        var finalMapping = result.mapping
+        var finalNewSpeakerIds = result.newSpeakerIds
+        var driftResolvedCount = 0
+        if (voiceBank != null && result.newSpeakerIds.isNotEmpty()) {
+            for (localId in result.newSpeakerIds) {
+                val segsOfSpeaker = absoluteSegments.filter { it.speaker == localId }
+                val best = segsOfSpeaker.maxByOrNull { it.endSec - it.startSec } ?: continue
+                val samples = extractSegmentSamples(chunk, best)
+                if (samples.isEmpty()) continue
+                val durationMs = ((best.endSec - best.startSec) * 1000f).toLong()
+
+                val matchedGlobalId = voiceBank.identify(samples)
+                if (matchedGlobalId != null) {
+                    // Drift aufgelöst: lokale ID → bestehende globale ID
+                    finalMapping = finalMapping + (localId to matchedGlobalId)
+                    finalNewSpeakerIds = finalNewSpeakerIds - localId
+                    driftResolvedCount++
+                    Log.d(TAG, "VOICE_BANK resolve: local=$localId → global=$matchedGlobalId " +
+                            "(dur=${durationMs}ms, statt neue ID ${result.mapping[localId]})")
+                } else {
+                    // Wirklich neuer Sprecher → in die Bank einschreiben
+                    val newGlobalId = result.mapping[localId] ?: continue
+                    voiceBank.enroll(newGlobalId, samples, durationMs)
+                }
+            }
+            if (driftResolvedCount > 0) {
+                Log.d(TAG, "VOICE_BANK: $driftResolvedCount Drift-ID(s) aufgelöst (Bank=${voiceBank.speakerCount} Sprecher)")
+            }
+        }
+        // Mapping auf die (evtl. korrigierten) globalen IDs anwenden
+        val correctedSegments = if (finalMapping == result.mapping) {
+            result.mappedSegments
+        } else {
+            absoluteSegments.map { seg ->
+                seg.copy(speaker = finalMapping[seg.speaker] ?: seg.speaker)
+            }
+        }
+
         // ── 5: State-Update (nur bei nicht-leerem Engine-Ergebnis) ──
-        if (result.mappedSegments.isNotEmpty()) {
-            globalSegments = mergeIntoGlobalBestand(globalSegments, result.mappedSegments, overlapZone)
+        if (correctedSegments.isNotEmpty()) {
+            globalSegments = mergeIntoGlobalBestand(globalSegments, correctedSegments, overlapZone)
         }
 
         if (debug) {
             Log.d(TAG, "processNextChunk: chunk=${chunk.startSec}-${chunk.endSec}s overlap=${chunk.overlapSec}s " +
-                    "engineSegs=${engineSegments.size} mapped=${result.mappedSegments.size} " +
+                    "engineSegs=${engineSegments.size} mapped=${correctedSegments.size} " +
                     "globalBestand=${globalSegments.size}")
         }
 
         return WorkerChunkResult(
             chunk = chunk,
-            mappedSegments = result.mappedSegments,
-            mapping = result.mapping,
-            newSpeakerIds = result.newSpeakerIds,
+            mappedSegments = correctedSegments,
+            mapping = finalMapping,
+            newSpeakerIds = finalNewSpeakerIds,
             allGlobalSegments = globalSegments,
         )
+    }
+
+    /**
+     * Extrahiert das Audio eines Diarization-Segments aus dem Chunk-Audio.
+     * Segment-Zeiten sind absolut (Session), Chunk-Samples relativ zum Chunk-Anfang.
+     */
+    private fun extractSegmentSamples(chunk: AudioChunk, seg: DiarizationSegment): FloatArray {
+        val relStart = (seg.startSec - chunk.startSec).coerceIn(0f, chunk.endSec - chunk.startSec)
+        val relEnd = (seg.endSec - chunk.startSec).coerceIn(0f, chunk.endSec - chunk.startSec)
+        val startIdx = (relStart * SAMPLE_RATE).toInt().coerceIn(0, chunk.samples.size)
+        val endIdx = (relEnd * SAMPLE_RATE).toInt().coerceIn(startIdx, chunk.samples.size)
+        if (endIdx <= startIdx) return FloatArray(0)
+        return chunk.samples.copyOfRange(startIdx, endIdx)
     }
 
     /**

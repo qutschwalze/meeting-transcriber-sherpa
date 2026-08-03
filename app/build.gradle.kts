@@ -12,8 +12,8 @@ android {
         applicationId = "com.sherpa.transcript"
         minSdk = 26
         targetSdk = 35
-        versionCode = 71
-        versionName = "0.5.45"
+        versionCode = 72
+        versionName = "0.5.46"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -40,6 +40,12 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+
+    testOptions {
+        // android.util.Log in JVM-Unit-Tests als No-Op behandeln
+        // (SessionVoiceBank loggt immer, nicht nur im Debug-Modus)
+        unitTests.isReturnDefaultValues = true
     }
 }
 

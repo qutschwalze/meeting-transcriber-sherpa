@@ -35,6 +35,27 @@ class DiarizationChunkWorkerTest {
         }
     }
 
+    /** Fake-Embedding-Computer: Sample-Wert bestimmt die "Stimme" (1f=A, 2f=B). */
+    private class ValueComputer : SpeakerEmbeddingComputer {
+        override fun computeEmbedding(samples: FloatArray): FloatArray? {
+            if (samples.isEmpty()) return null
+            val v = samples[0]
+            return when {
+                v <= 1.5f -> floatArrayOf(1f, 0f, 0f) // Stimme A
+                v <= 2.5f -> floatArrayOf(0f, 1f, 0f) // Stimme B
+                else -> floatArrayOf(0f, 0f, 1f)
+            }
+        }
+    }
+
+    private fun valueFrame(value: Float): FloatArray = FloatArray(frameSamples) { value }
+
+    private fun ChunkedAudioBuffer.pushValueFrames(value: Float, count: Int, startMs: Long = 0L) {
+        for (i in 0 until count) {
+            push(valueFrame(value), startMs + i * 10L)
+        }
+    }
+
     private fun localSeg(speaker: Int, startSec: Float, endSec: Float) =
         DiarizationSegment(startSec = startSec, endSec = endSec, speaker = speaker)
 
@@ -290,5 +311,82 @@ class DiarizationChunkWorkerTest {
         worker.processNextChunk(debug = false)
 
         assertNull("nichts Neues → kein Final-Chunk", worker.processFinalChunk(debug = false))
+    }
+
+    // ── Hebel G: Voice-Bank-Integration ──
+
+    @Test
+    fun `VoiceBank - Engine-Drift wird akustisch auf globalen Speaker zurueckgemappt`() {
+        val buffer = ChunkedAudioBuffer(sampleRate = sampleRate)
+        // 0-20s Stimme A, 15-40s weiterhin Stimme A (gleiche Person!)
+        buffer.pushValueFrames(1f, 2000)                 // 0-20s
+        buffer.pushValueFrames(1f, 2500, startMs = 15_000L) // 15-40s
+
+        // Chunk 1 [0,20]: Engine findet Speaker 0 NUR in [0,10]
+        // Chunk 2 [15,40]: Engine DRIFTET – nennt dieselbe Stimme lokal 1
+        // → Zone [15,20] hat keinen Anker von global 0 (Bestand endet bei 10s)
+        // → Reconciler würde neue ID vergeben, aber die BANK erkennt Stimme A
+        val fake = FakeDiarizer(ArrayDeque(listOf(
+            listOf(localSeg(0, 0f, 10f)),  // absolut [0,10]
+            listOf(localSeg(1, 0f, 25f)),  // absolut [15,40], Drift!
+        )))
+        val voiceBank = SessionVoiceBank(ValueComputer())
+        val worker = DiarizationChunkWorker(buffer, fake, voiceBank = voiceBank)
+
+        val first = worker.processNextChunk(debug = false)
+        assertNotNull(first)
+        assertEquals("Speaker 0 enrolled (Stimme A)", 1, voiceBank.speakerCount)
+        assertTrue("Speaker 0 in der Bank", voiceBank.enrolledSpeakerIds == setOf(0))
+
+        val second = worker.processNextChunk(debug = false)
+        assertNotNull(second)
+        second!!
+        assertEquals("Drift aufgelöst: lokal 1 → global 0 (nicht neue ID 1)",
+            mapOf(1 to 0), second.mapping)
+        assertTrue("keine neue Speaker-ID nach Bank-Auflösung", second.newSpeakerIds.isEmpty())
+        assertEquals("Segment auf global 0 gemappt", 0, second.mappedSegments[0].speaker)
+        assertEquals("Bank hat weiterhin nur 1 Sprecher (kein neuer eingeschrieben)",
+            1, voiceBank.speakerCount)
+    }
+
+    @Test
+    fun `VoiceBank - wirklich neuer Sprecher wird eingeschrieben`() {
+        val buffer = ChunkedAudioBuffer(sampleRate = sampleRate)
+        // 0-20s Stimme A, 20-40s Stimme B (NEU) – Overlap-Zone [15,20] bleibt Stimme A
+        buffer.pushValueFrames(1f, 2000)                 // 0-20s
+        buffer.pushValueFrames(2f, 2000, startMs = 20_000L) // 20-40s
+
+        val fake = FakeDiarizer(ArrayDeque(listOf(
+            listOf(localSeg(0, 0f, 10f)),  // absolut [0,10] Stimme A
+            listOf(localSeg(1, 5f, 25f)),  // absolut [20,40] Stimme B (nach Zone!)
+        )))
+        val voiceBank = SessionVoiceBank(ValueComputer())
+        val worker = DiarizationChunkWorker(buffer, fake, voiceBank = voiceBank)
+
+        worker.processNextChunk(debug = false)
+        val second = worker.processNextChunk(debug = false)
+        assertNotNull(second)
+        second!!
+
+        assertEquals("B bleibt neue ID 1", mapOf(1 to 1), second.mapping)
+        assertTrue("B ist neuer Speaker", second.newSpeakerIds == setOf(1))
+        assertEquals("Bank hat jetzt 2 Sprecher (A + B)", 2, voiceBank.speakerCount)
+        assertTrue("Speaker 1 eingeschrieben", voiceBank.enrolledSpeakerIds == setOf(0, 1))
+    }
+
+    @Test
+    fun `VoiceBank - kurze Segmente unter Enrollment-Gate werden nicht eingeschrieben`() {
+        val buffer = ChunkedAudioBuffer(sampleRate = sampleRate)
+        buffer.pushValueFrames(1f, 2000) // 0-20s Stimme A
+
+        // Engine liefert nur ein 2s-Fragment → unter minEnrollmentSec (5s)
+        val fake = FakeDiarizer(ArrayDeque(listOf(
+            listOf(localSeg(0, 0f, 2f)), // absolut [0,2] – nur 2s
+        )))
+        val voiceBank = SessionVoiceBank(ValueComputer(), minEnrollmentSec = 5f)
+        val worker = DiarizationChunkWorker(buffer, fake, voiceBank = voiceBank)
+
+        worker.processNextChunk(debug = false)
+        assertEquals("2s-Fragment wird nicht enrolled", 0, voiceBank.speakerCount)
     }
 }
