@@ -167,6 +167,26 @@ class LiveViewModel : ViewModel() {
     private var currentTranscriptId: String? = null
     private var recordingStartedAt: Long = 0L
 
+    /**
+     * KUMULIERTE Sample-Zeit (ms) seit Session-Start für den ChunkedAudioBuffer.
+     *
+     * KRITISCHER FIX (0.5.58): Die Frames werden NICHT mit Wall-Clock-Zeit
+     * (`sessionRelativeMs()`) positioniert, sondern mit der kumulierten
+     * Audio-Dauer (`pushedSamples * 1000 / sampleRate`).
+     *
+     * Log-Beweis: Die WAV-Analyse zeigte Chunk [55,75] in der Quelle mit völlig
+     * normalem Pegel (RMS 0.076), die App maß dort aber 0.0005 (152x leiser) –
+     * obwohl Whisper denselben Frame-Stream transkribierte. Ursache: Der
+     * Capture-Loop stockt unter Last (ASR-Inferenz + Pyannote + Voice-Bank),
+     * Frames bekamen Wall-Clock-Stempel → die Zeitachse im Buffer dehnte sich →
+     * Chunk [55,75] zeigte auf einen Bereich mit fast keinen Frames → Pyannote
+     * sah fast Stille → 0 Segmente (Boost 197x als Rausch-Orkan).
+     *
+     * Mit der Sample-Zeit bleibt die Position eines Frames exakt seine
+     * Audio-Position, egal wie stark der Loop verzögert wird.
+     */
+    private var pushedSampleCountMs = 0L
+
     // Ebene 1: Rohdaten – nie mergen
     // var: Hebel 2 (0.5.52) ersetzt die Liste atomar bei Split der Ground Truth –
     // sicherer gegen Race mit dem Whisper-Callback als in-place clear+addAll.
@@ -385,6 +405,7 @@ class LiveViewModel : ViewModel() {
                 chunkedAudioBuffer.clear()
                 diarizationChunkWorker.reset()
                 sessionVoiceBank.reset()
+                pushedSampleCountMs = 0L
             }
             engine.startSession()
 
@@ -394,8 +415,11 @@ class LiveViewModel : ViewModel() {
                     if (result != null && result.text.isNotBlank()) handleResult(result.text, result.isFinal)
                     if (ENABLE_CHUNKED_DIARIZATION) {
                         // Gleis 2 (neu): Frame in den Chunk-Buffer – non-blocking (~20ns Lock).
-                        // Der audioAccumulator wird hier bewusst NICHT gefüttert (Memory-Leak-Schutz).
-                        chunkedAudioBuffer.push(frame, sessionRelativeMs())
+                        // KRITISCH: Sample-basierte Zeit statt Wall-Clock (0.5.58) – siehe
+                        // pushedSampleCountMs-Doku. Sonst dehnt sich die Buffer-Zeitachse
+                        // unter Last und Chunks zeigen auf fast leere Bereiche (0 Segmente).
+                        chunkedAudioBuffer.push(frame, pushedSampleCountMs)
+                        pushedSampleCountMs += frame.size * 1000L / 16000
                     } else {
                         // Gleis 2 (alt): bisheriger Accumulator-Pfad
                         synchronized(audioLock) {
