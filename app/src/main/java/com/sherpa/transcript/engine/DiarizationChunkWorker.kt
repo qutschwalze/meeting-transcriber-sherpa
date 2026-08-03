@@ -71,6 +71,21 @@ class DiarizationChunkWorker(
         private const val MIN_RETRY_SAMPLES = 10 * SAMPLE_RATE
 
         /**
+         * Noise Gate (0.5.57): Samples unter diesem Absolut-Pegel (nach DC-Zentrierung)
+         * werden auf 0 gesetzt. Killt Mikrofonrauschen, ohne leise Sprache zu fressen
+         * (leise Konsonanten liegen i.d.R. über 0.001 bei 16-bit-Audio [-60 dBFS]).
+         */
+        private const val noiseGateThreshold = 0.001f
+
+        /**
+         * Gain-Limit (0.5.57): Harte Obergrenze für den RMS-Boost.
+         * Log-Beweis 0.5.56: Boost 197x (RMS 0.0005) riss den Noise Floor hoch →
+         * Pyannote sah nur Rauschen, alles kollabierte auf 1 Sprecher.
+         * 10x = +20 dB, genug um leise Sprecher hörbar zu machen.
+         */
+        private const val maxBoostFactor = 10f
+
+        /**
          * Chunk-Retry (0.5.54): Mehrere Versätze für den 2. Engine-Versuch.
          * Log-Befund 0.5.53: Chunk [55,75] liefert reproduzierbar 0 Segmente –
          * ein einzelner 5s-Versatz reicht nicht, mehrere Fenster werden probiert.
@@ -291,20 +306,18 @@ class DiarizationChunkWorker(
     }
 
     /**
-     * Hebel C (0.5.55/0.5.56): RMS-Normalisierung + DC-Blocker gegen Pyannote-VAD-Aussetzer.
+     * Hebel C (0.5.55–0.5.57): RMS-Normalisierung + DC-Blocker + Noise Gate + Gain-Limit.
      *
-     * Log-Befund 0.5.55: Chunk [55,75] liefert trotz 10,5x Boost weiterhin 0 Segmente,
-     * obwohl Whisper dort Text transkribiert. Ursache: Smartphone-Mikrofone haben einen
-     * minimalen DC-Offset (Nulllinie ≠ 0). Bei 10–23x Verstärkung wird daraus ein
-     * massiver, asymmetrischer Energie-Block → Pyannote interpretiert das als "kaputte
-     * Aufnahme"/Maschinenlärm → VAD sagt Stille.
+     * Log-Befund 0.5.56: DC-Blocker rettet die 2. Hälfte, aber Chunk [55,75] lieferte
+     * Boost 197x (RMS 0.0005) – der Noise Floor wurde mit hochgerissen, Pyannote sah
+     * nur noch Rauschen (0 Segmente) und am Ende kollabierte alles auf 1 Sprecher.
      *
-     * Fix: Mean Subtraction (DC-Blocker) zentriert das Signal exakt auf die Nulllinie,
-     * BEVOR der RMS berechnet und verstärkt wird. Das zentrierte Array wird IMMER
-     * zurückgegeben (auch ohne Boost) – die Engine bekommt stets DC-freies Audio.
-     *
-     * Nur VERSTÄRKEN wenn der RMS unter dem Ziel-Pegel liegt (0.1); Clipping (> 0.99)
-     * wird verhindert. Geringe Boosts (< 1.5x) werden ignoriert.
+     * Pipeline in dieser Reihenfolge:
+     * 1. Mean Subtraction (DC-Blocker): zentriert auf die Nulllinie
+     * 2. Noise Gate: Samples unter [noiseGateThreshold] → 0 (Mikrorauschen killen)
+     * 3. RMS berechnen, nur verstärken wenn zu leise (Ziel 0.1)
+     * 4. Gain-Limit: NIE mehr als [maxBoostFactor] (10x) – verhindert
+     *    Rausch-Orkane bei fast stillem Audio (Log-Beweis: 197x = pathologisch)
      *
      * WICHTIG: Nur der Engine-Pfad nutzt die normalisierten Samples. Die
      * Voice-Bank-Extraktion arbeitet mit dem Original-Audio, sonst würden die
@@ -325,7 +338,11 @@ class DiarizationChunkWorker(
         var sumSquares = 0f
         var maxPeak = 0f
         for (i in samples.indices) {
-            val centered = samples[i] - mean
+            var centered = samples[i] - mean
+            // 2. Noise Gate: absolutes Mikrorauschen auf 0 (nach der Zentrierung!)
+            if (kotlin.math.abs(centered) < noiseGateThreshold) {
+                centered = 0f
+            }
             centeredSamples[i] = centered
             val absSample = kotlin.math.abs(centered)
             sumSquares += centered * centered
@@ -335,19 +352,23 @@ class DiarizationChunkWorker(
         val rms = kotlin.math.sqrt((sumSquares / samples.size).toDouble()).toFloat()
         if (rms < 0.0001f) return centeredSamples // absolute Stille
 
-        // 2. Nur verstärken wenn zu leise (Ziel-Pegel 0.1), Clipping verhindern
+        // 3. Nur verstärken wenn zu leise (Ziel-Pegel 0.1), Clipping verhindern
         val targetRms = 0.1f
         var gain = 1f
         if (rms < targetRms) {
             gain = targetRms / rms
+            // 4. Gain-Limit: harter Riegel – niemals 197x wie in 0.5.56!
+            if (gain > maxBoostFactor) {
+                gain = maxBoostFactor
+            }
             if (maxPeak * gain > 0.99f) {
                 gain = 0.99f / maxPeak
             }
         }
 
         if (gain > 1.5f) {
-            Log.d(TAG, "normalizeAudio: DC-Offset $mean entfernt, Boost ${String.format("%.2fx", gain)} " +
-                    "(RMS ${String.format("%.4f", rms)} → Ziel $targetRms)")
+            Log.d(TAG, "normalizeAudio: DC-Offset $mean entfernt, Noise-Gate an, Boost ${String.format("%.2fx", gain)} " +
+                    "(Limit ${maxBoostFactor}x, RMS ${String.format("%.4f", rms)} → Ziel $targetRms)")
             for (i in centeredSamples.indices) {
                 centeredSamples[i] = centeredSamples[i] * gain
             }

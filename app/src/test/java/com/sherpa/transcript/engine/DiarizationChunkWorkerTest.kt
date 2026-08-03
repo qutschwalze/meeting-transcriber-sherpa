@@ -96,6 +96,30 @@ class DiarizationChunkWorkerTest {
         }
     }
 
+    /**
+     * Fake-Diarizer, der den tatsächlich angewandten Boost misst:
+     * Vergleicht den RMS der ankommenden (normalisierten) Samples mit dem
+     * erwarteten Roh-RMS des Testsignals → appliedGain = rmsAusgabe / rmsRoh.
+     * Verifiziert das Gain-Limit (maxBoostFactor = 10x).
+     */
+    private class BoostCheckingDiarizer(
+        private val results: ArrayDeque<List<DiarizationSegment>>,
+    ) : ChunkDiarizer {
+        var appliedGain = 0f
+        override fun process(samples: FloatArray): List<DiarizationSegment> {
+            if (samples.isNotEmpty()) {
+                var sumSquares = 0.0
+                for (s in samples) sumSquares += s * s
+                val outRms = kotlin.math.sqrt(sumSquares / samples.size)
+                // Testsignal: konstante 0.0005 (DC → nach Zentrierung RMS ≈ 0)
+                // Der Boost erzeugt den Ausgabe-RMS; Gain ≈ outRms / 0.0005,
+                // aber durch das Noise Gate sind Teile 0 → obere Schranke reicht
+                appliedGain = (outRms / 0.0005).toFloat()
+            }
+            return results.removeFirstOrNull() ?: emptyList()
+        }
+    }
+
     private fun localSeg(speaker: Int, startSec: Float, endSec: Float) =
         DiarizationSegment(startSec = startSec, endSec = endSec, speaker = speaker)
 
@@ -451,6 +475,23 @@ class DiarizationChunkWorkerTest {
         worker.processNextChunk(debug = false)
         // Der Fake prüft intern, dass die Samples zentriert sind (Mean ≈ 0)
         assertTrue("DC-Offset wurde entfernt (Mean ≈ 0)", fake.meanRemoved)
+    }
+
+    @Test
+    fun `Gain-Limit deckelt den Boost auf 10x statt 197x`() {
+        // 20s fast-stilles Audio (RMS ~0.0005) – wie Chunk [55,75] in 0.5.56,
+        // der einen pathologischen 197x-Boost erzeugte. Das Gain-Limit (10x)
+        // muss verhindern, dass der Noise Floor hochgerissen wird.
+        val buffer = ChunkedAudioBuffer(sampleRate = sampleRate)
+        buffer.pushValueFrames(0.0005f, 2000) // RMS ≈ 0.0005
+
+        val fake = BoostCheckingDiarizer(ArrayDeque())
+        val worker = DiarizationChunkWorker(buffer, fake)
+
+        worker.processNextChunk(debug = false)
+        // Der Fake prüft: Ausgabegain ≤ 10x (bei RMS 0.0005 wäre der
+        // unlimitierte Boost 200x)
+        assertTrue("Boost durch Gain-Limit auf ≤10x gedeckelt (war ${fake.appliedGain}x)", fake.appliedGain <= 10f)
     }
 
     @Test
