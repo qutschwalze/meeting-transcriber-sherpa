@@ -1,7 +1,6 @@
 package com.sherpa.transcript.engine
 
 import android.util.Log
-import com.sherpa.transcript.domain.model.TranscriptSegment
 
 /**
  * Zeitbereich in absoluten Session-Sekunden (wie DiarizationSegment).
@@ -16,6 +15,17 @@ data class TimeRange(val startSec: Float, val endSec: Float) {
         return (e - s).coerceAtLeast(0f)
     }
 }
+
+/**
+ * Ein zeitlich verorteter Sprecher-Abschnitt mit GLOBALER (Session-)Speaker-ID.
+ * Der Bestand, gegen den der RollingReconciler neue Chunks abgleicht.
+ * Bewusst ASR-unabhängig (kein Text, keine segmentId) – reine Diarization-Ebene.
+ */
+data class SpeakerTimeRange(
+    val startSec: Float,
+    val endSec: Float,
+    val speakerId: Int,
+)
 
 /**
  * Ergebnis eines RollingReconciler-Laufs.
@@ -69,13 +79,13 @@ class RollingReconciler(
      *
      * @param localSegments          Diarization-Segmente aus Chunk B (Zeiten ABSOLUT, offset-korrigiert).
      * @param overlapZone            Overlap-Zone [startSec, endSec] – nur hier wird gematcht.
-     * @param previousGlobalSegments Bestätigte Segmente aus dem Bestand (Chunk A) mit speakerId "speaker_N".
+     * @param previousGlobalSegments Bestätigte globale Segmente aus dem Bestand (Chunk A).
      * @param debug                  Aktiviert ASSIGN_DBG-artige Logs.
      */
     fun reconcile(
         localSegments: List<DiarizationSegment>,
         overlapZone: TimeRange,
-        previousGlobalSegments: List<TranscriptSegment>,
+        previousGlobalSegments: List<SpeakerTimeRange>,
         debug: Boolean = false,
     ): ReconcilerResult {
         if (localSegments.isEmpty()) {
@@ -86,15 +96,11 @@ class RollingReconciler(
         val globalRanges = mutableMapOf<Int, MutableList<TimeRange>>()
         var maxGlobalId = -1
         for (seg in previousGlobalSegments) {
-            val globalId = seg.speakerId
-                ?.removePrefix("speaker_")
-                ?.toIntOrNull()
-                ?: continue
-            if (seg.endTimeMs <= seg.startTimeMs) continue
-            globalRanges.getOrPut(globalId) { mutableListOf() }.add(
-                TimeRange(seg.startTimeMs / 1000f, seg.endTimeMs / 1000f)
+            if (seg.endSec <= seg.startSec) continue
+            globalRanges.getOrPut(seg.speakerId) { mutableListOf() }.add(
+                TimeRange(seg.startSec, seg.endSec)
             )
-            if (globalId > maxGlobalId) maxGlobalId = globalId
+            if (seg.speakerId > maxGlobalId) maxGlobalId = seg.speakerId
         }
         val knownGlobalIds = globalRanges.keys.toSet()
 

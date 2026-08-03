@@ -1,6 +1,5 @@
 package com.sherpa.transcript.engine
 
-import com.sherpa.transcript.domain.model.TranscriptSegment
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -14,16 +13,8 @@ import org.junit.Test
 class RollingReconcilerTest {
 
     /** Erzeugt ein bestätigtes globales Segment (Chunk A / Bestand). */
-    private fun globalSeg(id: String, speaker: Int, startSec: Float, endSec: Float) =
-        TranscriptSegment(
-            segmentId = id,
-            text = "global-$id",
-            startTimeMs = (startSec * 1000f).toLong(),
-            endTimeMs = (endSec * 1000f).toLong(),
-            isFinal = true,
-            speakerId = "speaker_$speaker",
-            speakerLabel = "Sprecher ${speaker + 1}",
-        )
+    private fun globalSeg(speaker: Int, startSec: Float, endSec: Float) =
+        SpeakerTimeRange(startSec = startSec, endSec = endSec, speakerId = speaker)
 
     /** Erzeugt ein lokales Diarization-Segment aus Chunk B (absolute Zeiten). */
     private fun localSeg(speaker: Int, startSec: Float, endSec: Float) =
@@ -35,7 +26,7 @@ class RollingReconcilerTest {
     fun `1 zu 1 Match - gleiche ID wird beibehalten`() {
         val reconciler = RollingReconciler()
         val previous = listOf(
-            globalSeg("a1", speaker = 0, startSec = 5f, endSec = 20f),
+            globalSeg(speaker = 0, startSec = 5f, endSec = 20f),
         )
         val local = listOf(
             localSeg(speaker = 0, startSec = 15f, endSec = 35f),
@@ -52,7 +43,7 @@ class RollingReconcilerTest {
     fun `neuer Sprecher in Chunk B wird neue globale ID`() {
         val reconciler = RollingReconciler()
         val previous = listOf(
-            globalSeg("a1", speaker = 0, startSec = 5f, endSec = 20f),
+            globalSeg(speaker = 0, startSec = 5f, endSec = 20f),
         )
         val local = listOf(
             localSeg(speaker = 0, startSec = 15f, endSec = 22f), // matcht global 0
@@ -73,8 +64,8 @@ class RollingReconcilerTest {
         // Lokal:  Speaker 0 = Person B (Engine nennt B jetzt 0), Speaker 1 = Person A
         val reconciler = RollingReconciler()
         val previous = listOf(
-            globalSeg("a1", speaker = 0, startSec = 10f, endSec = 17.5f), // Person A
-            globalSeg("a2", speaker = 1, startSec = 17.5f, endSec = 22f), // Person B
+            globalSeg(speaker = 0, startSec = 10f, endSec = 17.5f), // Person A
+            globalSeg(speaker = 1, startSec = 17.5f, endSec = 22f), // Person B
         )
         val local = listOf(
             localSeg(speaker = 1, startSec = 15f, endSec = 17.5f), // Person A (lokal als 1)
@@ -96,7 +87,7 @@ class RollingReconcilerTest {
     fun `Confidence-Gate - Overlap unter 500ms wird neuer Speaker`() {
         val reconciler = RollingReconciler(minMatchOverlapSec = 0.5f)
         val previous = listOf(
-            globalSeg("a1", speaker = 0, startSec = 5f, endSec = 20f),
+            globalSeg(speaker = 0, startSec = 5f, endSec = 20f),
         )
         // Lokal 0 überlappt global 0 nur 0.2s (19.8–20.0) → unter Gate
         val local = listOf(
@@ -114,7 +105,7 @@ class RollingReconcilerTest {
     fun `Greedy - bei Kollision gewinnt der groesste Overlap`() {
         val reconciler = RollingReconciler()
         val previous = listOf(
-            globalSeg("a1", speaker = 0, startSec = 10f, endSec = 20f),
+            globalSeg(speaker = 0, startSec = 10f, endSec = 20f),
         )
         // Beide lokalen IDs voten auf global 0, aber lokal 0 hat mehr Overlap
         val local = listOf(
