@@ -66,8 +66,13 @@ data class ReconcilerResult(
  * Zustandslos: alle Eingaben als Parameter, keine internen Mutable States.
  */
 class RollingReconciler(
-    /** Mindest-Overlap (Sekunden) in der Zone für einen gültigen Match. */
-    private val minMatchOverlapSec: Float = 0.5f,
+    /**
+     * Mindest-Overlap (Sekunden) in der Zone für einen gültigen Match.
+     * 0.3s (300ms): konservativer Standard – senkt die Schwelle für kurze
+     * Sprecher-Aktivität im Final Block, ohne Fehlzuordnungen zu riskieren.
+     * (Abgestimmt auf TimelineComposer.MIN_CONFIDENCE_OVERLAP_MS = 300ms.)
+     */
+    private val minMatchOverlapSec: Float = 0.3f,
 ) {
 
     companion object {

@@ -102,6 +102,29 @@ class RollingReconcilerTest {
     }
 
     @Test
+    fun `Default-Gate 300ms - Overlap 400ms wird gematcht, 200ms nicht`() {
+        val reconciler = RollingReconciler() // Default = 0.3f
+        val previous = listOf(
+            globalSeg(speaker = 0, startSec = 5f, endSec = 20f),
+        )
+
+        // 400ms Overlap (19.6–20.0) → über Default-Gate (300ms) → Match
+        val match = reconciler.reconcile(
+            listOf(localSeg(speaker = 0, startSec = 19.6f, endSec = 25f)),
+            zone, previous, debug = false,
+        )
+        assertEquals("400ms Overlap matcht", 0, match.mapping[0])
+
+        // 200ms Overlap (19.8–20.0) → unter Default-Gate → neuer Speaker
+        val noMatch = reconciler.reconcile(
+            listOf(localSeg(speaker = 1, startSec = 19.8f, endSec = 25f)),
+            zone, previous, debug = false,
+        )
+        assertEquals("200ms Overlap matcht nicht", 1, noMatch.mapping[1])
+        assertTrue("als neuer Speaker markiert", 1 in noMatch.newSpeakerIds)
+    }
+
+    @Test
     fun `Greedy - bei Kollision gewinnt der groesste Overlap`() {
         val reconciler = RollingReconciler()
         val previous = listOf(
