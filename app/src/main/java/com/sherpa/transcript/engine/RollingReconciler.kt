@@ -1,6 +1,7 @@
 package com.sherpa.transcript.engine
 
 import android.util.Log
+import com.sherpa.transcript.domain.audio.TestLog
 
 /**
  * Zeitbereich in absoluten Session-Sekunden (wie DiarizationSegment).
@@ -256,6 +257,20 @@ class RollingReconciler(
                 .joinToString(",") { (l, g) -> "$l→$g" }
             val newStr = newSpeakerIds.sorted().joinToString(",")
             Log.d(TAG, "reconcile: zone=${overlapZone.startSec}-${overlapZone.endSec}s " +
+                    "localIds=[${allLocalIds.joinToString(",")}] globalIds=[${knownGlobalIds.sorted().joinToString(",")}] " +
+                    "votes={$votesStr} mapping=[$mappingStr] new=[$newStr] " +
+                    "zoneOverlap=${String.format("%.1f", zoneOverlapTotal)}s")
+        } else {
+            // 0.5.73: Auch ohne debug-Flag ins TestLog (Datei existiert nur im Debug-Mode)
+            val votesStr = votes.entries.joinToString(" | ") { (localId, gv) ->
+                val sorted = gv.entries.sortedByDescending { it.value }
+                    .joinToString(",") { (gid, ov) -> String.format("%d:%.2fs", gid, ov) }
+                "$localId→[$sorted]"
+            }
+            val mappingStr = mapping.entries.sortedBy { it.key }
+                .joinToString(",") { (l, g) -> "$l→$g" }
+            val newStr = newSpeakerIds.sorted().joinToString(",")
+            TestLog.log("RECONCILE zone=${overlapZone.startSec}-${overlapZone.endSec}s " +
                     "localIds=[${allLocalIds.joinToString(",")}] globalIds=[${knownGlobalIds.sorted().joinToString(",")}] " +
                     "votes={$votesStr} mapping=[$mappingStr] new=[$newStr] " +
                     "zoneOverlap=${String.format("%.1f", zoneOverlapTotal)}s")

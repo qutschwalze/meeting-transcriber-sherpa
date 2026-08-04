@@ -253,11 +253,18 @@ class DiarizationChunkWorker(
                     driftResolvedCount++
                     Log.d(TAG, "VOICE_BANK resolve: local=$localId → global=$matchedGlobalId " +
                             "(dur=${durationMs}ms, statt neue ID ${result.mapping[localId]})")
+                    TestLog.log("VB local=$localId dur=${durationMs}ms → RESOLVE auf global=$matchedGlobalId (statt neue ID ${result.mapping[localId]})")
                 } else {
                     // Wirklich neuer Sprecher → in die Bank einschreiben
                     val newGlobalId = result.mapping[localId] ?: continue
                     val enrolled = voiceBank.enroll(newGlobalId, samples, durationMs)
-                    if (enrolled) enrolledCount++ else skippedCount++
+                    if (enrolled) {
+                        enrolledCount++
+                        TestLog.log("VB local=$localId dur=${durationMs}ms → ENROLL global=$newGlobalId OK")
+                    } else {
+                        skippedCount++
+                        TestLog.log("VB local=$localId dur=${durationMs}ms → ENROLL global=$newGlobalId SKIP")
+                    }
                 }
             }
             if (driftResolvedCount > 0 || enrolledCount > 0) {
