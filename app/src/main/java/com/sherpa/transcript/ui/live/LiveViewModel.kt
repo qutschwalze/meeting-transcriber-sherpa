@@ -671,6 +671,13 @@ class LiveViewModel : ViewModel() {
      * ist nicht zwingend die Bestands-ID). Geräte-Log 0.5.63 zeigte dadurch
      * "auf Sprecher 2 gemappt" für den ersten bestätigten Sprecher.
      *
+     * 0.5.65-Fix: Auch UNLABELED Segmente (kein speakerId, z.B. kein Overlap
+     * mit Diarization-Segmenten) werden gemappt, wenn sie komplett vor dem
+     * ersten bestätigten Sprecher enden. Geräte-Log 0.5.64: "Nicht mehr merken,
+     * aber" (3,7-4,9s) und "die Erfahrung deswegen ist aus" (6,2-7,6s) blieben
+     * unlabeled, weil der fullBestand dort keine Segmente hat – die Referenz
+     * ordnet sie Sprecher 1 zu.
+     *
      * Konservativ: NUR Segmente, die KOMPLETT VOR dem ersten bestätigten Sprecher
      * enden, werden auf dessen ID gemappt. Spätere unbestätigte Fragmente bleiben
      * unangetastet (könnten echte neue Sprecher sein). Läuft nur im Final-Lauf
@@ -687,17 +694,20 @@ class LiveViewModel : ViewModel() {
         val targetLabel = firstConfirmed.speakerLabel ?: targetId
         val firstConfirmedStartMs = firstConfirmed.startTimeMs
         var resolved = 0
+        var resolvedUnlabeled = 0
         assignedFinalSegments = assignedFinalSegments.map { seg ->
             val spkNum = seg.speakerId?.removePrefix("speaker_")?.toIntOrNull()
-            if (spkNum != null && spkNum !in confirmedIds && seg.endTimeMs <= firstConfirmedStartMs) {
+            val isUnconfirmed = spkNum == null || spkNum !in confirmedIds
+            if (isUnconfirmed && seg.endTimeMs <= firstConfirmedStartMs) {
                 resolved++
+                if (spkNum == null) resolvedUnlabeled++
                 seg.copy(speakerId = targetId, speakerLabel = targetLabel)
             } else seg
         }
         if (resolved > 0) {
             bestAssignmentQuality = computeQuality(assignedFinalSegments)
             Log.i(TAG, "resolveLeadingUnconfirmedSpeakerLabels: $resolved Segment(e) auf $targetLabel gemappt " +
-                    "(vor erstem bestätigten Start ${firstConfirmedStartMs}ms, Bank=${confirmedIds.sorted()})")
+                    "(davon $resolvedUnlabeled unlabeled, vor erstem bestätigten Start ${firstConfirmedStartMs}ms, Bank=${confirmedIds.sorted()})")
         }
     }
 
