@@ -89,12 +89,32 @@ class SherpaEmbeddingComputer(
  */
 class SessionVoiceBank(
     private val computer: SpeakerEmbeddingComputer,
-    /** Cosine-Similarity-Schwelle für einen Match (0.38 = kalibriert, s. 0.5.48/0.5.49). */
-    private val matchThreshold: Float = 0.38f,
+    /**
+     * Cosine-Similarity-Schwelle für einen Match.
+     *
+     * 0.5.61-Kalibrierung (gemessen mit echter Mikrofon-Aufnahme + Titanet,
+     * Referenz-Sprecherzeiten aus dem Transkript):
+     *   INTRA (gleicher Sprecher): min 0.638, max 0.908, mean 0.812
+     *   INTER (verschiedene):      min 0.344, max 0.612, mean 0.486
+     *   Sweet Spot: 0.625 (Lücke 0.612 → 0.638, nur 0.026 breit)
+     * 0.38 (0.5.49, auf dem alten Wall-Clock-Pfad kalibriert) liegt UNTER dem
+     * Inter-Maximum → matcht verschiedene Sprecher fälschlich (Log-Befund
+     * 0.5.60: beide lokalen Speaker → global=0 mit sim 0.672/0.773).
+     * 0.62 = konservativ (über Inter-max 0.612, unter Intra-min 0.638).
+     */
+    private val matchThreshold: Float = 0.62f,
     /** Mindest-Redezeit für ein Enrollment (verhindert Einschreiben auf Fragmente). */
     private val minEnrollmentSec: Float = 2f,
+    /**
+     * Mindest-Redezeit für identify (0.5.61).
+     * Log-Befund 0.5.60: 1s-Segmente (995ms/1012ms) erzeugten FALSCH-Matches
+     * (sim 0.669/0.672 → global=0). Unter 2s ist das Embedding akustisch
+     * instabil – solche Segmente werden NICHT aufgelöst (bleiben unlabeled,
+     * besser als falsch gelabelt). Konsistent mit dem Enrollment-Gate.
+     */
+    private val minIdentifySec: Float = 2f,
     /** Mindest-Ähnlichkeit zwischen 2 Kontakten für die Enrollment-Bestätigung. */
-    private val pendingConfirmThreshold: Float = 0.38f,
+    private val pendingConfirmThreshold: Float = 0.62f,
 ) {
 
     companion object {
@@ -143,6 +163,14 @@ class SessionVoiceBank(
      */
     fun identify(samples: FloatArray): Int? {
         if (samples.isEmpty() || (voiceprints.isEmpty() && pendingEnrollments.isEmpty())) return null
+        // 0.5.61: Kurze Segmente (< minIdentifySec) nicht auflösen – ihr Embedding
+        // ist akustisch instabil und erzeugt FALSCH-Matches (Log-Befund 0.5.60:
+        // 1s-Segmente mit sim 0.669/0.672 → fälschlich auf global=0 gematcht).
+        // 16 kHz: minIdentifySec * 16000 Samples. Besser unlabeled als falsch.
+        if (samples.size < (minIdentifySec * 16000).toInt()) {
+            Log.d(TAG, "identify skip: nur ${samples.size / 16}ms (< ${minIdentifySec}s) – zu kurz für stabiles Embedding")
+            return null
+        }
         val embedding = computer.computeEmbedding(samples) ?: return null
 
         var bestId: Int? = null
