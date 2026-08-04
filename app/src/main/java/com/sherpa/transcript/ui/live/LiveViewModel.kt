@@ -655,6 +655,47 @@ class LiveViewModel : ViewModel() {
     }
 
     /**
+     * Heuristik (0.5.63): Führende unbestätigte Speaker-Labels dem ersten
+     * bestätigten Sprecher zuordnen.
+     *
+     * Host-Befund (Testclip Di._07.52, lokale Reproduktion exakt App-Version):
+     * Der 1. Chunk mit FIXED_2 erzeugt für einen einzelnen Sprecher zwei Cluster
+     * (bekannter "Monologue split" – numClusters=2 erzwingt 2 Cluster). Das
+     * 0-10s-Prä-Fragment (z.B. "Nicht mehr merken, aber") wird von der Voice-Bank
+     * nie bestätigt (Titanet-Sim 0.05 zu A), bleibt aber im globalen Bestand und
+     * erscheint als zusätzlicher Sprecher (3 statt 2).
+     *
+     * Konservativ: NUR Segmente, die KOMPLETT VOR dem ersten bestätigten Sprecher
+     * enden, werden auf dessen ID gemappt. Spätere unbestätigte Fragmente bleiben
+     * unangetastet (könnten echte neue Sprecher sein). Läuft nur im Final-Lauf
+     * (forceFinal) – Rolling-Zustände bleiben unverändert.
+     */
+    private fun resolveLeadingUnconfirmedSpeakerLabels() {
+        val confirmedIds = sessionVoiceBank.enrolledSpeakerIds
+        if (confirmedIds.isEmpty()) return
+        val confirmedSegs = assignedFinalSegments.filter { seg ->
+            seg.speakerId?.removePrefix("speaker_")?.toIntOrNull() in confirmedIds
+        }
+        val firstConfirmedStartMs = confirmedSegs.minOfOrNull { it.startTimeMs } ?: return
+        val firstConfirmedId = confirmedIds.min()
+        val targetId = "speaker_$firstConfirmedId"
+        val targetLabel = "Sprecher ${firstConfirmedId + 1}"
+        var resolved = 0
+        assignedFinalSegments = assignedFinalSegments.map { seg ->
+            val spkNum = seg.speakerId?.removePrefix("speaker_")?.toIntOrNull()
+            if (spkNum != null && spkNum !in confirmedIds && seg.endTimeMs <= firstConfirmedStartMs) {
+                resolved++
+                seg.copy(speakerId = targetId, speakerLabel = targetLabel)
+            } else seg
+        }
+        if (resolved > 0) {
+            bestAssignmentQuality = computeQuality(assignedFinalSegments)
+            Log.i(TAG, "resolveLeadingUnconfirmedSpeakerLabels: $resolved Segment(e) auf $targetLabel gemappt " +
+                    "(vor erstem bestätigten Start ${firstConfirmedStartMs}ms, Bank=${confirmedIds.sorted()})")
+        }
+    }
+
+    /**
      * Baut aus allen rawFinalSegments die aktuell beste Speaker-Overlay-Liste auf.
      * Verlustfrei: jedes Rohsegment ist enthalten, ggf. mit Label aus assignedFinalSegments.
      */
@@ -1110,6 +1151,10 @@ class LiveViewModel : ViewModel() {
                     } else {
                         assignedFinalSegments = merged
                         bestAssignmentQuality = mergedQuality
+                        // Heuristik (0.5.63): Führende unbestätigte Labels im Final-Lauf
+                        // dem ersten bestätigten Sprecher zuordnen – MUSS vor renumber laufen,
+                        // damit die Nummerierung nach der Auflösung stimmt.
+                        if (forceFinal) resolveLeadingUnconfirmedSpeakerLabels()
                         renumberLiveSpeakerIds()
                         // FIRST_2SPK: erster 2-Speaker-Zustand der Session – Umschaltpunkt-Marker
                         if (!firstTwoSpeakerLogged && mergedQuality.distinctSpeakers >= 2) {

@@ -1,0 +1,4 @@
+# Generierte Artefakte – nicht ins Git
+asr_out.json
+pipeline_out.json
+clip16k.wav
