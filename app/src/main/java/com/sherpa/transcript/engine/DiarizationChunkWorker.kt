@@ -1,9 +1,15 @@
 package com.sherpa.transcript.engine
 
+import android.os.Environment
 import android.util.Log
+import com.sherpa.transcript.SherpaTranscriptApp
 import com.sherpa.transcript.domain.audio.AudioChunk
 import com.sherpa.transcript.domain.audio.ChunkedAudioBuffer
 import com.sherpa.transcript.domain.audio.TestLog
+import java.io.BufferedOutputStream
+import java.io.DataOutputStream
+import java.io.File
+import java.io.FileOutputStream
 
 /**
  * Abstraktion der Diarization-Engine für den ChunkWorker – testbar per Fake.
@@ -176,6 +182,14 @@ class DiarizationChunkWorker(
         // Original-Audio, sonst würden die Embeddings durch den Boost verzerrt.
         val normalizedSamples = normalizeAudio(chunk.samples)
         var engineSegments = diarizer.process(normalizedSamples)
+
+        // 0.5.74: Chunk-Diagnose-WAV (Debug-Mode) – die tatsächlichen Samples,
+        // die die Engine bekommt, für Host-Vergleich speichern. Log-Befund
+        // 0.5.73: App-Chunk [55,75] segmentiert als "A bis 65,97s", obwohl die
+        // WAV dort Sprecher B hat (Titanet cos→B=0,73 ab 55s) – Chunk-RMS
+        // identisch zur WAV, aber Segmentierung weicht ab. Chunk-WAVs erlauben
+        // den sample-genauen Vergleich App-Chunk vs. WAV-Fenster.
+        if (TestLog.path != null) saveChunkWav(chunk)
 
         // Chunk-Retry (0.5.53+): Bei 0 segments mehrere versetzte Fenster versuchen.
         // Log-Befund: Chunk [55,75] liefert reproduzierbar 0 Segmente – ein einzelner
@@ -458,5 +472,52 @@ class DiarizationChunkWorker(
         }
 
         return (kept + added).sortedBy { it.startSec }
+    }
+
+    /** 0.5.74: Chunk-Samples als Diagnose-WAV speichern (Debug-Mode). */
+    private fun saveChunkWav(chunk: AudioChunk) {
+        try {
+            val base = SherpaTranscriptApp.instance
+                .getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: return
+            val dir = File(base, "testaufnahmen/chunks")
+            if (!dir.exists() && !dir.mkdirs()) return
+            val f = File(dir, "chunk_${"%.1f".format(chunk.startSec)}_${"%.1f".format(chunk.endSec)}.wav")
+            val out = DataOutputStream(BufferedOutputStream(FileOutputStream(f)))
+            // WAV-Header (16 kHz mono 16-bit PCM, Little-Endian)
+            out.writeBytes("RIFF")
+            writeLeInt(out, 36 + chunk.samples.size * 2)
+            out.writeBytes("WAVE")
+            out.writeBytes("fmt ")
+            writeLeInt(out, 16)
+            writeLeShort(out, 1)
+            writeLeShort(out, 1)
+            writeLeInt(out, 16000)
+            writeLeInt(out, 32000)
+            writeLeShort(out, 2)
+            writeLeShort(out, 16)
+            out.writeBytes("data")
+            writeLeInt(out, chunk.samples.size * 2)
+            for (v in chunk.samples) {
+                val s = (v * 32767f).toInt().coerceIn(-32768, 32767)
+                out.writeByte(s and 0xFF)
+                out.writeByte((s shr 8) and 0xFF)
+            }
+            out.close()
+            Log.d(TAG, "Chunk-WAV gespeichert: ${f.absolutePath} (${chunk.samples.size / 16000.0f}s)")
+        } catch (t: Throwable) {
+            Log.w(TAG, "Chunk-WAV fehlgeschlagen: ${t.message}")
+        }
+    }
+
+    private fun writeLeInt(out: DataOutputStream, v: Int) {
+        out.writeByte(v and 0xFF)
+        out.writeByte((v shr 8) and 0xFF)
+        out.writeByte((v shr 16) and 0xFF)
+        out.writeByte((v shr 24) and 0xFF)
+    }
+
+    private fun writeLeShort(out: DataOutputStream, v: Int) {
+        out.writeByte(v and 0xFF)
+        out.writeByte((v shr 8) and 0xFF)
     }
 }
