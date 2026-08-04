@@ -87,6 +87,35 @@ class RollingReconciler(
 
     companion object {
         private const val TAG = "RollingReconciler"
+
+        /**
+         * Mindest-Redezeit (Summe der Fragmente einer Engine-ID) für die
+         * Fragment-Aggregation (0.5.64). Konsistent mit der Mindest-Redezeit
+         * der Voice-Bank (minEnrollmentSec = 2s): Was die Bank einschreiben
+         * könnte, darf der Reconciler nicht wegwerfen.
+         */
+        private const val MIN_AGGREGATE_SEC = 2f
+    }
+
+    /**
+     * Aggregiert winzige Fragmente (< [minFragmentSec]) pro Engine-ID zu einem
+     * Segment, wenn ihre Redezeit zusammen >= [MIN_AGGREGATE_SEC] beträgt.
+     * Nur für den Fall, dass ALLE lokalen Segmente eines Chunks Fragmente sind
+     * (sonst greift der normale Filter). Das aggregierte Segment deckt die
+     * äußeren Grenzen ab ([min start, max end]) und trägt die Engine-ID.
+     */
+    private fun aggregateFragments(localSegments: List<DiarizationSegment>): List<DiarizationSegment> {
+        if (localSegments.isEmpty()) return emptyList()
+        val bySpeaker = localSegments.groupBy { it.speaker }
+        val result = mutableListOf<DiarizationSegment>()
+        for ((speaker, segs) in bySpeaker) {
+            val totalDur = segs.sumOf { (it.endSec - it.startSec).toDouble() }
+            if (totalDur < MIN_AGGREGATE_SEC) continue
+            val start = segs.minOf { it.startSec }
+            val end = segs.maxOf { it.endSec }
+            result.add(DiarizationSegment(startSec = start, endSec = end, speaker = speaker))
+        }
+        return result
     }
 
     /**
@@ -114,7 +143,25 @@ class RollingReconciler(
         val significantLocal = localSegments.filter { (it.endSec - it.startSec) >= minFragmentSec }
         val significantGlobal = previousGlobalSegments.filter { (it.endSec - it.startSec) >= minFragmentSec }
         if (significantLocal.isEmpty()) {
-            return ReconcilerResult(emptyList(), emptyMap(), emptyMap(), emptySet(), 0f)
+            // ── 0b. Fragment-Aggregation (0.5.64): Wenn ALLE lokalen Segmente unter
+            // minFragmentSec liegen (zerstückelte VAD auf Mikrofon-Aufnahmen), aber
+            // die Fragmente EINER Engine-ID zusammen substanzielle Redezeit haben,
+            // werden sie zu EINEM Segment aggregiert (min start, max end, die ID).
+            //
+            // Log-Befund Geräte-Test 0.5.63: Chunk [55,75] lieferte nach Retry-
+            // SUCCESS 7 Fragmente (< 0.4s) im Sprecher-B-Block (62-75s) → mapped=0
+            // → B kam nie in den globalen Bestand und nie in die Voice-Bank →
+            // Endzustand 3 Speaker statt 2, B-Block unlabeled. Ohne Aggregation
+            // ist ein komplett fragmentierter Chunk für Reconciler + Bank unsichtbar.
+            val aggregated = aggregateFragments(localSegments)
+            if (aggregated.isEmpty()) {
+                return ReconcilerResult(emptyList(), emptyMap(), emptyMap(), emptySet(), 0f)
+            }
+            if (debug) {
+                Log.d(TAG, "reconcile: alle ${localSegments.size} lokalen Segmente <${minFragmentSec}s " +
+                        "→ ${aggregated.size} aggregiertes Segment(e) (Redezeit >= ${MIN_AGGREGATE_SEC}s)")
+            }
+            return reconcile(aggregated, overlapZone, previousGlobalSegments, debug)
         }
         if (debug && significantLocal.size != localSegments.size) {
             Log.d(TAG, "reconcile: fragment filter removed ${localSegments.size - significantLocal.size} local + " +
