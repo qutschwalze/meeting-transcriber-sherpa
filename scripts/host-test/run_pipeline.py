@@ -281,7 +281,10 @@ cfg = sherpa_onnx.OfflineSpeakerDiarizationConfig(
     embedding=sherpa_onnx.SpeakerEmbeddingExtractorConfig(model=EMB_MODEL, num_threads=2, provider="cpu"),
     clustering=sherpa_onnx.FastClusteringConfig(num_clusters=2, threshold=0.3),
     min_duration_on=0.1,
-    min_duration_off=0.1,
+    # 0.5.71-Abgleich: App nutzt minDurationOff=0.05 (SpeakerDiarizationEngine.kt),
+    # nicht 0.1 – korrigiert, damit die Simulation die echte Segmentierung
+    # (und damit die 2s-Bank-Schwelle) exakt nachbildet.
+    min_duration_off=0.05,
 )
 diarizer = sherpa_onnx.OfflineSpeakerDiarization(cfg)
 emb_extractor = sherpa_onnx.SpeakerEmbeddingExtractor(
