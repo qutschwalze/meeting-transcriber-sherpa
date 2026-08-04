@@ -31,7 +31,105 @@ class DiarizationChunkWorkerTest {
     ) : ChunkDiarizer {
         override fun process(samples: FloatArray): List<DiarizationSegment> {
             assertTrue("FakeDiarizer: Samples vorhanden", samples.isNotEmpty())
-            return results.removeFirst()
+            // removeFirstOrNull: Chunk-Retry (2. Engine-Versuch) liefert leer,
+            // wenn keine weiteren Ergebnisse vordefiniert sind
+            return results.removeFirstOrNull() ?: emptyList()
+        }
+    }
+
+    /**
+     * Fake-Embedding-Computer: Der RMS-Pegel bestimmt die "Stimme".
+     * WICHTIG: RMS-basiert statt samples[0]-basiert – die Bank bekommt das
+     * ORIGINAL-Audio (unzentriert), aber konstante Test-Signale (1f/2f) sind
+     * reine DC-Träger; der RMS ist der robuste Unterscheider:
+     * Pegel 1f (RMS 1.0) = Stimme A, Pegel 2f (RMS 2.0) = Stimme B.
+     */
+    private class ValueComputer : SpeakerEmbeddingComputer {
+        override fun computeEmbedding(samples: FloatArray): FloatArray? {
+            if (samples.isEmpty()) return null
+            var sumSquares = 0.0
+            for (s in samples) sumSquares += s * s
+            val rms = kotlin.math.sqrt(sumSquares / samples.size)
+            return if (rms < 1.5f) floatArrayOf(1f, 0f, 0f) else floatArrayOf(0f, 1f, 0f)
+        }
+    }
+
+    private fun valueFrame(value: Float): FloatArray = FloatArray(frameSamples) { value }
+
+    private fun ChunkedAudioBuffer.pushValueFrames(value: Float, count: Int, startMs: Long = 0L) {
+        for (i in 0 until count) {
+            push(valueFrame(value), startMs + i * 10L)
+        }
+    }
+
+    /**
+     * Frame mit DC-Offset: schwingt um [offset] herum (Mean ≈ offset statt 0) –
+     * simuliert ein Smartphone-Mikrofon mit Gleichspannungsversatz.
+     */
+    private fun dcOffsetFrame(offset: Float): FloatArray =
+        FloatArray(frameSamples) { i -> if (i % 2 == 0) offset + 0.01f else offset - 0.01f }
+
+    private fun ChunkedAudioBuffer.pushDcOffsetFrames(offset: Float, count: Int, startMs: Long = 0L) {
+        for (i in 0 until count) {
+            push(dcOffsetFrame(offset), startMs + i * 10L)
+        }
+    }
+
+    /**
+     * Leises Signal: Schwingt mit kleiner Amplitude um 0 (RMS ≈ amplitude) –
+     * simuliert die leise Mikrofonaufnahme in Chunk [55,75] (RMS ~0.0005).
+     */
+    private fun quietFrame(amplitude: Float): FloatArray =
+        FloatArray(frameSamples) { i -> if (i % 2 == 0) amplitude else -amplitude }
+
+    private fun ChunkedAudioBuffer.pushQuietFrames(amplitude: Float, count: Int, startMs: Long = 0L) {
+        for (i in 0 until count) {
+            push(quietFrame(amplitude), startMs + i * 10L)
+        }
+    }
+
+    /**
+     * Fake-Diarizer, der den DC-Offset der ankommenden Samples prüft:
+     * Der DC-Blocker muss den Mean auf ≈ 0 zentriert haben, bevor die Engine
+     * das Audio bekommt (sonst wäre der Mean ≈ 0.05).
+     */
+    private class MeanCheckingDiarizer(
+        private val results: ArrayDeque<List<DiarizationSegment>>,
+    ) : ChunkDiarizer {
+        var meanRemoved = false
+        override fun process(samples: FloatArray): List<DiarizationSegment> {
+            if (samples.isNotEmpty()) {
+                var sum = 0.0
+                for (s in samples) sum += s
+                val mean = (sum / samples.size).toFloat()
+                // Zentriert: |Mean| < 0.01 (bei rohem DC-Offset wäre er ≈ 0.05)
+                if (kotlin.math.abs(mean) < 0.01f) meanRemoved = true
+            }
+            return results.removeFirstOrNull() ?: emptyList()
+        }
+    }
+
+    /**
+     * Fake-Diarizer, der den tatsächlich angewandten Boost misst:
+     * Vergleicht den RMS der ankommenden (normalisierten) Samples mit dem
+     * erwarteten Roh-RMS des Testsignals → appliedGain = rmsAusgabe / rmsRoh.
+     * Verifiziert das Gain-Limit (maxBoostFactor = 10x).
+     */
+    private class BoostCheckingDiarizer(
+        private val results: ArrayDeque<List<DiarizationSegment>>,
+    ) : ChunkDiarizer {
+        var appliedGain = 0f
+        override fun process(samples: FloatArray): List<DiarizationSegment> {
+            if (samples.isNotEmpty()) {
+                var sumSquares = 0.0
+                for (s in samples) sumSquares += s * s
+                val outRms = kotlin.math.sqrt(sumSquares / samples.size)
+                // Testsignal: konstante 0.0005 (DC → nach Zentrierung RMS ≈ 0)
+                // Der Boost erzeugt den Ausgabe-RMS; Gain ≈ outRms / 0.0005,
+                // aber durch das Noise Gate sind Teile 0 → obere Schranke reicht
+                appliedGain = (outRms / 0.0005).toFloat()
+            }
+            return results.removeFirstOrNull() ?: emptyList()
         }
     }
 
@@ -290,5 +388,256 @@ class DiarizationChunkWorkerTest {
         worker.processNextChunk(debug = false)
 
         assertNull("nichts Neues → kein Final-Chunk", worker.processFinalChunk(debug = false))
+    }
+
+    // ── Hebel G: Voice-Bank-Integration ──
+
+    @Test
+    fun `0 Segmente vom ersten Engine-Lauf werden per Chunk-Retry gerettet`() {
+        val buffer = ChunkedAudioBuffer(sampleRate = sampleRate)
+        buffer.pushFrames(3000) // 30s – Chunk 1 = [0,20]
+
+        // 1. Engine-Lauf: 0 Segmente (Pyannote-VAD-Aussetzer)
+        // Retry-Offsets [3,5,7,10]: 3s und 5s liefern auch 0, erst 7s findet Sprecher
+        // Segment [0,5] relativ zum Retry-Start (7s) → absolut [7,12]
+        val fake = FakeDiarizer(ArrayDeque(listOf(
+            emptyList(),                    // Original-Lauf
+            emptyList(),                    // Retry 3s
+            emptyList(),                    // Retry 5s
+            listOf(localSeg(0, 0f, 5f)),    // Retry 7s → SUCCESS
+        )))
+        val worker = DiarizationChunkWorker(buffer, fake)
+
+        val result = worker.processNextChunk(debug = false)
+        assertNotNull("Retry liefert Ergebnis statt null", result)
+        result!!
+        assertEquals("Segment existiert nach Retry", 1, result.mappedSegments.size)
+        // Time-Shift: Offset 7s muss herausgerechnet sein → absolut [7,12]
+        assertEquals("Start nach Offset-Korrektur", 7f, result.mappedSegments[0].startSec, 0.01f)
+        assertEquals("Ende nach Offset-Korrektur", 12f, result.mappedSegments[0].endSec, 0.01f)
+    }
+
+    @Test
+    fun `Chunk-Retry liefert weiterhin 0 wenn alle Engine-Lauefe leer sind`() {
+        val buffer = ChunkedAudioBuffer(sampleRate = sampleRate)
+        buffer.pushFrames(3000) // 30s – Chunk 1 = [0,20]
+
+        // Original + 4 Retry-Offsets (3/5/7/10s) – alle leer
+        val fake = FakeDiarizer(ArrayDeque(listOf(
+            emptyList(),
+            emptyList(),
+            emptyList(),
+            emptyList(),
+            emptyList(),
+        )))
+        val worker = DiarizationChunkWorker(buffer, fake)
+
+        val result = worker.processNextChunk(debug = false)
+        assertNotNull(result)
+        result!!
+        assertEquals("0 Segmente trotz aller Retries", 0, result.mappedSegments.size)
+    }
+
+    // ── Hebel C: Audio-Normalisierung (RMS-Boost) ──
+
+    @Test
+    fun `leises Audio wird per RMS-Boost angehoben`() {
+        // 20s Audio mit sehr kleinem Pegel (0.01) – wie ein leiser Sprecher
+        val buffer = ChunkedAudioBuffer(sampleRate = sampleRate)
+        buffer.pushValueFrames(0.01f, 2000) // 0-20s, RMS ~0.01
+
+        val fake = FakeDiarizer(ArrayDeque(listOf(
+            listOf(localSeg(0, 0f, 10f)),
+        )))
+        val worker = DiarizationChunkWorker(buffer, fake)
+
+        val result = worker.processNextChunk(debug = false)
+        assertNotNull("normalisiertes Audio liefert Segmente", result)
+        result!!
+        assertEquals("Sprecher gefunden nach Boost", 1, result.mappedSegments.size)
+    }
+
+    @Test
+    fun `lautes Audio bleibt unveraendert`() {
+        // 20s Audio mit Pegel 0.5 – kein Boost nötig, Sample-Array unverändert
+        val buffer = ChunkedAudioBuffer(sampleRate = sampleRate)
+        buffer.pushValueFrames(0.5f, 2000) // 0-20s, RMS ~0.5
+
+        val fake = FakeDiarizer(ArrayDeque(listOf(
+            listOf(localSeg(0, 0f, 10f)),
+        )))
+        val worker = DiarizationChunkWorker(buffer, fake)
+
+        val result = worker.processNextChunk(debug = false)
+        assertNotNull(result)
+        result!!
+        assertEquals("1 Segment", 1, result.mappedSegments.size)
+    }
+
+    @Test
+    fun `DC-Offset wird vor der Engine entfernt`() {
+        // 20s Audio mit DC-Offset: Signal schwingt um 0.05 statt um 0 (wie ein
+        // Smartphone-Mikrofon mit Gleichspannungsversatz). Der DC-Blocker muss
+        // den Mean (≈0.05) abziehen, bevor die Engine das Audio bekommt.
+        val buffer = ChunkedAudioBuffer(sampleRate = sampleRate)
+        buffer.pushDcOffsetFrames(0.05f, 2000) // 0-20s, Sinus um 0.05 herum
+
+        val fake = MeanCheckingDiarizer(ArrayDeque())
+        val worker = DiarizationChunkWorker(buffer, fake)
+
+        worker.processNextChunk(debug = false)
+        // Der Fake prüft intern, dass die Samples zentriert sind (Mean ≈ 0)
+        assertTrue("DC-Offset wurde entfernt (Mean ≈ 0)", fake.meanRemoved)
+    }
+
+    @Test
+    fun `Gain-Limit deckelt den Boost auf 10x statt 197x`() {
+        // 20s fast-stilles Audio (RMS ~0.0005) – wie Chunk [55,75] in 0.5.56,
+        // der einen pathologischen 197x-Boost erzeugte. Das Gain-Limit (10x)
+        // muss verhindern, dass der Noise Floor hochgerissen wird.
+        val buffer = ChunkedAudioBuffer(sampleRate = sampleRate)
+        buffer.pushValueFrames(0.0005f, 2000) // RMS ≈ 0.0005
+
+        val fake = BoostCheckingDiarizer(ArrayDeque())
+        val worker = DiarizationChunkWorker(buffer, fake)
+
+        worker.processNextChunk(debug = false)
+        // Der Fake prüft: Ausgabegain ≤ 10x (bei RMS 0.0005 wäre der
+        // unlimitierte Boost 200x)
+        assertTrue("Boost durch Gain-Limit auf ≤10x gedeckelt (war ${fake.appliedGain}x)", fake.appliedGain <= 10f)
+    }
+
+    @Test
+    fun `relatives Noise Gate laesst leises Signal ueberleben - absolutes Gate wuerde alles loeschen`() {
+        // Regressionstest für 0.5.59: Die Mikrofon-Aufnahme in Chunk [55,75]
+        // hat RMS ~0.0005. Das ABSOLUTE Gate (0.001) löschte fast alle Samples
+        // → Pyannote sah Stille → 0 Segmente. Das RELATIVE Gate (10% des RMS
+        // = 0.00005) muss das Signal durchlassen und boosten.
+        val buffer = ChunkedAudioBuffer(sampleRate = sampleRate)
+        // Signal mit RMS ~0.0005: kleine Schwingung um 0 (wie leise Mikrofonaufnahme)
+        buffer.pushQuietFrames(0.0005f, 2000) // 0-20s, RMS ≈ 0.0005
+
+        val fake = BoostCheckingDiarizer(ArrayDeque())
+        val worker = DiarizationChunkWorker(buffer, fake)
+
+        val result = worker.processNextChunk(debug = false)
+        assertNotNull("leises Signal liefert Chunk", result)
+        result!!
+        // Das Signal muss das Gate überlebt haben → Boost greift (sonst wäre
+        // alles 0 und der Fake würde appliedGain≈0 messen)
+        assertTrue(
+            "relatives Gate lässt leises Signal durch (Boost ${fake.appliedGain}x, erwartet > 1.5x)",
+            fake.appliedGain > 1.5f,
+        )
+    }
+
+    @Test
+    fun `VoiceBank - Engine-Drift wird akustisch auf globalen Speaker zurueckgemappt`() {
+        val buffer = ChunkedAudioBuffer(sampleRate = sampleRate)
+        // 0-20s Stimme A, 15-40s weiterhin Stimme A (gleiche Person!)
+        buffer.pushValueFrames(1f, 2000)                 // 0-20s
+        buffer.pushValueFrames(1f, 2500, startMs = 15_000L) // 15-40s
+
+        // Chunk 1 [0,20]: Engine findet Speaker 0 NUR in [0,10]
+        // Chunk 2 [15,40]: Engine DRIFTET – nennt dieselbe Stimme lokal 1
+        // → Zone [15,20] hat keinen Anker von global 0 (Bestand endet bei 10s)
+        // → Reconciler würde neue ID vergeben, aber die BANK erkennt Stimme A
+        val fake = FakeDiarizer(ArrayDeque(listOf(
+            listOf(localSeg(0, 0f, 10f)),  // absolut [0,10]
+            listOf(localSeg(1, 0f, 25f)),  // absolut [15,40], Drift!
+        )))
+        val voiceBank = SessionVoiceBank(ValueComputer())
+        val worker = DiarizationChunkWorker(buffer, fake, voiceBank = voiceBank)
+
+        val first = worker.processNextChunk(debug = false)
+        assertNotNull(first)
+        assertEquals("Speaker 0 nach 1. Kontakt: pending, noch nicht eingeschrieben", 0, voiceBank.speakerCount)
+        assertEquals("1 pending Enrollment (2-Kontakt-Härtung)", 1, voiceBank.pendingCount)
+
+        val second = worker.processNextChunk(debug = false)
+        assertNotNull(second)
+        second!!
+        assertEquals("Drift aufgelöst: lokal 1 → global 0 (nicht neue ID 1)",
+            mapOf(1 to 0), second.mapping)
+        assertTrue("keine neue Speaker-ID nach Bank-Auflösung", second.newSpeakerIds.isEmpty())
+        assertEquals("Segment auf global 0 gemappt", 0, second.mappedSegments[0].speaker)
+        assertEquals("2. Kontakt bestätigt: Bank hat jetzt 1 Sprecher",
+            1, voiceBank.speakerCount)
+        assertEquals("pending durch Bestätigung aufgelöst", 0, voiceBank.pendingCount)
+    }
+
+    @Test
+    fun `VoiceBank - wirklich neuer Sprecher wird eingeschrieben`() {
+        val buffer = ChunkedAudioBuffer(sampleRate = sampleRate)
+        // 0-20s Stimme A, 20-40s Stimme B (NEU) – Overlap-Zone [15,20] bleibt Stimme A
+        buffer.pushValueFrames(1f, 2000)                 // 0-20s
+        buffer.pushValueFrames(2f, 2000, startMs = 20_000L) // 20-40s
+
+        val fake = FakeDiarizer(ArrayDeque(listOf(
+            listOf(localSeg(0, 0f, 10f)),  // absolut [0,10] Stimme A
+            listOf(localSeg(1, 5f, 25f)),  // absolut [20,40] Stimme B (nach Zone!)
+        )))
+        val voiceBank = SessionVoiceBank(ValueComputer())
+        val worker = DiarizationChunkWorker(buffer, fake, voiceBank = voiceBank)
+
+        worker.processNextChunk(debug = false)
+        val second = worker.processNextChunk(debug = false)
+        assertNotNull(second)
+        second!!
+
+        assertEquals("B bleibt neue ID 1", mapOf(1 to 1), second.mapping)
+        assertTrue("B ist neuer Speaker", second.newSpeakerIds == setOf(1))
+        // 2-Kontakt-Härtung: B ist nach 1. Kontakt nur pending – kein Voiceprint
+        assertEquals("kein bestätigter Sprecher nach 1. Kontakt", 0, voiceBank.speakerCount)
+        assertEquals("2 pending Enrollments (A aus Chunk 1, B aus Chunk 2)", 2, voiceBank.pendingCount)
+    }
+
+    @Test
+    fun `VoiceBank - zweiter Kontakt derselben Stimme bestaetigt Enrollment`() {
+        val buffer = ChunkedAudioBuffer(sampleRate = sampleRate)
+        // 0-20s Stimme A, 20-60s Stimme B (durchgehend)
+        buffer.pushValueFrames(1f, 2000)                 // 0-20s
+        buffer.pushValueFrames(2f, 4000, startMs = 20_000L) // 20-60s
+
+        // Chunks (20s + 5s Overlap): [0,20], [15,40], [35,60]
+        // Chunk 1: A in [0,10] → pending 0 (Stimme A)
+        // Chunk 2: B in [20,35] (Zone [15,20] ohne Anker) → neue ID 1 → pending 1
+        // Chunk 3: B in [35,55] (Zone [35,40] ohne Anker, Bestand endet bei 35)
+        //   → Reconciler will neue ID 2, aber Bank matcht auf pending 1 → CONFIRMED
+        val fake = FakeDiarizer(ArrayDeque(listOf(
+            listOf(localSeg(0, 0f, 10f)),   // absolut [0,10] Stimme A
+            listOf(localSeg(1, 5f, 20f)),   // absolut [20,35] Stimme B
+            listOf(localSeg(0, 0f, 20f)),   // absolut [35,55] Stimme B erneut
+        )))
+        val voiceBank = SessionVoiceBank(ValueComputer())
+        val worker = DiarizationChunkWorker(buffer, fake, voiceBank = voiceBank)
+
+        worker.processNextChunk(debug = false)  // Chunk 1: A pending
+        val second = worker.processNextChunk(debug = false) // Chunk 2: B pending
+        assertNotNull(second)
+        assertEquals("A + B nach Chunk 2 pending", 2, voiceBank.pendingCount)
+
+        val third = worker.processNextChunk(debug = false)  // Chunk 3: B 2. Kontakt
+        assertNotNull(third)
+        third!!
+        assertEquals("2. Kontakt von B bestätigt Enrollment", 1, voiceBank.speakerCount)
+        assertTrue("B eingeschrieben", voiceBank.enrolledSpeakerIds == setOf(1))
+        assertEquals("A bleibt pending (nur 1 Kontakt)", 1, voiceBank.pendingCount)
+    }
+
+    @Test
+    fun `VoiceBank - kurze Segmente unter Enrollment-Gate werden nicht eingeschrieben`() {
+        val buffer = ChunkedAudioBuffer(sampleRate = sampleRate)
+        buffer.pushValueFrames(1f, 2000) // 0-20s Stimme A
+
+        // Engine liefert nur ein 2s-Fragment → unter minEnrollmentSec (5s)
+        val fake = FakeDiarizer(ArrayDeque(listOf(
+            listOf(localSeg(0, 0f, 2f)), // absolut [0,2] – nur 2s
+        )))
+        val voiceBank = SessionVoiceBank(ValueComputer(), minEnrollmentSec = 5f)
+        val worker = DiarizationChunkWorker(buffer, fake, voiceBank = voiceBank)
+
+        worker.processNextChunk(debug = false)
+        assertEquals("2s-Fragment wird nicht enrolled", 0, voiceBank.speakerCount)
     }
 }

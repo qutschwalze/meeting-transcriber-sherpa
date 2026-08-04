@@ -1,8 +1,15 @@
 package com.sherpa.transcript.engine
 
+import android.os.Environment
 import android.util.Log
+import com.sherpa.transcript.SherpaTranscriptApp
 import com.sherpa.transcript.domain.audio.AudioChunk
 import com.sherpa.transcript.domain.audio.ChunkedAudioBuffer
+import com.sherpa.transcript.domain.audio.TestLog
+import java.io.BufferedOutputStream
+import java.io.DataOutputStream
+import java.io.File
+import java.io.FileOutputStream
 
 /**
  * Abstraktion der Diarization-Engine für den ChunkWorker – testbar per Fake.
@@ -27,6 +34,11 @@ data class WorkerChunkResult(
     val mapping: Map<Int, Int>,
     val newSpeakerIds: Set<Int>,
     val allGlobalSegments: List<SpeakerTimeRange>,
+    /** Hebel-G-Diagnose: wie oft die Voice-Bank aufgelöst / eingeschrieben / übersprungen hat. */
+    val voiceBankResolvedCount: Int = 0,
+    val voiceBankEnrolledCount: Int = 0,
+    val voiceBankSkipCount: Int = 0,
+    val voiceBankSize: Int = 0,
 )
 
 /**
@@ -47,6 +59,8 @@ class DiarizationChunkWorker(
     private val buffer: ChunkedAudioBuffer,
     private val diarizer: ChunkDiarizer,
     private val reconciler: RollingReconciler = RollingReconciler(),
+    /** Hebel G: akustische Voice-Bank gegen Engine-Drift (optional, testbar). */
+    private val voiceBank: SessionVoiceBank? = null,
     private val chunkSec: Float = 20f,
     private val overlapSec: Float = 5f,
 ) {
@@ -56,6 +70,44 @@ class DiarizationChunkWorker(
 
         /** Toleranz für Float-Grenzenvergleiche (Sekunden). */
         private const val EPS = 0.01f
+
+        /** Sample-Rate des Audio-Streams (16 kHz) – für Segment-Audio-Extraktion. */
+        private const val SAMPLE_RATE = 16000
+
+        /** Mindest-Samples für einen Retry-Versuch (10s Audio). */
+        private const val MIN_RETRY_SAMPLES = 10 * SAMPLE_RATE
+
+        /**
+         * Noise Gate (0.5.57): RELATIV zum Signal-RMS (0.5.59).
+         *
+         * 0.5.57: Absolutes Gate (|x| < 0.001 → 0). Log-Befund 0.5.58: Die
+         * Mikrofon-Aufnahme ist deutlich leiser als die MP3-Quelle – Chunk
+         * [55,75] hat dort RMS 0.0005, das Gate löschte fast ALLE Samples →
+         * totale Stille → Pyannote: 0 Segmente (Regression durch das Gate!).
+         *
+         * 0.5.59: Schwelle = Anteil des Signal-RMS. Leise Sprache (RMS 0.0005)
+         * überlebt (Schwelle 0.00005), echtes Rauschen unterhalb der relativen
+         * Schwelle wird trotzdem gekillt. Der Pegel skaliert mit.
+         */
+        private const val noiseGateRatio = 0.1f
+
+        /** Absolute Untergrenze der Gate-Schwelle (Schutz vor Divisionseffekten). */
+        private const val noiseFloorAbs = 0.00001f
+
+        /**
+         * Gain-Limit (0.5.57): Harte Obergrenze für den RMS-Boost.
+         * Log-Beweis 0.5.56: Boost 197x (RMS 0.0005) riss den Noise Floor hoch →
+         * Pyannote sah nur Rauschen, alles kollabierte auf 1 Sprecher.
+         * 10x = +20 dB, genug um leise Sprecher hörbar zu machen.
+         */
+        private const val maxBoostFactor = 10f
+
+        /**
+         * Chunk-Retry (0.5.54): Mehrere Versätze für den 2. Engine-Versuch.
+         * Log-Befund 0.5.53: Chunk [55,75] liefert reproduzierbar 0 Segmente –
+         * ein einzelner 5s-Versatz reicht nicht, mehrere Fenster werden probiert.
+         */
+        private val RETRY_OFFSETS_SEC = floatArrayOf(3f, 5f, 7f, 10f)
     }
 
     /** Globaler Bestand: bestätigte Diarization-Segmente mit Session-weiten Speaker-IDs. */
@@ -121,13 +173,54 @@ class DiarizationChunkWorker(
     /** Gemeinsamer Kern für [processNextChunk] und [processFinalChunk]. */
     private fun processChunk(chunk: AudioChunk, debug: Boolean): WorkerChunkResult? {
         // ── 1+2: Engine – lokale Zeiten relativ zum Chunk-Anfang ──
-        val engineSegments = diarizer.process(chunk.samples)
+        // Hebel C (0.5.55): Audio normalisieren, bevor es an Pyannote geht.
+        // Log-Befund 0.5.54: Chunk [55,75] liefert auch nach 4 Retry-Offsets 0
+        // Segmente – Whisper transkribiert dort aber Text → zu leise für die
+        // Pyannote-VAD. RMS-Boost hebt leise Passagen auf einen gesunden Pegel.
+        // WICHTIG: Nur der Engine-Pfad nutzt die normalisierten Samples – die
+        // Voice-Bank-Extraktion (extractSegmentSamples) arbeitet weiter mit dem
+        // Original-Audio, sonst würden die Embeddings durch den Boost verzerrt.
+        val normalizedSamples = normalizeAudio(chunk.samples)
+        var engineSegments = diarizer.process(normalizedSamples)
+
+        // 0.5.74: Chunk-Diagnose-WAV (Debug-Mode) – die tatsächlichen Samples,
+        // die die Engine bekommt, für Host-Vergleich speichern. Log-Befund
+        // 0.5.73: App-Chunk [55,75] segmentiert als "A bis 65,97s", obwohl die
+        // WAV dort Sprecher B hat (Titanet cos→B=0,73 ab 55s) – Chunk-RMS
+        // identisch zur WAV, aber Segmentierung weicht ab. Chunk-WAVs erlauben
+        // den sample-genauen Vergleich App-Chunk vs. WAV-Fenster.
+        if (TestLog.path != null) saveChunkWav(chunk)
+
+        // Chunk-Retry (0.5.53+): Bei 0 segments mehrere versetzte Fenster versuchen.
+        // Log-Befund: Chunk [55,75] liefert reproduzierbar 0 Segmente – ein einzelner
+        // 5s-Versatz reicht nicht. Wir probieren mehrere Offsets (3s/7s/10s), bis die
+        // Engine liefert. Fehlschläge werden geloggt, damit der Retry sichtbar ist.
+        var retryOffsetSecApplied = 0f
+        if (engineSegments.isEmpty() && normalizedSamples.size >= MIN_RETRY_SAMPLES) {
+            for (offset in RETRY_OFFSETS_SEC) {
+                val offsetSamples = (offset * SAMPLE_RATE).toInt()
+                if (offsetSamples >= normalizedSamples.size) continue
+                // Retry-Samples aus dem NORMALISIERTEN Audio schneiden (Boost bleibt aktiv)
+                val retrySamples = normalizedSamples.copyOfRange(offsetSamples, normalizedSamples.size)
+                val retrySegments = diarizer.process(retrySamples)
+                if (retrySegments.isNotEmpty()) {
+                    Log.i(TAG, "processChunk: Retry SUCCESS – Offset ${offset}s: ${retrySegments.size} Segmente")
+                    engineSegments = retrySegments
+                    retryOffsetSecApplied = offset
+                    break
+                }
+                Log.d(TAG, "processChunk: Retry Offset ${offset}s fehlgeschlagen (0 Segmente)")
+            }
+            if (engineSegments.isEmpty()) {
+                Log.w(TAG, "processChunk: ALLE Retry-Offsets fehlgeschlagen – Chunk bleibt ohne Diarization")
+            }
+        }
 
         // ── 3: Time-Shift auf absolute Session-Zeit ──
         val absoluteSegments = engineSegments.map { seg ->
             DiarizationSegment(
-                startSec = seg.startSec + chunk.startSec,
-                endSec = seg.endSec + chunk.startSec,
+                startSec = seg.startSec + chunk.startSec + retryOffsetSecApplied,
+                endSec = seg.endSec + chunk.startSec + retryOffsetSecApplied,
                 speaker = seg.speaker,
             )
         }
@@ -142,24 +235,205 @@ class DiarizationChunkWorker(
             debug = debug,
         )
 
+        // ── 4b (Hebel G): Voice-Bank-Fallback für "neue" IDs ──
+        // Wenn der Reconciler eine ID als NEU deklariert hat (Anker-Lücke in der
+        // Zone), fragt die Bank akustisch nach: Ist das vielleicht ein bekannter
+        // Sprecher, dessen Stimme die Engine nur neu geclustert hat?
+        // - Match über Threshold → Drift aufgelöst, ID wird zurückgemappt
+        // - Kein Match → wirklich neuer Sprecher → wird eingeschrieben (enroll)
+        var finalMapping = result.mapping
+        var finalNewSpeakerIds = result.newSpeakerIds
+        var driftResolvedCount = 0
+        var enrolledCount = 0
+        var skippedCount = 0
+        val bankSize = voiceBank?.speakerCount ?: 0
+        if (voiceBank != null && result.newSpeakerIds.isNotEmpty()) {
+            for (localId in result.newSpeakerIds) {
+                val segsOfSpeaker = absoluteSegments.filter { it.speaker == localId }
+                val best = segsOfSpeaker.maxByOrNull { it.endSec - it.startSec } ?: continue
+                val samples = extractSegmentSamples(chunk, best)
+                if (samples.isEmpty()) {
+                    skippedCount++
+                    Log.d(TAG, "VOICE_BANK check: local=$localId – kein Audio extrahierbar (skip)")
+                    continue
+                }
+                val durationMs = ((best.endSec - best.startSec) * 1000f).toLong()
+
+                val matchedGlobalId = voiceBank.identify(samples)
+                if (matchedGlobalId != null) {
+                    // Drift aufgelöst: lokale ID → bestehende globale ID
+                    finalMapping = finalMapping + (localId to matchedGlobalId)
+                    finalNewSpeakerIds = finalNewSpeakerIds - localId
+                    driftResolvedCount++
+                    Log.d(TAG, "VOICE_BANK resolve: local=$localId → global=$matchedGlobalId " +
+                            "(dur=${durationMs}ms, statt neue ID ${result.mapping[localId]})")
+                    TestLog.log("VB local=$localId dur=${durationMs}ms → RESOLVE auf global=$matchedGlobalId (statt neue ID ${result.mapping[localId]})")
+                } else {
+                    // Wirklich neuer Sprecher → in die Bank einschreiben
+                    val newGlobalId = result.mapping[localId] ?: continue
+                    val enrolled = voiceBank.enroll(newGlobalId, samples, durationMs)
+                    if (enrolled) {
+                        enrolledCount++
+                        TestLog.log("VB local=$localId dur=${durationMs}ms → ENROLL global=$newGlobalId OK")
+                    } else {
+                        skippedCount++
+                        TestLog.log("VB local=$localId dur=${durationMs}ms → ENROLL global=$newGlobalId SKIP")
+                    }
+                }
+            }
+            if (driftResolvedCount > 0 || enrolledCount > 0) {
+                Log.d(TAG, "VOICE_BANK: $driftResolvedCount Drift-ID(s) aufgelöst, " +
+                        "$enrolledCount enrolled, $skippedCount skipped (Bank=${voiceBank.speakerCount} Sprecher)")
+            }
+        } else if (voiceBank != null && result.newSpeakerIds.isEmpty()) {
+            // Diagnose: Bank ist aktiv, aber der Reconciler meldet keine neuen IDs
+            Log.d(TAG, "VOICE_BANK check: keine neuen IDs in diesem Chunk (Bank=${voiceBank.speakerCount} Sprecher)")
+        } else if (voiceBank == null) {
+            Log.d(TAG, "VOICE_BANK check: Bank NICHT aktiv (voiceBank=null) – Drift-Schutz aus!")
+        }
+        // Mapping auf die (evtl. korrigierten) globalen IDs anwenden
+        val correctedSegments = if (finalMapping == result.mapping) {
+            result.mappedSegments
+        } else {
+            absoluteSegments.map { seg ->
+                seg.copy(speaker = finalMapping[seg.speaker] ?: seg.speaker)
+            }
+        }
+
         // ── 5: State-Update (nur bei nicht-leerem Engine-Ergebnis) ──
-        if (result.mappedSegments.isNotEmpty()) {
-            globalSegments = mergeIntoGlobalBestand(globalSegments, result.mappedSegments, overlapZone)
+        if (correctedSegments.isNotEmpty()) {
+            globalSegments = mergeIntoGlobalBestand(globalSegments, correctedSegments, overlapZone)
         }
 
         if (debug) {
             Log.d(TAG, "processNextChunk: chunk=${chunk.startSec}-${chunk.endSec}s overlap=${chunk.overlapSec}s " +
-                    "engineSegs=${engineSegments.size} mapped=${result.mappedSegments.size} " +
+                    "engineSegs=${engineSegments.size} mapped=${correctedSegments.size} " +
                     "globalBestand=${globalSegments.size}")
         }
+        TestLog.log("CHUNK chunk=${chunk.startSec}-${chunk.endSec}s overlap=${chunk.overlapSec}s " +
+                "engineSegs=${engineSegments.size} mapped=${correctedSegments.size} " +
+                "globalBestand=${globalSegments.size} retry=${retryOffsetSecApplied}s")
+        // 0.5.72: Segment-Grenzen + Dauern loggen – Diagnose: Warum skip die
+        // Voice-Bank? (Log-Befund 0.5.71: vb skip=2 im Chunk [0,15], obwohl der
+        // Host mit derselben WAV Segmente >= 2s findet → Bank kann nicht enrollen
+        // → nur 1 Sprecher wird etabliert.)
+        val segsDesc = engineSegments.sortedBy { it.startSec }.take(12)
+            .joinToString(" ") { s -> "[${"%.2f".format(s.startSec)}-${"%.2f".format(s.endSec)}]spk${s.speaker}(${"%.1f".format(s.endSec - s.startSec)}s)" }
+        TestLog.log("ENGINE_SEGS chunk=${chunk.startSec}-${chunk.endSec}: $segsDesc")
 
         return WorkerChunkResult(
             chunk = chunk,
-            mappedSegments = result.mappedSegments,
-            mapping = result.mapping,
-            newSpeakerIds = result.newSpeakerIds,
+            mappedSegments = correctedSegments,
+            mapping = finalMapping,
+            newSpeakerIds = finalNewSpeakerIds,
             allGlobalSegments = globalSegments,
+            voiceBankResolvedCount = driftResolvedCount,
+            voiceBankEnrolledCount = enrolledCount,
+            voiceBankSkipCount = skippedCount,
+            voiceBankSize = bankSize,
         )
+    }
+
+    /**
+     * Extrahiert das Audio eines Diarization-Segments aus dem Chunk-Audio.
+     * Segment-Zeiten sind absolut (Session), Chunk-Samples relativ zum Chunk-Anfang.
+     */
+    private fun extractSegmentSamples(chunk: AudioChunk, seg: DiarizationSegment): FloatArray {
+        val relStart = (seg.startSec - chunk.startSec).coerceIn(0f, chunk.endSec - chunk.startSec)
+        val relEnd = (seg.endSec - chunk.startSec).coerceIn(0f, chunk.endSec - chunk.startSec)
+        val startIdx = (relStart * SAMPLE_RATE).toInt().coerceIn(0, chunk.samples.size)
+        val endIdx = (relEnd * SAMPLE_RATE).toInt().coerceIn(startIdx, chunk.samples.size)
+        if (endIdx <= startIdx) return FloatArray(0)
+        return chunk.samples.copyOfRange(startIdx, endIdx)
+    }
+
+    /**
+     * Hebel C (0.5.55–0.5.59): RMS-Normalisierung + DC-Blocker + RELATIVES Noise Gate + Gain-Limit.
+     *
+     * Log-Befund 0.5.58: Chunk [55,75] lieferte trotz Time-Drift-Fix weiterhin 0
+     * Segmente – aber die lokale Sherpa-ONNX-Reproduktion (exakt App-Version 1.13.4)
+     * findet mit der MP3-Quelle Sprache dort. Die Mikrofon-Aufnahme ist deutlich
+     * leiser (RMS 0.0005) – das ABSOLUTE Gate (0.001) löschte das komplette Signal.
+     *
+     * Pipeline in dieser Reihenfolge:
+     * 1. Mean Subtraction (DC-Blocker): zentriert auf die Nulllinie
+     * 2. RELATIVES Noise Gate: Schwelle = 10% des Signal-RMS (leise Sprache
+     *    überlebt, echtes Rauschen wird gekillt – Pegel skaliert mit)
+     * 3. RMS berechnen, nur verstärken wenn zu leise (Ziel 0.1)
+     * 4. Gain-Limit: NIE mehr als [maxBoostFactor] (10x) – verhindert
+     *    Rausch-Orkane bei fast stillem Audio (Log-Beweis: 197x = pathologisch)
+     *
+     * WICHTIG: Nur der Engine-Pfad nutzt die normalisierten Samples. Die
+     * Voice-Bank-Extraktion arbeitet mit dem Original-Audio, sonst würden die
+     * Speaker-Embeddings durch den Boost verzerrt (gleicher Sprecher, andere
+     * Lautstärke → verfälschte Cosine-Similarity).
+     */
+    private fun normalizeAudio(samples: FloatArray): FloatArray {
+        if (samples.isEmpty()) return samples
+
+        // 1. DC-Offset entfernen (Mean Subtraction) – zentriert auf die Nulllinie
+        var sum = 0.0
+        for (sample in samples) {
+            sum += sample
+        }
+        val mean = (sum / samples.size).toFloat()
+
+        val centeredSamples = FloatArray(samples.size)
+        var sumSquaresRaw = 0.0
+        for (i in samples.indices) {
+            val centered = samples[i] - mean
+            centeredSamples[i] = centered
+            sumSquaresRaw += centered * centered
+        }
+        // RMS des ROH-Signals (VOR dem Gate) – Basis für die relative Gate-Schwelle
+        val rmsRaw = kotlin.math.sqrt((sumSquaresRaw / samples.size).toDouble()).toFloat()
+        if (rmsRaw < 0.0001f) return centeredSamples // absolute Stille
+
+        // 2. RELATIVES Noise Gate (0.5.59): Schwelle = Anteil des Signal-RMS.
+        //    Log-Befund 0.5.58: absolutes Gate (0.001) löschte leises
+        //    Mikrofon-Signal (RMS 0.0005) komplett → Pyannote sah Stille →
+        //    0 Segmente. Mit 10% des RMS überlebt leise Sprache, Rauschen
+        //    unterhalb der relativen Schwelle wird weiterhin gekillt.
+        val gateThreshold = (rmsRaw * noiseGateRatio).coerceAtLeast(noiseFloorAbs)
+        var sumSquares = 0f
+        var maxPeak = 0f
+        for (i in centeredSamples.indices) {
+            var v = centeredSamples[i]
+            if (kotlin.math.abs(v) < gateThreshold) {
+                v = 0f
+            }
+            centeredSamples[i] = v
+            val absSample = kotlin.math.abs(v)
+            sumSquares += v * v
+            if (absSample > maxPeak) maxPeak = absSample
+        }
+
+        val rms = kotlin.math.sqrt((sumSquares / samples.size).toDouble()).toFloat()
+        if (rms < 0.0001f) return centeredSamples // nach Gate nur noch Rauschen/Stille
+
+        // 3. Nur verstärken wenn zu leise (Ziel-Pegel 0.1), Clipping verhindern
+        val targetRms = 0.1f
+        var gain = 1f
+        if (rms < targetRms) {
+            gain = targetRms / rms
+            // 4. Gain-Limit: harter Riegel – niemals 197x wie in 0.5.56!
+            if (gain > maxBoostFactor) {
+                gain = maxBoostFactor
+            }
+            if (maxPeak * gain > 0.99f) {
+                gain = 0.99f / maxPeak
+            }
+        }
+
+        if (gain > 1.5f) {
+            Log.d(TAG, "normalizeAudio: DC-Offset $mean entfernt, Gate ${String.format("%.5f", gateThreshold)} (relativ), Boost ${String.format("%.2fx", gain)} " +
+                    "(Limit ${maxBoostFactor}x, RMS ${String.format("%.4f", rms)} → Ziel $targetRms)")
+            TestLog.log("normalizeAudio: Gate ${String.format("%.5f", gateThreshold)} Boost ${String.format("%.2fx", gain)} RMS ${String.format("%.4f", rms)}")
+            for (i in centeredSamples.indices) {
+                centeredSamples[i] = centeredSamples[i] * gain
+            }
+        }
+        return centeredSamples
     }
 
     /**
@@ -198,5 +472,52 @@ class DiarizationChunkWorker(
         }
 
         return (kept + added).sortedBy { it.startSec }
+    }
+
+    /** 0.5.74: Chunk-Samples als Diagnose-WAV speichern (Debug-Mode). */
+    private fun saveChunkWav(chunk: AudioChunk) {
+        try {
+            val base = SherpaTranscriptApp.instance
+                .getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: return
+            val dir = File(base, "testaufnahmen/chunks")
+            if (!dir.exists() && !dir.mkdirs()) return
+            val f = File(dir, "chunk_${"%.1f".format(chunk.startSec)}_${"%.1f".format(chunk.endSec)}.wav")
+            val out = DataOutputStream(BufferedOutputStream(FileOutputStream(f)))
+            // WAV-Header (16 kHz mono 16-bit PCM, Little-Endian)
+            out.writeBytes("RIFF")
+            writeLeInt(out, 36 + chunk.samples.size * 2)
+            out.writeBytes("WAVE")
+            out.writeBytes("fmt ")
+            writeLeInt(out, 16)
+            writeLeShort(out, 1)
+            writeLeShort(out, 1)
+            writeLeInt(out, 16000)
+            writeLeInt(out, 32000)
+            writeLeShort(out, 2)
+            writeLeShort(out, 16)
+            out.writeBytes("data")
+            writeLeInt(out, chunk.samples.size * 2)
+            for (v in chunk.samples) {
+                val s = (v * 32767f).toInt().coerceIn(-32768, 32767)
+                out.writeByte(s and 0xFF)
+                out.writeByte((s shr 8) and 0xFF)
+            }
+            out.close()
+            Log.d(TAG, "Chunk-WAV gespeichert: ${f.absolutePath} (${chunk.samples.size / 16000.0f}s)")
+        } catch (t: Throwable) {
+            Log.w(TAG, "Chunk-WAV fehlgeschlagen: ${t.message}")
+        }
+    }
+
+    private fun writeLeInt(out: DataOutputStream, v: Int) {
+        out.writeByte(v and 0xFF)
+        out.writeByte((v shr 8) and 0xFF)
+        out.writeByte((v shr 16) and 0xFF)
+        out.writeByte((v shr 24) and 0xFF)
+    }
+
+    private fun writeLeShort(out: DataOutputStream, v: Int) {
+        out.writeByte(v and 0xFF)
+        out.writeByte((v shr 8) and 0xFF)
     }
 }

@@ -1,6 +1,7 @@
 package com.sherpa.transcript.engine
 
 import android.util.Log
+import com.sherpa.transcript.domain.audio.TestLog
 
 /**
  * Zeitbereich in absoluten Session-Sekunden (wie DiarizationSegment).
@@ -66,12 +67,56 @@ data class ReconcilerResult(
  * Zustandslos: alle Eingaben als Parameter, keine internen Mutable States.
  */
 class RollingReconciler(
-    /** Mindest-Overlap (Sekunden) in der Zone für einen gültigen Match. */
-    private val minMatchOverlapSec: Float = 0.5f,
+    /**
+     * Mindest-Overlap (Sekunden) in der Zone für einen gültigen Match.
+     * 0.3s (300ms): konservativer Standard – senkt die Schwelle für kurze
+     * Sprecher-Aktivität im Final Block, ohne Fehlzuordnungen zu riskieren.
+     * (Abgestimmt auf TimelineComposer.MIN_CONFIDENCE_OVERLAP_MS = 300ms.)
+     */
+    private val minMatchOverlapSec: Float = 0.3f,
+    /**
+     * Winzige Fragmente unter dieser Dauer (Sekunden) werden VOR dem Matching
+     * aus beiden Inputs entfernt (Hebel E – Tuning).
+     *
+     * Begründung: assignSpeakersToRawSegments verlangt >= 300ms Overlap ODER
+     * >= 35% der ASR-Segmentdauer. Ein Fragment < 400ms kann ein ASR-Segment
+     * von > 1.1s nie mit 35% abdecken – es erzeugt nur Votes-Rauschen im
+     * Greedy-Matching und künstliche neue IDs, ohne je ein Label zu liefern.
+     */
+    private val minFragmentSec: Float = 0.4f,
 ) {
 
     companion object {
         private const val TAG = "RollingReconciler"
+
+        /**
+         * Mindest-Redezeit (Summe der Fragmente einer Engine-ID) für die
+         * Fragment-Aggregation (0.5.64). Konsistent mit der Mindest-Redezeit
+         * der Voice-Bank (minEnrollmentSec = 2s): Was die Bank einschreiben
+         * könnte, darf der Reconciler nicht wegwerfen.
+         */
+        private const val MIN_AGGREGATE_SEC = 2f
+    }
+
+    /**
+     * Aggregiert winzige Fragmente (< [minFragmentSec]) pro Engine-ID zu einem
+     * Segment, wenn ihre Redezeit zusammen >= [MIN_AGGREGATE_SEC] beträgt.
+     * Nur für den Fall, dass ALLE lokalen Segmente eines Chunks Fragmente sind
+     * (sonst greift der normale Filter). Das aggregierte Segment deckt die
+     * äußeren Grenzen ab ([min start, max end]) und trägt die Engine-ID.
+     */
+    private fun aggregateFragments(localSegments: List<DiarizationSegment>): List<DiarizationSegment> {
+        if (localSegments.isEmpty()) return emptyList()
+        val bySpeaker = localSegments.groupBy { it.speaker }
+        val result = mutableListOf<DiarizationSegment>()
+        for ((speaker, segs) in bySpeaker) {
+            val totalDur = segs.sumOf { (it.endSec - it.startSec).toDouble() }
+            if (totalDur < MIN_AGGREGATE_SEC) continue
+            val start = segs.minOf { it.startSec }
+            val end = segs.maxOf { it.endSec }
+            result.add(DiarizationSegment(startSec = start, endSec = end, speaker = speaker))
+        }
+        return result
     }
 
     /**
@@ -92,10 +137,42 @@ class RollingReconciler(
             return ReconcilerResult(emptyList(), emptyMap(), emptyMap(), emptySet(), 0f)
         }
 
+        // ── 0. Fragment-Filter (Hebel E): winzige Fragmente aus BEIDEN Inputs ──
+        // Sie können ASR-Segmente nie mit >= 35% abdecken → nur Votes-Rauschen
+        // und künstliche neue IDs. Gefilterte lokale Segmente erscheinen auch
+        // nicht in mappedSegments → der Worker-Bestand bleibt frei von Rauschen.
+        val significantLocal = localSegments.filter { (it.endSec - it.startSec) >= minFragmentSec }
+        val significantGlobal = previousGlobalSegments.filter { (it.endSec - it.startSec) >= minFragmentSec }
+        if (significantLocal.isEmpty()) {
+            // ── 0b. Fragment-Aggregation (0.5.64): Wenn ALLE lokalen Segmente unter
+            // minFragmentSec liegen (zerstückelte VAD auf Mikrofon-Aufnahmen), aber
+            // die Fragmente EINER Engine-ID zusammen substanzielle Redezeit haben,
+            // werden sie zu EINEM Segment aggregiert (min start, max end, die ID).
+            //
+            // Log-Befund Geräte-Test 0.5.63: Chunk [55,75] lieferte nach Retry-
+            // SUCCESS 7 Fragmente (< 0.4s) im Sprecher-B-Block (62-75s) → mapped=0
+            // → B kam nie in den globalen Bestand und nie in die Voice-Bank →
+            // Endzustand 3 Speaker statt 2, B-Block unlabeled. Ohne Aggregation
+            // ist ein komplett fragmentierter Chunk für Reconciler + Bank unsichtbar.
+            val aggregated = aggregateFragments(localSegments)
+            if (aggregated.isEmpty()) {
+                return ReconcilerResult(emptyList(), emptyMap(), emptyMap(), emptySet(), 0f)
+            }
+            if (debug) {
+                Log.d(TAG, "reconcile: alle ${localSegments.size} lokalen Segmente <${minFragmentSec}s " +
+                        "→ ${aggregated.size} aggregiertes Segment(e) (Redezeit >= ${MIN_AGGREGATE_SEC}s)")
+            }
+            return reconcile(aggregated, overlapZone, previousGlobalSegments, debug)
+        }
+        if (debug && significantLocal.size != localSegments.size) {
+            Log.d(TAG, "reconcile: fragment filter removed ${localSegments.size - significantLocal.size} local + " +
+                    "${previousGlobalSegments.size - significantGlobal.size} global tiny segments (<${minFragmentSec}s)")
+        }
+
         // ── 1. Globale Speaker + ihre Zeitbereiche aus dem Bestand extrahieren ──
         val globalRanges = mutableMapOf<Int, MutableList<TimeRange>>()
         var maxGlobalId = -1
-        for (seg in previousGlobalSegments) {
+        for (seg in significantGlobal) {
             if (seg.endSec <= seg.startSec) continue
             globalRanges.getOrPut(seg.speakerId) { mutableListOf() }.add(
                 TimeRange(seg.startSec, seg.endSec)
@@ -109,7 +186,7 @@ class RollingReconciler(
         val votes = mutableMapOf<Int, MutableMap<Int, Float>>()
         var zoneOverlapTotal = 0f
 
-        for (localSeg in localSegments) {
+        for (localSeg in significantLocal) {
             val localId = localSeg.speaker
             val localRange = TimeRange(localSeg.startSec, localSeg.endSec)
             val clippedZone = TimeRange(
@@ -154,7 +231,7 @@ class RollingReconciler(
         val newSpeakerIds = mutableSetOf<Int>()
         val nextFreeId = maxGlobalId + 1
         var nextNewId = nextFreeId
-        val allLocalIds = localSegments.map { it.speaker }.distinct().sorted()
+        val allLocalIds = significantLocal.map { it.speaker }.distinct().sorted()
         for (localId in allLocalIds) {
             if (localId !in assignedLocals) {
                 mapping[localId] = nextNewId
@@ -163,8 +240,8 @@ class RollingReconciler(
             }
         }
 
-        // ── 5. Mapping auf alle lokalen Segmente anwenden ──
-        val mappedSegments = localSegments.map { seg ->
+        // ── 5. Mapping auf alle signifikanten lokalen Segmente anwenden ──
+        val mappedSegments = significantLocal.map { seg ->
             seg.copy(speaker = mapping[seg.speaker] ?: seg.speaker)
         }
 
@@ -180,6 +257,20 @@ class RollingReconciler(
                 .joinToString(",") { (l, g) -> "$l→$g" }
             val newStr = newSpeakerIds.sorted().joinToString(",")
             Log.d(TAG, "reconcile: zone=${overlapZone.startSec}-${overlapZone.endSec}s " +
+                    "localIds=[${allLocalIds.joinToString(",")}] globalIds=[${knownGlobalIds.sorted().joinToString(",")}] " +
+                    "votes={$votesStr} mapping=[$mappingStr] new=[$newStr] " +
+                    "zoneOverlap=${String.format("%.1f", zoneOverlapTotal)}s")
+        } else {
+            // 0.5.73: Auch ohne debug-Flag ins TestLog (Datei existiert nur im Debug-Mode)
+            val votesStr = votes.entries.joinToString(" | ") { (localId, gv) ->
+                val sorted = gv.entries.sortedByDescending { it.value }
+                    .joinToString(",") { (gid, ov) -> String.format("%d:%.2fs", gid, ov) }
+                "$localId→[$sorted]"
+            }
+            val mappingStr = mapping.entries.sortedBy { it.key }
+                .joinToString(",") { (l, g) -> "$l→$g" }
+            val newStr = newSpeakerIds.sorted().joinToString(",")
+            TestLog.log("RECONCILE zone=${overlapZone.startSec}-${overlapZone.endSec}s " +
                     "localIds=[${allLocalIds.joinToString(",")}] globalIds=[${knownGlobalIds.sorted().joinToString(",")}] " +
                     "votes={$votesStr} mapping=[$mappingStr] new=[$newStr] " +
                     "zoneOverlap=${String.format("%.1f", zoneOverlapTotal)}s")

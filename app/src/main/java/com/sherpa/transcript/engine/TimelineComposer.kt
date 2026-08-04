@@ -338,7 +338,12 @@ object TimelineComposer {
 
         for (seg in overlay) {
             val durationMs = seg.endTimeMs - seg.startTimeMs
-            if (durationMs < 8000L || seg.speakerId.isNullOrBlank()) {
+            // Splitte lange Segmente (> 8s) – auch OHNE gesetzte speakerId:
+            // Ein rohes Whisper-Segment, das über einen Diarization-Wechsel hinweggeht,
+            // muss vor dem Assignment getrennt werden, damit der Wechsel nicht vom
+            // dominanten Sprecher geschluckt wird. Die Sub-Segmente erhalten ihre
+            // Labels aus den überlappenden diarizationSegs (dominant pro Zeitfenster).
+            if (durationMs < 8000L) {
                 result.add(seg)
                 continue
             }
@@ -386,9 +391,8 @@ object TimelineComposer {
                     if (o > 0f) speakerMap[ds.speaker] = (speakerMap[ds.speaker] ?: 0f) + o
                 }
                 val best = speakerMap.maxByOrNull { it.value }
-                val bestSpeakerId = best?.key ?: continue
-                val bestOverlapMs = ((best.value) * 1000f).toLong()
-                if (bestOverlapMs < MIN_OVERLAP_MS) continue
+                val bestSpeakerId = best?.key
+                val bestOverlapMs = if (best != null) ((best.value) * 1000f).toLong() else 0L
 
                 // Text proportional zur Zeit verteilen
                 val startRatio = (subStartSec - asrStartSec) / asrDurationSec
@@ -405,6 +409,21 @@ object TimelineComposer {
                 val subStartMs = (subStartSec * 1000f).toLong()
                 val subEndMs = (subEndSec * 1000f).toLong()
 
+                // Verlustfreier Split: Auch wenn kein dominanter Sprecher über dem
+                // Confidence-Gate liegt (z.B. Stille), wird das Sub-Segment erzeugt –
+                // mit dem Original-Label des Eltern-Segments (bzw. null bei rohen
+                // Segmenten). So gehen beim Split der Ground Truth keine Wörter verloren.
+                val subSpeakerId = if (bestSpeakerId != null && bestOverlapMs >= MIN_OVERLAP_MS) {
+                    "speaker_$bestSpeakerId"
+                } else {
+                    seg.speakerId
+                }
+                val subSpeakerLabel = if (bestSpeakerId != null && bestOverlapMs >= MIN_OVERLAP_MS) {
+                    "Sprecher ${bestSpeakerId + 1}"
+                } else {
+                    seg.speakerLabel
+                }
+
                 result.add(TranscriptSegment(
                     segmentId = java.util.UUID.randomUUID().toString(),
                     text = subText.ifBlank { seg.text },
@@ -412,8 +431,8 @@ object TimelineComposer {
                     endTimeMs = subEndMs,
                     isFinal = true,
                     isNew = false,
-                    speakerId = "speaker_$bestSpeakerId",
-                    speakerLabel = "Sprecher ${bestSpeakerId + 1}",
+                    speakerId = subSpeakerId,
+                    speakerLabel = subSpeakerLabel,
                     timestamp = seg.timestamp,
                 ))
                 totalSplitAfter++

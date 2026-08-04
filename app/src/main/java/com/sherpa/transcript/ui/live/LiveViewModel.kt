@@ -14,6 +14,7 @@ import com.sherpa.transcript.data.local.TranscriptEntity
 import com.sherpa.transcript.data.repository.TranscriptRepository
 import com.sherpa.transcript.domain.audio.AudioCaptureManager
 import com.sherpa.transcript.domain.audio.ChunkedAudioBuffer
+import com.sherpa.transcript.domain.audio.TestLog
 import com.sherpa.transcript.domain.model.RecordingState
 import com.sherpa.transcript.domain.model.TranscriptSegment
 import com.sherpa.transcript.engine.DiarizationChunkWorker
@@ -23,6 +24,8 @@ import com.sherpa.transcript.engine.FinalTranscriptComposer
 import com.sherpa.transcript.engine.ModelDownloadManager
 import com.sherpa.transcript.engine.RollingReconciler
 import com.sherpa.transcript.engine.SherpaOnnxEngine
+import com.sherpa.transcript.engine.SherpaEmbeddingComputer
+import com.sherpa.transcript.engine.SessionVoiceBank
 import com.sherpa.transcript.engine.SpeakerDiarizationEngine
 import com.sherpa.transcript.engine.SpeakerModelDownloadManager
 import com.sherpa.transcript.engine.TimelineComposer
@@ -108,6 +111,20 @@ class LiveViewModel : ViewModel() {
          * Die Weiche im Capture-Loop pusht dann ausschließlich in den ChunkedAudioBuffer.
          */
         private const val ENABLE_CHUNKED_DIARIZATION = true
+
+        /**
+         * Tuning-Hebel F (Diagnose, 0.5.45) – seit 0.5.53 überholt:
+         * ALLOW_NEW_SPEAKER_IDS=false reaktiviert den Strip-Guard.
+         *
+         * false = protectFromNewIds aktiv: unbestätigte Kandidaten-IDs werden
+         *         verworfen. Bestätigte Voice-Bank-Sprecher (2-Kontakt-Härtung,
+         *         confirmedBankIds-Ausnahme in mergeCandidateIntoBest) kommen
+         *         trotzdem durch – sie sind echte neue Sprecher.
+         *         Log-Befund 0.5.55: speakers=4 bei nur 1 bestätigtem
+         *         Bank-Sprecher (global=2,3 pending) → Guard wieder scharf.
+         * true  = Diagnose-Modus (0.5.45): alle neuen IDs in den UI-Bestand.
+         */
+        private const val ALLOW_NEW_SPEAKER_IDS = false
     }
 
     private val _uiState = MutableStateFlow(LiveUiState())
@@ -122,11 +139,36 @@ class LiveViewModel : ViewModel() {
     // Lazy-Init: bei Toggle=OFF werden diese Komponenten nie erzeugt (kein RAM/CPU).
     private val chunkedAudioBuffer by lazy { ChunkedAudioBuffer() }
     private val rollingReconciler by lazy { RollingReconciler() }
+    /** Hebel G: akustische Voice-Bank gegen Engine-Drift (embedding.onnx aus Assets). */
+    private val sessionVoiceBank by lazy {
+        // 0.5.61-Neukalibrierung (echte Mikrofon-Aufnahme + Titanet, Transkript-
+        // Referenzzeiten): INTRA min 0.638 / INTER max 0.612 → Sweet Spot 0.625.
+        // 0.38 (0.5.48, auf Wall-Clock-Pfad kalibriert) lag unter dem Inter-Maximum
+        // → matchte verschiedene Sprecher fälschlich (Log-Befund 0.5.60: sim 0.672
+        // → global=0). 0.62 = konservativ. minIdentifySec=2s: 1s-Segmente erzeugten
+        // Falsch-Matches (sim 0.669) und werden seit 0.5.61 nicht mehr aufgelöst.
+        // 0.5.62: pendingConfirmThreshold 0.35 (BESTÄTIGUNG locker – die App-
+        // Aufnahme hat niedrigere Intra-Sims als die Rekorder-WAV; mit 0.62 blieb
+        // alles pending). matchThreshold bleibt 0.62 (RESOLVE strikt).
+        SessionVoiceBank(
+            computer = SherpaEmbeddingComputer(SherpaTranscriptApp.instance.assets),
+            matchThreshold = 0.62f,
+            minEnrollmentSec = 2f,
+            minIdentifySec = 2f,
+            pendingConfirmThreshold = 0.35f,
+        )
+    }
     private val diarizationChunkWorker by lazy {
         DiarizationChunkWorker(
             buffer = chunkedAudioBuffer,
             diarizer = speakerEngine::process,
             reconciler = rollingReconciler,
+            voiceBank = sessionVoiceBank,
+            // Tuning-Hebel 1 rückgängig (0.5.51): Chunk zurück auf 15s + 5s Overlap.
+            // Log-Befund 0.5.50: 30s+10s lieferte ein 30,9s-Monster-Segment (beide
+            // Sprecher verschmolzen) → speakers=1, kein FIRST_2SPK. Bei 15s+5s hatte
+            // Pyannote den Wechsel eindeutig gefunden – das war der bessere Stand.
+            chunkSec = 15f,
         )
     }
 
@@ -135,8 +177,30 @@ class LiveViewModel : ViewModel() {
     private var currentTranscriptId: String? = null
     private var recordingStartedAt: Long = 0L
 
+    /**
+     * KUMULIERTE Sample-Zeit (ms) seit Session-Start für den ChunkedAudioBuffer.
+     *
+     * KRITISCHER FIX (0.5.58): Die Frames werden NICHT mit Wall-Clock-Zeit
+     * (`sessionRelativeMs()`) positioniert, sondern mit der kumulierten
+     * Audio-Dauer (`pushedSamples * 1000 / sampleRate`).
+     *
+     * Log-Beweis: Die WAV-Analyse zeigte Chunk [55,75] in der Quelle mit völlig
+     * normalem Pegel (RMS 0.076), die App maß dort aber 0.0005 (152x leiser) –
+     * obwohl Whisper denselben Frame-Stream transkribierte. Ursache: Der
+     * Capture-Loop stockt unter Last (ASR-Inferenz + Pyannote + Voice-Bank),
+     * Frames bekamen Wall-Clock-Stempel → die Zeitachse im Buffer dehnte sich →
+     * Chunk [55,75] zeigte auf einen Bereich mit fast keinen Frames → Pyannote
+     * sah fast Stille → 0 Segmente (Boost 197x als Rausch-Orkan).
+     *
+     * Mit der Sample-Zeit bleibt die Position eines Frames exakt seine
+     * Audio-Position, egal wie stark der Loop verzögert wird.
+     */
+    private var pushedSampleCountMs = 0L
+
     // Ebene 1: Rohdaten – nie mergen
-    private val rawFinalSegments = mutableListOf<TranscriptSegment>()
+    // var: Hebel 2 (0.5.52) ersetzt die Liste atomar bei Split der Ground Truth –
+    // sicherer gegen Race mit dem Whisper-Callback als in-place clear+addAll.
+    private var rawFinalSegments = mutableListOf<TranscriptSegment>()
     // Ebene 2: mit Sprecher-Zuordnung
     private var assignedFinalSegments: List<TranscriptSegment> = emptyList()
     private var bestAssignmentQuality = AssignmentQuality(0, 0, 0)
@@ -347,11 +411,16 @@ class LiveViewModel : ViewModel() {
             speakerEngine.resetZeroSegmentCounters()
             synchronized(audioLock) { audioAccumulator.clear(); audioBaseTimeMs = 0L }
             if (ENABLE_CHUNKED_DIARIZATION) {
-                // Neue Pipeline zurücksetzen (Buffer-Fortschritt + globaler Speaker-Bestand)
+                // Neue Pipeline zurücksetzen (Buffer-Fortschritt + globaler Speaker-Bestand + Voice-Bank)
                 chunkedAudioBuffer.clear()
                 diarizationChunkWorker.reset()
+                sessionVoiceBank.reset()
+                pushedSampleCountMs = 0L
             }
             engine.startSession()
+
+            // 0.5.68: Debug-Mode → Roh-Aufnahme als WAV speichern (Host-Analyse)
+            audioCapture.saveRawWav = _uiState.value.debugMode
 
             captureJob = viewModelScope.launch {
                 audioCapture.startCapture().collect { frame ->
@@ -359,8 +428,11 @@ class LiveViewModel : ViewModel() {
                     if (result != null && result.text.isNotBlank()) handleResult(result.text, result.isFinal)
                     if (ENABLE_CHUNKED_DIARIZATION) {
                         // Gleis 2 (neu): Frame in den Chunk-Buffer – non-blocking (~20ns Lock).
-                        // Der audioAccumulator wird hier bewusst NICHT gefüttert (Memory-Leak-Schutz).
-                        chunkedAudioBuffer.push(frame, sessionRelativeMs())
+                        // KRITISCH: Sample-basierte Zeit statt Wall-Clock (0.5.58) – siehe
+                        // pushedSampleCountMs-Doku. Sonst dehnt sich die Buffer-Zeitachse
+                        // unter Last und Chunks zeigen auf fast leere Bereiche (0 Segmente).
+                        chunkedAudioBuffer.push(frame, pushedSampleCountMs)
+                        pushedSampleCountMs += frame.size * 1000L / 16000
                     } else {
                         // Gleis 2 (alt): bisheriger Accumulator-Pfad
                         synchronized(audioLock) {
@@ -494,11 +566,19 @@ class LiveViewModel : ViewModel() {
             .distinct().size
         val protectExistingLabels = bestSpeakerCount >= 2 && candSpeakerCount < bestSpeakerCount
 
-        // Zusätzlicher Schutz: gleiche Speakerzahl, aber Candidate führt IDs ein, die nicht in best sind
+        // Hebel F (0.5.45 Diagnose) ist mit der Enrollment-Härtung (0.5.53+)
+        // überholt: ALLOW_NEW_SPEAKER_IDS=false reaktiviert den Strip-Guard.
+        // ABER: bestätigte Voice-Bank-Sprecher (2-Kontakt-Härtung) sind echte
+        // neue Sprecher und werden NIE gestrippt – nur unbestätigte Fehlcluster.
+        // Log-Befund 0.5.55: speakers=4 am Ende, obwohl die Bank nur 1 bestätigt
+        // hat (global=2,3 pending) – die unbestätigten IDs kamen durch den Guard.
+        val confirmedBankIds = if (ENABLE_CHUNKED_DIARIZATION) {
+            sessionVoiceBank.enrolledSpeakerIds.map { "speaker_$it" }.toSet()
+        } else emptySet()
         val candHasNewIds = candidate
             .mapNotNull { it.speakerId?.takeIf { s -> s.isNotBlank() } }
-            .distinct().any { it !in bestSpeakerIds }
-        val shouldStripNewIds = protectExistingLabels || (bestSpeakerCount >= 2 && candHasNewIds)
+            .distinct().any { it !in bestSpeakerIds && it !in confirmedBankIds }
+        val shouldStripNewIds = !ALLOW_NEW_SPEAKER_IDS && (protectExistingLabels || (bestSpeakerCount >= 2 && candHasNewIds))
 
         // Zweite Schutzschicht: neue IDs aus Kandidaten entfernen
         var strippedCount = 0
@@ -576,6 +656,65 @@ class LiveViewModel : ViewModel() {
             seg.copy(speakerId = newId, speakerLabel = newLabel)
         }
         Log.d(TAG, "renumberLiveSpeakerIds: ${oldToNew.size} speakers remapped (old=${oldToNew.keys.map { it.removePrefix("speaker_") }.sorted().joinToString(",")} → new=0..${oldToNew.size - 1})")
+    }
+
+    /**
+     * Heuristik (0.5.63, Ziel-Fix 0.5.64): Führende unbestätigte Speaker-Labels
+     * dem ersten bestätigten Sprecher zuordnen.
+     *
+     * Host-Befund (Testclip Di._07.52, lokale Reproduktion exakt App-Version):
+     * Der 1. Chunk mit FIXED_2 erzeugt für einen einzelnen Sprecher zwei Cluster
+     * (bekannter "Monologue split" – numClusters=2 erzwingt 2 Cluster). Das
+     * 0-10s-Prä-Fragment (z.B. "Nicht mehr merken, aber") wird von der Voice-Bank
+     * nie bestätigt (Titanet-Sim 0.05 zu A), bleibt aber im globalen Bestand und
+     * erscheint als zusätzlicher Sprecher (3 statt 2).
+     *
+     * 0.5.64-Fix: Ziel-ID und Ziel-Label kommen aus dem SEGMENT mit der frühesten
+     * Startzeit, dessen ID in der Bank bestätigt ist – nicht aus der Bank-ID
+     * konstruiert ("Sprecher ${id+1}" stimmt nur nach renumber, und die Bank-ID
+     * ist nicht zwingend die Bestands-ID). Geräte-Log 0.5.63 zeigte dadurch
+     * "auf Sprecher 2 gemappt" für den ersten bestätigten Sprecher.
+     *
+     * 0.5.65-Fix: Auch UNLABELED Segmente (kein speakerId, z.B. kein Overlap
+     * mit Diarization-Segmenten) werden gemappt, wenn sie komplett vor dem
+     * ersten bestätigten Sprecher enden. Geräte-Log 0.5.64: "Nicht mehr merken,
+     * aber" (3,7-4,9s) und "die Erfahrung deswegen ist aus" (6,2-7,6s) blieben
+     * unlabeled, weil der fullBestand dort keine Segmente hat – die Referenz
+     * ordnet sie Sprecher 1 zu.
+     *
+     * Konservativ: NUR Segmente, die KOMPLETT VOR dem ersten bestätigten Sprecher
+     * enden, werden auf dessen ID gemappt. Spätere unbestätigte Fragmente bleiben
+     * unangetastet (könnten echte neue Sprecher sein). Läuft nur im Final-Lauf
+     * (forceFinal) – Rolling-Zustände bleiben unverändert.
+     */
+    private fun resolveLeadingUnconfirmedSpeakerLabels() {
+        val confirmedIds = sessionVoiceBank.enrolledSpeakerIds
+        if (confirmedIds.isEmpty()) return
+        // Erstes bestätigtes Segment im BESTAND: ID + Label daraus übernehmen
+        val firstConfirmed = assignedFinalSegments
+            .filter { seg -> seg.speakerId?.removePrefix("speaker_")?.toIntOrNull() in confirmedIds }
+            .minByOrNull { it.startTimeMs } ?: return
+        val targetId = firstConfirmed.speakerId ?: return
+        val targetLabel = firstConfirmed.speakerLabel ?: targetId
+        val firstConfirmedStartMs = firstConfirmed.startTimeMs
+        var resolved = 0
+        var resolvedUnlabeled = 0
+        assignedFinalSegments = assignedFinalSegments.map { seg ->
+            val spkNum = seg.speakerId?.removePrefix("speaker_")?.toIntOrNull()
+            val isUnconfirmed = spkNum == null || spkNum !in confirmedIds
+            if (isUnconfirmed && seg.endTimeMs <= firstConfirmedStartMs) {
+                resolved++
+                if (spkNum == null) resolvedUnlabeled++
+                seg.copy(speakerId = targetId, speakerLabel = targetLabel)
+            } else seg
+        }
+        if (resolved > 0) {
+            bestAssignmentQuality = computeQuality(assignedFinalSegments)
+            val msg = "resolveLeadingUnconfirmedSpeakerLabels: $resolved Segment(e) auf $targetLabel gemappt " +
+                    "(davon $resolvedUnlabeled unlabeled, vor erstem bestätigten Start ${firstConfirmedStartMs}ms, Bank=${confirmedIds.sorted()})"
+            Log.i(TAG, msg)
+            TestLog.log(msg)
+        }
     }
 
     /**
@@ -954,8 +1093,27 @@ class LiveViewModel : ViewModel() {
 
                 // Rohsegmente vor Zuordnung kompaktieren (temporäre Kopie)
                 val compactedSegs = TimelineComposer.compactRawSegmentsBeforeAssignment(rawFinalSegments)
+
+                // Hebel 2 (0.5.52): Lange Whisper-Segmente (>8s) an Diarization-Grenzen
+                // splitten – VOR dem Assignment, damit ein Wechsel im Segment nicht vom
+                // dominanten Sprecher geschluckt wird. Die Split-Ergebnisse werden in
+                // rawFinalSegments ZURÜCKGESPIEGELT (Ground Truth): Der Whisper-Dedupe
+                // matcht über Text-Overlap + Zeit (nicht über UUIDs) – solange das lange
+                // Segment in rawFinalSegments als EINES existiert, stülpt der nächste
+                // REPLACE (fullPrefix) den Text wieder darüber und der Split stirbt.
+                val splitRawSegs = TimelineComposer.splitLongSpeakerSegments(compactedSegs, diarizationSegs)
+                val finalRawForAssignment = if (splitRawSegs.size > compactedSegs.size) {
+                    Log.d(TAG, "ChunkedDiarization SPLIT(raw): ${compactedSegs.size} → ${splitRawSegs.size} " +
+                            "Segmente – Ground Truth (rawFinalSegments) aktualisiert")
+                    // Atomare Referenz-Ersetzung statt in-place clear+addAll (Race-Schutz)
+                    rawFinalSegments = splitRawSegs.toMutableList()
+                    splitRawSegs
+                } else {
+                    compactedSegs
+                }
+
                 // Worker liefert globale IDs → KEIN normalizeSpeakerIds nötig
-                val candidate = TimelineComposer.assignSpeakersToRawSegments(compactedSegs, diarizationSegs, debug = _uiState.value.debugMode)
+                val candidate = TimelineComposer.assignSpeakersToRawSegments(finalRawForAssignment, diarizationSegs, debug = _uiState.value.debugMode)
                 if (candidate.isEmpty()) return@withContext
                 val candQuality = computeQuality(candidate)
 
@@ -964,7 +1122,13 @@ class LiveViewModel : ViewModel() {
                     .map { it.speaker }
                     .distinct().sorted().joinToString(",")
                 Log.d(TAG, "ChunkedDiarization: workerSegs=${diarizationSegs.size} globalIds=[$globalLabels] " +
-                        "mapping=[${workerResult.mapping}] new=[${workerResult.newSpeakerIds.sorted().joinToString(",")}]")
+                        "mapping=[${workerResult.mapping}] new=[${workerResult.newSpeakerIds.sorted().joinToString(",")}] " +
+                        "vb=(bank=${workerResult.voiceBankSize} resolve=${workerResult.voiceBankResolvedCount} " +
+                        "enroll=${workerResult.voiceBankEnrolledCount} skip=${workerResult.voiceBankSkipCount})")
+                TestLog.log("CHUNKED epoch=$epoch workerSegs=${diarizationSegs.size} globalIds=[$globalLabels] " +
+                        "new=[${workerResult.newSpeakerIds.sorted().joinToString(",")}] " +
+                        "vb=(bank=${workerResult.voiceBankSize} resolve=${workerResult.voiceBankResolvedCount} " +
+                        "enroll=${workerResult.voiceBankEnrolledCount} skip=${workerResult.voiceBankSkipCount})")
 
                 val merged = mergeCandidateIntoBest(candidate)
                 val mergedQuality = computeQuality(merged)
@@ -1013,6 +1177,10 @@ class LiveViewModel : ViewModel() {
                     } else {
                         assignedFinalSegments = merged
                         bestAssignmentQuality = mergedQuality
+                        // Heuristik (0.5.63): Führende unbestätigte Labels im Final-Lauf
+                        // dem ersten bestätigten Sprecher zuordnen – MUSS vor renumber laufen,
+                        // damit die Nummerierung nach der Auflösung stimmt.
+                        if (forceFinal) resolveLeadingUnconfirmedSpeakerLabels()
                         renumberLiveSpeakerIds()
                         // FIRST_2SPK: erster 2-Speaker-Zustand der Session – Umschaltpunkt-Marker
                         if (!firstTwoSpeakerLogged && mergedQuality.distinctSpeakers >= 2) {
@@ -1106,10 +1274,14 @@ class LiveViewModel : ViewModel() {
 
         // Regel 5: Neue Sprecher fördern
         if (candQuality.distinctSpeakers > bestAssignmentQuality.distinctSpeakers) {
+            // Hebel F: bei ALLOW_NEW_SPEAKER_IDS wird die Coverage-Schwelle von
+            // 0.7 auf 0.5 gesenkt, damit Engine-Drift-IDs (nach 60s) durchkommen
+            // und der spätere Speaker-Merger sie zusammenführen kann.
+            val coverageThreshold = if (ALLOW_NEW_SPEAKER_IDS) 0.5f else 0.7f
             // 1→2-Übergang: früheres Onboarding mit niedrigerer Coverage-Schwelle (0.5 statt 0.7),
             // aber nur mit Mindest-Evidenz für den NEUEN Sprecher (kein Zufalls-Label)
             val isFirst2Speaker = bestAssignmentQuality.distinctSpeakers == 1 && candQuality.distinctSpeakers == 2
-            val threshold = if (isFirst2Speaker) 0.5f else 0.7f
+            val threshold = if (isFirst2Speaker) 0.5f else coverageThreshold
             if (candQuality.labeledSegments >= bestAssignmentQuality.labeledSegments * threshold &&
                 (!isFirst2Speaker || newSpeakerHasEvidence(candidate))
             ) return true
@@ -1257,6 +1429,8 @@ class LiveViewModel : ViewModel() {
                 val speakerCount = segmentsToSave.mapNotNull { it.speakerId }.distinct().size
                 val sourceCount = rawFinalSegments.size
                 Log.i(TAG, "stopRecording: saveSegments sourceCount=$sourceCount persistedCount=${segmentsToSave.size} ($labeledCount labeled, $speakerCount speakers, zeroSegments=${speakerEngine.zeroSegmentCount}, engineOrThreshold=${speakerEngine.engineOrThresholdCount})")
+                TestLog.log("SAVE source=$sourceCount persisted=${segmentsToSave.size} labeled=$labeledCount speakers=$speakerCount " +
+                        "zeroSegments=${speakerEngine.zeroSegmentCount} engineOrThreshold=${speakerEngine.engineOrThresholdCount}")
                 if (_uiState.value.debugMode) {
                     Log.d(TAG, "LIVE_DBG_SAVE raw=$sourceCount labeled=$labeledCount speakers=$speakerCount persisted=${segmentsToSave.size}")
                 }
@@ -1376,6 +1550,7 @@ class LiveViewModel : ViewModel() {
         if (ENABLE_CHUNKED_DIARIZATION) {
             chunkedAudioBuffer.clear()
             diarizationChunkWorker.reset()
+            sessionVoiceBank.reset()
         }
     }
 }
