@@ -5,6 +5,7 @@ import android.content.pm.PackageManager
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.media.audiofx.AutomaticGainControl
 import android.util.Log
 import androidx.core.content.ContextCompat
 import com.sherpa.transcript.SherpaTranscriptApp
@@ -28,6 +29,9 @@ class AudioCaptureManager(
 ) {
 
     private var audioRecord: AudioRecord? = null
+
+    /** Hardware-AGC (Automatic Gain Control) auf der AudioRecord-Session. */
+    private var agc: AutomaticGainControl? = null
 
     companion object {
         private const val TAG = "AudioCaptureManager"
@@ -72,6 +76,32 @@ class AudioCaptureManager(
         if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
             close(Exception("AudioRecord failed to initialize"))
             return@callbackFlow
+        }
+
+        // ── 0.5.66: Hardware-AGC aktivieren (falls das Gerät es unterstützt) ──
+        // Log-Befund 0.5.63-0.5.65: Die App nimmt konstant ZU LEISE auf
+        // (RMS 0,0006-0,02 → Boost 10x Limit in normalizeAudio), der
+        // HyperOS3-Rekorder bei identischen akustischen Bedingungen nicht
+        // (eigene AGC) → Titanet-Embeddings auf der App-Aufnahme verrauscht
+        // → Monologue-Splits / Fehlzuordnungen, obwohl das Signal trennbar ist.
+        // AGC regelt den Pegel vor der App → weniger Rausch-Boost → saubere
+        // Embeddings. Messbar im Log: normalizeAudio zeigt dann RMS ~0,1 statt
+        // 0,005 und Boost ~1x statt 10x.
+        if (AutomaticGainControl.isAvailable()) {
+            try {
+                val created = AutomaticGainControl.create(audioRecord?.audioSessionId ?: 0)
+                if (created != null) {
+                    created.enabled = true
+                    agc = created
+                    Log.i(TAG, "AGC aktiviert (session=${audioRecord?.audioSessionId}, enabled=${created.enabled})")
+                } else {
+                    Log.w(TAG, "AGC create lieferte null – Gerät unterstützt es nicht (weiter ohne AGC)")
+                }
+            } catch (t: Throwable) {
+                Log.w(TAG, "AGC create fehlgeschlagen: ${t.message}")
+            }
+        } else {
+            Log.d(TAG, "AGC nicht verfügbar auf diesem Gerät – weiter ohne AGC")
         }
 
         audioRecord?.startRecording()
@@ -125,6 +155,10 @@ class AudioCaptureManager(
             }
         } catch (_: Exception) {}
         audioRecord = null
+        try {
+            agc?.release()
+        } catch (_: Exception) {}
+        agc = null
     }
 
     fun isRecording(): Boolean =
