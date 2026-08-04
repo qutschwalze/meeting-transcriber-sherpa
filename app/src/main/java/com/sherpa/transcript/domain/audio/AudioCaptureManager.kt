@@ -6,9 +6,18 @@ import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.media.audiofx.AutomaticGainControl
+import android.os.Environment
 import android.util.Log
 import androidx.core.content.ContextCompat
 import com.sherpa.transcript.SherpaTranscriptApp
+import java.io.BufferedOutputStream
+import java.io.DataOutputStream
+import java.io.File
+import java.io.FileOutputStream
+import java.io.RandomAccessFile
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlin.math.sqrt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
@@ -33,6 +42,18 @@ class AudioCaptureManager(
 
     /** Hardware-AGC (Automatic Gain Control) auf der AudioRecord-Session. */
     private var agc: AutomaticGainControl? = null
+
+    /**
+     * 0.5.68: Wenn true (Debug-Mode), wird die ROH-Aufnahme (16 kHz mono PCM,
+     * exakt wie die App sie bekommt) als WAV gespeichert – für Host-Analyse:
+     * Pegel/Spektrum/Embedding-Separation der echten App-Aufnahme messen und
+     * die Pipeline damit reproduzieren (statt aus Logs zu raten).
+     * Pfad: /sdcard/Android/data/com.sherpa.transcript/files/Download/testaufnahmen/
+     */
+    var saveRawWav: Boolean = false
+    private var wavStream: DataOutputStream? = null
+    private var wavFile: File? = null
+    private var wavDataBytes: Long = 0L
 
     companion object {
         private const val TAG = "AudioCaptureManager"
@@ -112,6 +133,9 @@ class AudioCaptureManager(
 
         audioRecord?.startRecording()
 
+        // 0.5.68: Testaufnahme (Debug-Mode) – Roh-PCM als WAV für Host-Analyse
+        if (saveRawWav) startWavCapture()
+
         withContext(Dispatchers.IO) {
             val pcmShort = ShortArray(frameSize)
             val pcmFloat = FloatArray(frameSize)
@@ -140,6 +164,22 @@ class AudioCaptureManager(
                                 "${"%.3f".format(pcmFloat.maxOf { kotlin.math.abs(it) })} (source=CAMCORDER)")
                         rmsAccum = 0.0
                         rmsCount = 0
+                    }
+                    // 0.5.68: Roh-Samples in die WAV schreiben (Debug-Mode)
+                    val wavOut = wavStream
+                    if (wavOut != null) {
+                        try {
+                            for (i in 0 until bytesRead) {
+                                val s = (pcmFloat[i] * 32767f).toInt().coerceIn(-32768, 32767)
+                                wavOut.writeByte(s and 0xFF)
+                                wavOut.writeByte((s shr 8) and 0xFF)
+                            }
+                            wavDataBytes += bytesRead * 2L
+                        } catch (t: Throwable) {
+                            Log.w(TAG, "WAV-Write fehlgeschlagen: ${t.message}")
+                            try { wavOut.close() } catch (_: Exception) {}
+                            wavStream = null
+                        }
                     }
                     val frame = if (bytesRead < frameSize) pcmFloat.copyOf(bytesRead) else pcmFloat
                     totalFrames++
@@ -170,6 +210,7 @@ class AudioCaptureManager(
     }
 
     fun stopCapture() {
+        closeWavCapture()
         try {
             audioRecord?.apply {
                 if (recordingState == AudioRecord.RECORDSTATE_RECORDING) stop()
@@ -181,6 +222,82 @@ class AudioCaptureManager(
             agc?.release()
         } catch (_: Exception) {}
         agc = null
+    }
+
+    /** 0.5.68: WAV-Header öffnen (16 kHz mono 16-bit PCM, Little-Endian). */
+    private fun startWavCapture() {
+        try {
+            val base = SherpaTranscriptApp.instance.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
+                ?: return
+            val dir = File(base, "testaufnahmen")
+            if (!dir.exists() && !dir.mkdirs()) {
+                Log.w(TAG, "WAV: Ordner konnte nicht erstellt werden: ${dir.absolutePath}")
+                return
+            }
+            val name = "testaufnahme_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())}.wav"
+            val file = File(dir, name)
+            val out = DataOutputStream(BufferedOutputStream(FileOutputStream(file)))
+            out.writeBytes("RIFF")
+            writeLeInt(out, 36)          // Chunk-Size (wird am Ende gepatcht)
+            out.writeBytes("WAVE")
+            out.writeBytes("fmt ")
+            writeLeInt(out, 16)          // fmt-Chunk-Größe
+            writeLeShort(out, 1)         // PCM
+            writeLeShort(out, 1)         // Mono
+            writeLeInt(out, 16000)       // Sample-Rate
+            writeLeInt(out, 16000 * 2)   // Byte-Rate
+            writeLeShort(out, 2)         // Block-Align
+            writeLeShort(out, 16)        // Bits pro Sample
+            out.writeBytes("data")
+            writeLeInt(out, 0)           // Data-Size (wird am Ende gepatcht)
+            wavStream = out
+            wavFile = file
+            wavDataBytes = 0L
+            Log.i(TAG, "WAV-Testaufnahme startet (Debug-Mode): ${file.absolutePath}")
+        } catch (t: Throwable) {
+            Log.w(TAG, "WAV-Start fehlgeschlagen: ${t.message}")
+            wavStream = null
+            wavFile = null
+        }
+    }
+
+    /** 0.5.68: WAV schließen und Header-Größen patchen (Little-Endian). */
+    private fun closeWavCapture() {
+        val out = wavStream ?: return
+        try {
+            out.flush()
+            out.close()
+            val file = wavFile
+            if (file != null) {
+                val riffSize = (36 + wavDataBytes).toInt()
+                val dataSize = wavDataBytes.toInt()
+                val raf = RandomAccessFile(file, "rw")
+                raf.seek(4); raf.write(riffSize and 0xFF); raf.write((riffSize shr 8) and 0xFF)
+                raf.write((riffSize shr 16) and 0xFF); raf.write((riffSize shr 24) and 0xFF)
+                raf.seek(40); raf.write(dataSize and 0xFF); raf.write((dataSize shr 8) and 0xFF)
+                raf.write((dataSize shr 16) and 0xFF); raf.write((dataSize shr 24) and 0xFF)
+                raf.close()
+                val durSec = wavDataBytes / 2 / 16000
+                Log.i(TAG, "WAV-Testaufnahme fertig: ${file.absolutePath} (${durSec}s, ${wavDataBytes / 1024} KiB)")
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "WAV-Close fehlgeschlagen: ${t.message}")
+        }
+        wavStream = null
+        wavFile = null
+        wavDataBytes = 0L
+    }
+
+    private fun writeLeInt(out: DataOutputStream, v: Int) {
+        out.writeByte(v and 0xFF)
+        out.writeByte((v shr 8) and 0xFF)
+        out.writeByte((v shr 16) and 0xFF)
+        out.writeByte((v shr 24) and 0xFF)
+    }
+
+    private fun writeLeShort(out: DataOutputStream, v: Int) {
+        out.writeByte(v and 0xFF)
+        out.writeByte((v shr 8) and 0xFF)
     }
 
     fun isRecording(): Boolean =
