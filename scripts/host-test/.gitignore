@@ -2,3 +2,5 @@
 asr_out.json
 pipeline_out.json
 clip16k.wav
+__pycache__/
+*.pyc
