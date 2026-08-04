@@ -235,6 +235,15 @@ class SessionVoiceBank(
                     bestId, bestSim, effectiveThreshold, sims))
             TestLog.log(String.format("VB_IDENTIFY sims=[%s] → MATCH global=%d sim=%.3f (thr=%.3f)",
                     sims, bestId, bestSim, effectiveThreshold))
+            // 0.5.76: NUR bei echtem Match die ID zurückgeben!
+            // Log-Befund 0.5.75 (VB_IDENTIFY): "sims=[0~=0,347] → KEIN Match"
+            // aber der Worker resolvete trotzdem – `return bestId` am Funktionsende
+            // gab die beste ID AUCH unter der Schwelle zurück. Dadurch wurde JEDER
+            // neue Kontakt (auch B mit sim 0,14-0,35) als Drift auf die bestehende
+            // ID aufgelöst statt eingeschrieben → die Bank konnte seit 0.5.62 nie
+            // einen zweiten Sprecher etablieren (App immer nur 1 Speaker, obwohl
+            // der Host mit derselben WAV 2 findet – Python init bestSim=0.62).
+            return bestId
         } else {
             // Kein Match über Threshold – nur verbose (kommt bei jedem neuen Sprecher vor)
             val maxSim = voiceprints.entries.maxByOrNull { cosineSimilarity(embedding, it.value) }
@@ -243,8 +252,8 @@ class SessionVoiceBank(
                     topSim, maxSim?.key ?: -1, matchThreshold, sims))
             TestLog.log(String.format("VB_IDENTIFY sims=[%s] → KEIN Match (best=%.3f gegen global=%d, thr=%.3f)",
                     sims, topSim, maxSim?.key ?: -1, matchThreshold))
+            return null
         }
-        return bestId
     }
 
     /**
