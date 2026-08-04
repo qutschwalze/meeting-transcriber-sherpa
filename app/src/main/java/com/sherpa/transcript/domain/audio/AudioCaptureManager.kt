@@ -205,7 +205,15 @@ class AudioCaptureManager(
                                 wavStream = null
                             }
                         }
-                        val frame = if (bytesRead < frameSize) pcmFloat.copyOf(bytesRead) else pcmFloat
+                        // 0.5.71: IMMER kopieren! Buffer-Reuse-Bug: pcmFloat ist ein
+                        // wiederverwendetes Array. Ohne copyOf sendet der Producer die
+                        // REFERENZ in den Channel; der nächste Loop-Read überschreibt
+                        // das Array, während Collector/Channel noch darauf zeigen →
+                        // der ChunkedAudioBuffer bekommt korrupte Samples (Log-Beweis
+                        // 0.5.70: globalIds=[0] in ALLEN Chunks, Chunk-RMS ~2x leiser
+                        // als CAPTURE_RMS, obwohl die WAV vollständig ist und der Host
+                        // mit derselben WAV 2 Speaker findet).
+                        val frame = pcmFloat.copyOf(bytesRead)
                         totalFrames++
                         // send statt trySend: blockiert erst bei 41s Rückstau (kein Drop)
                         if (!channel.isClosedForSend) channel.send(frame)
@@ -219,6 +227,7 @@ class AudioCaptureManager(
                 val durSec = totalFrames * frameSize / sampleRate
                 Log.i(TAG, "Capture-Loop beendet: $totalFrames Frames (≈ ${durSec}s)")
                 TestLog.log("Capture-Loop beendet: $totalFrames Frames (≈ ${durSec}s)")
+                TestLog.close()
                 channel.close()
             }
         }
@@ -227,7 +236,7 @@ class AudioCaptureManager(
 
     fun stopCapture() {
         closeWavCapture()
-        TestLog.close()
+        // TestLog wird im Capture-Loop-Finally geschlossen (nach "Capture-Loop beendet")
         try {
             captureJob?.cancel()
         } catch (_: Exception) {}
