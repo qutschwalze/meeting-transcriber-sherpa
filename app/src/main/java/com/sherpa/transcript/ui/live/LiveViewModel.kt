@@ -418,6 +418,9 @@ class LiveViewModel : ViewModel() {
             }
             engine.startSession()
 
+            // 0.5.68: Debug-Mode → Roh-Aufnahme als WAV speichern (Host-Analyse)
+            audioCapture.saveRawWav = _uiState.value.debugMode
+
             captureJob = viewModelScope.launch {
                 audioCapture.startCapture().collect { frame ->
                     val result = engine.processFrame(frame)
