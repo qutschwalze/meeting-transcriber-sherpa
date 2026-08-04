@@ -76,6 +76,19 @@ class DiarizationChunkWorkerTest {
     }
 
     /**
+     * Leises Signal: Schwingt mit kleiner Amplitude um 0 (RMS ≈ amplitude) –
+     * simuliert die leise Mikrofonaufnahme in Chunk [55,75] (RMS ~0.0005).
+     */
+    private fun quietFrame(amplitude: Float): FloatArray =
+        FloatArray(frameSamples) { i -> if (i % 2 == 0) amplitude else -amplitude }
+
+    private fun ChunkedAudioBuffer.pushQuietFrames(amplitude: Float, count: Int, startMs: Long = 0L) {
+        for (i in 0 until count) {
+            push(quietFrame(amplitude), startMs + i * 10L)
+        }
+    }
+
+    /**
      * Fake-Diarizer, der den DC-Offset der ankommenden Samples prüft:
      * Der DC-Blocker muss den Mean auf ≈ 0 zentriert haben, bevor die Engine
      * das Audio bekommt (sonst wäre der Mean ≈ 0.05).
@@ -492,6 +505,30 @@ class DiarizationChunkWorkerTest {
         // Der Fake prüft: Ausgabegain ≤ 10x (bei RMS 0.0005 wäre der
         // unlimitierte Boost 200x)
         assertTrue("Boost durch Gain-Limit auf ≤10x gedeckelt (war ${fake.appliedGain}x)", fake.appliedGain <= 10f)
+    }
+
+    @Test
+    fun `relatives Noise Gate laesst leises Signal ueberleben - absolutes Gate wuerde alles loeschen`() {
+        // Regressionstest für 0.5.59: Die Mikrofon-Aufnahme in Chunk [55,75]
+        // hat RMS ~0.0005. Das ABSOLUTE Gate (0.001) löschte fast alle Samples
+        // → Pyannote sah Stille → 0 Segmente. Das RELATIVE Gate (10% des RMS
+        // = 0.00005) muss das Signal durchlassen und boosten.
+        val buffer = ChunkedAudioBuffer(sampleRate = sampleRate)
+        // Signal mit RMS ~0.0005: kleine Schwingung um 0 (wie leise Mikrofonaufnahme)
+        buffer.pushQuietFrames(0.0005f, 2000) // 0-20s, RMS ≈ 0.0005
+
+        val fake = BoostCheckingDiarizer(ArrayDeque())
+        val worker = DiarizationChunkWorker(buffer, fake)
+
+        val result = worker.processNextChunk(debug = false)
+        assertNotNull("leises Signal liefert Chunk", result)
+        result!!
+        // Das Signal muss das Gate überlebt haben → Boost greift (sonst wäre
+        // alles 0 und der Fake würde appliedGain≈0 messen)
+        assertTrue(
+            "relatives Gate lässt leises Signal durch (Boost ${fake.appliedGain}x, erwartet > 1.5x)",
+            fake.appliedGain > 1.5f,
+        )
     }
 
     @Test

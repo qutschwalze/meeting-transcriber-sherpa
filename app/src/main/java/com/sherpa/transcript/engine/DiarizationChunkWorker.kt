@@ -71,11 +71,21 @@ class DiarizationChunkWorker(
         private const val MIN_RETRY_SAMPLES = 10 * SAMPLE_RATE
 
         /**
-         * Noise Gate (0.5.57): Samples unter diesem Absolut-Pegel (nach DC-Zentrierung)
-         * werden auf 0 gesetzt. Killt Mikrofonrauschen, ohne leise Sprache zu fressen
-         * (leise Konsonanten liegen i.d.R. über 0.001 bei 16-bit-Audio [-60 dBFS]).
+         * Noise Gate (0.5.57): RELATIV zum Signal-RMS (0.5.59).
+         *
+         * 0.5.57: Absolutes Gate (|x| < 0.001 → 0). Log-Befund 0.5.58: Die
+         * Mikrofon-Aufnahme ist deutlich leiser als die MP3-Quelle – Chunk
+         * [55,75] hat dort RMS 0.0005, das Gate löschte fast ALLE Samples →
+         * totale Stille → Pyannote: 0 Segmente (Regression durch das Gate!).
+         *
+         * 0.5.59: Schwelle = Anteil des Signal-RMS. Leise Sprache (RMS 0.0005)
+         * überlebt (Schwelle 0.00005), echtes Rauschen unterhalb der relativen
+         * Schwelle wird trotzdem gekillt. Der Pegel skaliert mit.
          */
-        private const val noiseGateThreshold = 0.001f
+        private const val noiseGateRatio = 0.1f
+
+        /** Absolute Untergrenze der Gate-Schwelle (Schutz vor Divisionseffekten). */
+        private const val noiseFloorAbs = 0.00001f
 
         /**
          * Gain-Limit (0.5.57): Harte Obergrenze für den RMS-Boost.
@@ -306,15 +316,17 @@ class DiarizationChunkWorker(
     }
 
     /**
-     * Hebel C (0.5.55–0.5.57): RMS-Normalisierung + DC-Blocker + Noise Gate + Gain-Limit.
+     * Hebel C (0.5.55–0.5.59): RMS-Normalisierung + DC-Blocker + RELATIVES Noise Gate + Gain-Limit.
      *
-     * Log-Befund 0.5.56: DC-Blocker rettet die 2. Hälfte, aber Chunk [55,75] lieferte
-     * Boost 197x (RMS 0.0005) – der Noise Floor wurde mit hochgerissen, Pyannote sah
-     * nur noch Rauschen (0 Segmente) und am Ende kollabierte alles auf 1 Sprecher.
+     * Log-Befund 0.5.58: Chunk [55,75] lieferte trotz Time-Drift-Fix weiterhin 0
+     * Segmente – aber die lokale Sherpa-ONNX-Reproduktion (exakt App-Version 1.13.4)
+     * findet mit der MP3-Quelle Sprache dort. Die Mikrofon-Aufnahme ist deutlich
+     * leiser (RMS 0.0005) – das ABSOLUTE Gate (0.001) löschte das komplette Signal.
      *
      * Pipeline in dieser Reihenfolge:
      * 1. Mean Subtraction (DC-Blocker): zentriert auf die Nulllinie
-     * 2. Noise Gate: Samples unter [noiseGateThreshold] → 0 (Mikrorauschen killen)
+     * 2. RELATIVES Noise Gate: Schwelle = 10% des Signal-RMS (leise Sprache
+     *    überlebt, echtes Rauschen wird gekillt – Pegel skaliert mit)
      * 3. RMS berechnen, nur verstärken wenn zu leise (Ziel 0.1)
      * 4. Gain-Limit: NIE mehr als [maxBoostFactor] (10x) – verhindert
      *    Rausch-Orkane bei fast stillem Audio (Log-Beweis: 197x = pathologisch)
@@ -335,22 +347,37 @@ class DiarizationChunkWorker(
         val mean = (sum / samples.size).toFloat()
 
         val centeredSamples = FloatArray(samples.size)
+        var sumSquaresRaw = 0.0
+        for (i in samples.indices) {
+            val centered = samples[i] - mean
+            centeredSamples[i] = centered
+            sumSquaresRaw += centered * centered
+        }
+        // RMS des ROH-Signals (VOR dem Gate) – Basis für die relative Gate-Schwelle
+        val rmsRaw = kotlin.math.sqrt((sumSquaresRaw / samples.size).toDouble()).toFloat()
+        if (rmsRaw < 0.0001f) return centeredSamples // absolute Stille
+
+        // 2. RELATIVES Noise Gate (0.5.59): Schwelle = Anteil des Signal-RMS.
+        //    Log-Befund 0.5.58: absolutes Gate (0.001) löschte leises
+        //    Mikrofon-Signal (RMS 0.0005) komplett → Pyannote sah Stille →
+        //    0 Segmente. Mit 10% des RMS überlebt leise Sprache, Rauschen
+        //    unterhalb der relativen Schwelle wird weiterhin gekillt.
+        val gateThreshold = (rmsRaw * noiseGateRatio).coerceAtLeast(noiseFloorAbs)
         var sumSquares = 0f
         var maxPeak = 0f
-        for (i in samples.indices) {
-            var centered = samples[i] - mean
-            // 2. Noise Gate: absolutes Mikrorauschen auf 0 (nach der Zentrierung!)
-            if (kotlin.math.abs(centered) < noiseGateThreshold) {
-                centered = 0f
+        for (i in centeredSamples.indices) {
+            var v = centeredSamples[i]
+            if (kotlin.math.abs(v) < gateThreshold) {
+                v = 0f
             }
-            centeredSamples[i] = centered
-            val absSample = kotlin.math.abs(centered)
-            sumSquares += centered * centered
+            centeredSamples[i] = v
+            val absSample = kotlin.math.abs(v)
+            sumSquares += v * v
             if (absSample > maxPeak) maxPeak = absSample
         }
 
         val rms = kotlin.math.sqrt((sumSquares / samples.size).toDouble()).toFloat()
-        if (rms < 0.0001f) return centeredSamples // absolute Stille
+        if (rms < 0.0001f) return centeredSamples // nach Gate nur noch Rauschen/Stille
 
         // 3. Nur verstärken wenn zu leise (Ziel-Pegel 0.1), Clipping verhindern
         val targetRms = 0.1f
@@ -367,7 +394,7 @@ class DiarizationChunkWorker(
         }
 
         if (gain > 1.5f) {
-            Log.d(TAG, "normalizeAudio: DC-Offset $mean entfernt, Noise-Gate an, Boost ${String.format("%.2fx", gain)} " +
+            Log.d(TAG, "normalizeAudio: DC-Offset $mean entfernt, Gate ${String.format("%.5f", gateThreshold)} (relativ), Boost ${String.format("%.2fx", gain)} " +
                     "(Limit ${maxBoostFactor}x, RMS ${String.format("%.4f", rms)} → Ziel $targetRms)")
             for (i in centeredSamples.indices) {
                 centeredSamples[i] = centeredSamples[i] * gain
