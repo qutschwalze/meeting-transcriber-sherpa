@@ -59,13 +59,38 @@ def normalize_audio(x):
 
 
 # ── RollingReconciler (1:1 aus RollingReconciler.kt) ──────────────────────────
+MIN_AGGREGATE_SEC = 2.0
+
+
+def aggregate_fragments(local):
+    """0.5.64: Alle lokalen Segmente < min_frag → pro Engine-ID aggregieren,
+    wenn die Redezeit zusammen >= MIN_AGGREGATE_SEC (konsistent mit der Bank)."""
+    if not local:
+        return []
+    by_spk = {}
+    for s in local:
+        by_spk.setdefault(s["speaker"], []).append(s)
+    out = []
+    for spk, segs in by_spk.items():
+        total = sum(s["end"] - s["start"] for s in segs)
+        if total < MIN_AGGREGATE_SEC:
+            continue
+        out.append({"start": min(s["start"] for s in segs),
+                    "end": max(s["end"] for s in segs), "speaker": spk})
+    return out
+
+
 def reconcile(local, zone_start, zone_end, prev_global, min_match=MIN_MATCH_OVERLAP, min_frag=MIN_FRAGMENT):
     if not local:
         return [], {}, set(), 0.0
     sig_local = [s for s in local if (s["end"] - s["start"]) >= min_frag]
     sig_global = [s for s in prev_global if (s["end"] - s["start"]) >= min_frag]
     if not sig_local:
-        return [], {}, set(), 0.0
+        # 0.5.64: Fragment-Aggregation statt komplettem Verwerfen
+        aggregated = aggregate_fragments(local)
+        if not aggregated:
+            return [], {}, set(), 0.0
+        return reconcile(aggregated, zone_start, zone_end, prev_global, min_match, min_frag)
 
     global_ranges = {}
     max_gid = -1

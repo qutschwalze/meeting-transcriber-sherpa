@@ -655,8 +655,8 @@ class LiveViewModel : ViewModel() {
     }
 
     /**
-     * Heuristik (0.5.63): Führende unbestätigte Speaker-Labels dem ersten
-     * bestätigten Sprecher zuordnen.
+     * Heuristik (0.5.63, Ziel-Fix 0.5.64): Führende unbestätigte Speaker-Labels
+     * dem ersten bestätigten Sprecher zuordnen.
      *
      * Host-Befund (Testclip Di._07.52, lokale Reproduktion exakt App-Version):
      * Der 1. Chunk mit FIXED_2 erzeugt für einen einzelnen Sprecher zwei Cluster
@@ -664,6 +664,12 @@ class LiveViewModel : ViewModel() {
      * 0-10s-Prä-Fragment (z.B. "Nicht mehr merken, aber") wird von der Voice-Bank
      * nie bestätigt (Titanet-Sim 0.05 zu A), bleibt aber im globalen Bestand und
      * erscheint als zusätzlicher Sprecher (3 statt 2).
+     *
+     * 0.5.64-Fix: Ziel-ID und Ziel-Label kommen aus dem SEGMENT mit der frühesten
+     * Startzeit, dessen ID in der Bank bestätigt ist – nicht aus der Bank-ID
+     * konstruiert ("Sprecher ${id+1}" stimmt nur nach renumber, und die Bank-ID
+     * ist nicht zwingend die Bestands-ID). Geräte-Log 0.5.63 zeigte dadurch
+     * "auf Sprecher 2 gemappt" für den ersten bestätigten Sprecher.
      *
      * Konservativ: NUR Segmente, die KOMPLETT VOR dem ersten bestätigten Sprecher
      * enden, werden auf dessen ID gemappt. Spätere unbestätigte Fragmente bleiben
@@ -673,13 +679,13 @@ class LiveViewModel : ViewModel() {
     private fun resolveLeadingUnconfirmedSpeakerLabels() {
         val confirmedIds = sessionVoiceBank.enrolledSpeakerIds
         if (confirmedIds.isEmpty()) return
-        val confirmedSegs = assignedFinalSegments.filter { seg ->
-            seg.speakerId?.removePrefix("speaker_")?.toIntOrNull() in confirmedIds
-        }
-        val firstConfirmedStartMs = confirmedSegs.minOfOrNull { it.startTimeMs } ?: return
-        val firstConfirmedId = confirmedIds.min()
-        val targetId = "speaker_$firstConfirmedId"
-        val targetLabel = "Sprecher ${firstConfirmedId + 1}"
+        // Erstes bestätigtes Segment im BESTAND: ID + Label daraus übernehmen
+        val firstConfirmed = assignedFinalSegments
+            .filter { seg -> seg.speakerId?.removePrefix("speaker_")?.toIntOrNull() in confirmedIds }
+            .minByOrNull { it.startTimeMs } ?: return
+        val targetId = firstConfirmed.speakerId ?: return
+        val targetLabel = firstConfirmed.speakerLabel ?: targetId
+        val firstConfirmedStartMs = firstConfirmed.startTimeMs
         var resolved = 0
         assignedFinalSegments = assignedFinalSegments.map { seg ->
             val spkNum = seg.speakerId?.removePrefix("speaker_")?.toIntOrNull()
