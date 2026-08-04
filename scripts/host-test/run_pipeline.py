@@ -559,6 +559,23 @@ compacted = compact_raw(raw)
 split = split_long(compacted, global_bestand)
 assigned = assign(split, global_bestand)
 
+# ── Leading-Resolve (0.5.65, assign-Ebene wie Kotlin): unlabeled/unbestätigte
+#    Prä-Segmente (end <= erster bestätigter Start) → erste bestätigte ID ─────
+confirmed_ids = set(voice_bank.voiceprints.keys())
+if confirmed_ids:
+    confirmed_assigned = [s for s in assigned if s.get("speaker") is not None and s["speaker"] in confirmed_ids]
+    if confirmed_assigned:
+        first_start = min(s["start_sec"] for s in confirmed_assigned)
+        target_id = min(confirmed_ids)
+        resolved = 0
+        for s in assigned:
+            spk = s.get("speaker")
+            if (spk is None or spk not in confirmed_ids) and s["end_sec"] <= first_start:
+                s["speaker"] = target_id
+                resolved += 1
+        if resolved:
+            print(f"  LEADING_RESOLVE(assign): {resolved} Segment(e) auf spk{target_id} gemappt (vor {first_start:.2f}s)", file=sys.stderr)
+
 # renumberLiveSpeakerIds: IDs nach erstem Auftreten (zeitlich) neu nummerieren
 renumber = {}
 for seg in sorted(assigned, key=lambda s: s["start_sec"]):
