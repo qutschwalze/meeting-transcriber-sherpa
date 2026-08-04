@@ -3,6 +3,7 @@ package com.sherpa.transcript.engine
 import android.util.Log
 import com.sherpa.transcript.domain.audio.AudioChunk
 import com.sherpa.transcript.domain.audio.ChunkedAudioBuffer
+import com.sherpa.transcript.domain.audio.TestLog
 
 /**
  * Abstraktion der Diarization-Engine für den ChunkWorker – testbar per Fake.
@@ -288,6 +289,9 @@ class DiarizationChunkWorker(
                     "engineSegs=${engineSegments.size} mapped=${correctedSegments.size} " +
                     "globalBestand=${globalSegments.size}")
         }
+        TestLog.log("CHUNK chunk=${chunk.startSec}-${chunk.endSec}s overlap=${chunk.overlapSec}s " +
+                "engineSegs=${engineSegments.size} mapped=${correctedSegments.size} " +
+                "globalBestand=${globalSegments.size} retry=${retryOffsetSecApplied}s")
 
         return WorkerChunkResult(
             chunk = chunk,
@@ -396,6 +400,7 @@ class DiarizationChunkWorker(
         if (gain > 1.5f) {
             Log.d(TAG, "normalizeAudio: DC-Offset $mean entfernt, Gate ${String.format("%.5f", gateThreshold)} (relativ), Boost ${String.format("%.2fx", gain)} " +
                     "(Limit ${maxBoostFactor}x, RMS ${String.format("%.4f", rms)} → Ziel $targetRms)")
+            TestLog.log("normalizeAudio: Gate ${String.format("%.5f", gateThreshold)} Boost ${String.format("%.2fx", gain)} RMS ${String.format("%.4f", rms)}")
             for (i in centeredSamples.indices) {
                 centeredSamples[i] = centeredSamples[i] * gain
             }

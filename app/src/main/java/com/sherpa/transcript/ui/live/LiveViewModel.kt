@@ -14,6 +14,7 @@ import com.sherpa.transcript.data.local.TranscriptEntity
 import com.sherpa.transcript.data.repository.TranscriptRepository
 import com.sherpa.transcript.domain.audio.AudioCaptureManager
 import com.sherpa.transcript.domain.audio.ChunkedAudioBuffer
+import com.sherpa.transcript.domain.audio.TestLog
 import com.sherpa.transcript.domain.model.RecordingState
 import com.sherpa.transcript.domain.model.TranscriptSegment
 import com.sherpa.transcript.engine.DiarizationChunkWorker
@@ -709,8 +710,10 @@ class LiveViewModel : ViewModel() {
         }
         if (resolved > 0) {
             bestAssignmentQuality = computeQuality(assignedFinalSegments)
-            Log.i(TAG, "resolveLeadingUnconfirmedSpeakerLabels: $resolved Segment(e) auf $targetLabel gemappt " +
-                    "(davon $resolvedUnlabeled unlabeled, vor erstem bestätigten Start ${firstConfirmedStartMs}ms, Bank=${confirmedIds.sorted()})")
+            val msg = "resolveLeadingUnconfirmedSpeakerLabels: $resolved Segment(e) auf $targetLabel gemappt " +
+                    "(davon $resolvedUnlabeled unlabeled, vor erstem bestätigten Start ${firstConfirmedStartMs}ms, Bank=${confirmedIds.sorted()})"
+            Log.i(TAG, msg)
+            TestLog.log(msg)
         }
     }
 
@@ -1122,6 +1125,10 @@ class LiveViewModel : ViewModel() {
                         "mapping=[${workerResult.mapping}] new=[${workerResult.newSpeakerIds.sorted().joinToString(",")}] " +
                         "vb=(bank=${workerResult.voiceBankSize} resolve=${workerResult.voiceBankResolvedCount} " +
                         "enroll=${workerResult.voiceBankEnrolledCount} skip=${workerResult.voiceBankSkipCount})")
+                TestLog.log("CHUNKED epoch=$epoch workerSegs=${diarizationSegs.size} globalIds=[$globalLabels] " +
+                        "new=[${workerResult.newSpeakerIds.sorted().joinToString(",")}] " +
+                        "vb=(bank=${workerResult.voiceBankSize} resolve=${workerResult.voiceBankResolvedCount} " +
+                        "enroll=${workerResult.voiceBankEnrolledCount} skip=${workerResult.voiceBankSkipCount})")
 
                 val merged = mergeCandidateIntoBest(candidate)
                 val mergedQuality = computeQuality(merged)
@@ -1422,6 +1429,8 @@ class LiveViewModel : ViewModel() {
                 val speakerCount = segmentsToSave.mapNotNull { it.speakerId }.distinct().size
                 val sourceCount = rawFinalSegments.size
                 Log.i(TAG, "stopRecording: saveSegments sourceCount=$sourceCount persistedCount=${segmentsToSave.size} ($labeledCount labeled, $speakerCount speakers, zeroSegments=${speakerEngine.zeroSegmentCount}, engineOrThreshold=${speakerEngine.engineOrThresholdCount})")
+                TestLog.log("SAVE source=$sourceCount persisted=${segmentsToSave.size} labeled=$labeledCount speakers=$speakerCount " +
+                        "zeroSegments=${speakerEngine.zeroSegmentCount} engineOrThreshold=${speakerEngine.engineOrThresholdCount}")
                 if (_uiState.value.debugMode) {
                     Log.d(TAG, "LIVE_DBG_SAVE raw=$sourceCount labeled=$labeledCount speakers=$speakerCount persisted=${segmentsToSave.size}")
                 }
