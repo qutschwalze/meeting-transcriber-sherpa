@@ -140,12 +140,18 @@ class LiveViewModel : ViewModel() {
     private val rollingReconciler by lazy { RollingReconciler() }
     /** Hebel G: akustische Voice-Bank gegen Engine-Drift (embedding.onnx aus Assets). */
     private val sessionVoiceBank by lazy {
-        // Kalibriert aus 0.5.48-Testlauf: Intra-Speaker-Similarity ~0.42-0.53,
-        // Inter-Speaker ~0.32 → Sweet Spot 0.38 (Puffer in beide Richtungen).
+        // 0.5.61-Neukalibrierung (echte Mikrofon-Aufnahme + Titanet, Transkript-
+        // Referenzzeiten): INTRA min 0.638 / INTER max 0.612 → Sweet Spot 0.625.
+        // 0.38 (0.5.48, auf Wall-Clock-Pfad kalibriert) lag unter dem Inter-Maximum
+        // → matchte verschiedene Sprecher fälschlich (Log-Befund 0.5.60: sim 0.672
+        // → global=0). 0.62 = konservativ. minIdentifySec=2s: 1s-Segmente erzeugten
+        // Falsch-Matches (sim 0.669) und werden seit 0.5.61 nicht mehr aufgelöst.
         SessionVoiceBank(
             computer = SherpaEmbeddingComputer(SherpaTranscriptApp.instance.assets),
-            matchThreshold = 0.38f,
+            matchThreshold = 0.62f,
             minEnrollmentSec = 2f,
+            minIdentifySec = 2f,
+            pendingConfirmThreshold = 0.62f,
         )
     }
     private val diarizationChunkWorker by lazy {
