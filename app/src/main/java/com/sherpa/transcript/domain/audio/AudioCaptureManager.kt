@@ -59,6 +59,9 @@ class AudioCaptureManager(
     private var wavFile: File? = null
     private var wavDataBytes: Long = 0L
 
+    /** 0.5.75: Zähler für den periodischen WAV-Header-Patch (alle 500 Frames ≈ 5s). */
+    private var wavPatchCounter = 0
+
     /** 0.5.69: Großer Frame-Channel (~41s) statt callbackFlow-64er-Puffer (640ms). */
     private var frameChannel: Channel<FloatArray>? = null
     private var captureJob: Job? = null
@@ -199,6 +202,14 @@ class AudioCaptureManager(
                                     wavOut.writeByte((s shr 8) and 0xFF)
                                 }
                                 wavDataBytes += bytesRead * 2L
+                                // 0.5.75: Header alle 5s patchen – die WAV bleibt
+                                // auch bei abgebrochenem Stop (App-Kill) nutzbar
+                                // (Log-Befund 0.5.74: 14:09-WAV ungepatcht, Header
+                                // zeigte 0 Daten trotz 117s vollständiger Samples).
+                                if (wavPatchCounter++ >= 500) {
+                                    wavPatchCounter = 0
+                                    patchWavHeader()
+                                }
                             } catch (t: Throwable) {
                                 Log.w(TAG, "WAV-Write fehlgeschlagen: ${t.message}")
                                 try { wavOut.close() } catch (_: Exception) {}
@@ -303,16 +314,9 @@ class AudioCaptureManager(
         try {
             out.flush()
             out.close()
+            patchWavHeader()
             val file = wavFile
             if (file != null) {
-                val riffSize = (36 + wavDataBytes).toInt()
-                val dataSize = wavDataBytes.toInt()
-                val raf = RandomAccessFile(file, "rw")
-                raf.seek(4); raf.write(riffSize and 0xFF); raf.write((riffSize shr 8) and 0xFF)
-                raf.write((riffSize shr 16) and 0xFF); raf.write((riffSize shr 24) and 0xFF)
-                raf.seek(40); raf.write(dataSize and 0xFF); raf.write((dataSize shr 8) and 0xFF)
-                raf.write((dataSize shr 16) and 0xFF); raf.write((dataSize shr 24) and 0xFF)
-                raf.close()
                 val durSec = wavDataBytes / 2 / 16000
                 Log.i(TAG, "WAV-Testaufnahme fertig: ${file.absolutePath} (${durSec}s, ${wavDataBytes / 1024} KiB)")
             }
@@ -322,6 +326,24 @@ class AudioCaptureManager(
         wavStream = null
         wavFile = null
         wavDataBytes = 0L
+        wavPatchCounter = 0
+    }
+
+    /** 0.5.75: Header-Größen (RIFF/Data) aktuell patchen – robust gegen App-Beenden. */
+    private fun patchWavHeader() {
+        val file = wavFile ?: return
+        try {
+            val riffSize = (36 + wavDataBytes).toInt()
+            val dataSize = wavDataBytes.toInt()
+            val raf = RandomAccessFile(file, "rw")
+            raf.seek(4); raf.write(riffSize and 0xFF); raf.write((riffSize shr 8) and 0xFF)
+            raf.write((riffSize shr 16) and 0xFF); raf.write((riffSize shr 24) and 0xFF)
+            raf.seek(40); raf.write(dataSize and 0xFF); raf.write((dataSize shr 8) and 0xFF)
+            raf.write((dataSize shr 16) and 0xFF); raf.write((dataSize shr 24) and 0xFF)
+            raf.close()
+        } catch (t: Throwable) {
+            Log.w(TAG, "WAV-Header-Patch fehlgeschlagen: ${t.message}")
+        }
     }
 
     private fun writeLeInt(out: DataOutputStream, v: Int) {

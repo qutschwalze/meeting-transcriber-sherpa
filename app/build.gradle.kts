@@ -12,8 +12,8 @@ android {
         applicationId = "com.sherpa.transcript"
         minSdk = 26
         targetSdk = 35
-        versionCode = 100
-        versionName = "0.5.74"
+        versionCode = 101
+        versionName = "0.5.75"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

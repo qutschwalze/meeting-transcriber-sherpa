@@ -4,6 +4,7 @@ import android.content.res.AssetManager
 import android.util.Log
 import com.k2fsa.sherpa.onnx.SpeakerEmbeddingExtractor
 import com.k2fsa.sherpa.onnx.SpeakerEmbeddingExtractorConfig
+import com.sherpa.transcript.domain.audio.TestLog
 import kotlin.math.sqrt
 
 /**
@@ -232,12 +233,16 @@ class SessionVoiceBank(
             }
             Log.d(TAG, String.format("identify: MATCH → global=%d sim=%.3f (threshold=%.3f, [%s])",
                     bestId, bestSim, effectiveThreshold, sims))
+            TestLog.log(String.format("VB_IDENTIFY sims=[%s] → MATCH global=%d sim=%.3f (thr=%.3f)",
+                    sims, bestId, bestSim, effectiveThreshold))
         } else {
             // Kein Match über Threshold – nur verbose (kommt bei jedem neuen Sprecher vor)
             val maxSim = voiceprints.entries.maxByOrNull { cosineSimilarity(embedding, it.value) }
             val topSim = if (maxSim != null) cosineSimilarity(embedding, maxSim.value) else 0f
             Log.v(TAG, String.format("identify: KEIN Match – beste Similarity=%.3f gegen global=%d (threshold=%.3f, [%s])",
                     topSim, maxSim?.key ?: -1, matchThreshold, sims))
+            TestLog.log(String.format("VB_IDENTIFY sims=[%s] → KEIN Match (best=%.3f gegen global=%d, thr=%.3f)",
+                    sims, topSim, maxSim?.key ?: -1, matchThreshold))
         }
         return bestId
     }
