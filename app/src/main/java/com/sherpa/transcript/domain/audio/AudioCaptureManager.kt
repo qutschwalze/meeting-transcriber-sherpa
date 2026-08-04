@@ -5,6 +5,7 @@ import android.content.pm.PackageManager
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.util.Log
 import androidx.core.content.ContextCompat
 import com.sherpa.transcript.SherpaTranscriptApp
 import kotlinx.coroutines.Dispatchers
@@ -27,6 +28,13 @@ class AudioCaptureManager(
 ) {
 
     private var audioRecord: AudioRecord? = null
+
+    companion object {
+        private const val TAG = "AudioCaptureManager"
+
+        /** Nach wie vielen Drops wird ein Warngesamt-Log geschrieben. */
+        private const val DROP_LOG_INTERVAL = 50
+    }
 
     /**
      * Startet die Aufnahme und liefert einen Flow von Float PCM-Frames.
@@ -71,6 +79,8 @@ class AudioCaptureManager(
         withContext(Dispatchers.IO) {
             val pcmShort = ShortArray(frameSize)
             val pcmFloat = FloatArray(frameSize)
+            var droppedFrames = 0L
+            var totalFrames = 0L
 
             while (isActive && audioRecord?.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
                 val bytesRead = audioRecord?.read(pcmShort, 0, frameSize) ?: -1
@@ -80,8 +90,27 @@ class AudioCaptureManager(
                         pcmFloat[i] = pcmShort[i] / 32768.0f
                     }
                     val frame = if (bytesRead < frameSize) pcmFloat.copyOf(bytesRead) else pcmFloat
-                    trySend(frame)
+                    totalFrames++
+                    // KRITISCH (0.5.60): trySend-Ergebnis prüfen! callbackFlow hat
+                    // nur 64 Frames Puffer (640ms). Der Collector macht synchron
+                    // ASR-Inferenz (engine.processFrame); wenn Pyannote + Voice-Bank
+                    // parallel die CPU belegen, läuft der Puffer voll und trySend
+                    // droppt still Frames → Audio geht verloren (Log-Beweis:
+                    // Chunk [55,75] in 0.5.58 fast leer trotz normaler Aufnahme).
+                    // Der Zähler macht die Drops sichtbar und quantifiziert sie.
+                    if (!trySend(frame).isSuccess) {
+                        droppedFrames++
+                        if (droppedFrames % DROP_LOG_INTERVAL == 1L || droppedFrames == 1L) {
+                            Log.w(TAG, "FLOW DROP: $droppedFrames Frames verworfen " +
+                                    "(Puffer voll, total=$totalFrames, " +
+                                    "verlorenes Audio ≈ ${droppedFrames * frame.size / sampleRate}s)")
+                        }
+                    }
                 }
+            }
+            if (droppedFrames > 0) {
+                Log.w(TAG, "Capture beendet: $droppedFrames/$totalFrames Frames gedroppt " +
+                        "(≈ ${droppedFrames * frameSize / sampleRate}s Audio verloren)")
             }
         }
 
