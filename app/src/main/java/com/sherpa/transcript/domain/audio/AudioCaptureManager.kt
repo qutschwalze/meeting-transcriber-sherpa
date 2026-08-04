@@ -182,8 +182,10 @@ class AudioCaptureManager(
                         rmsCount += bytesRead
                         if (rmsCount >= sampleRate) {
                             val rms = sqrt(rmsAccum / rmsCount)
+                            val peak = pcmFloat.maxOf { kotlin.math.abs(it) }
                             Log.d(TAG, "CAPTURE_RMS rms=${"%.4f".format(rms)} peakLevel=" +
-                                    "${"%.3f".format(pcmFloat.maxOf { kotlin.math.abs(it) })} (source=CAMCORDER)")
+                                    "${"%.3f".format(peak)} (source=CAMCORDER)")
+                            TestLog.log("CAPTURE_RMS rms=${"%.4f".format(rms)} peak=${"%.3f".format(peak)}")
                             rmsAccum = 0.0
                             rmsCount = 0
                         }
@@ -214,7 +216,9 @@ class AudioCaptureManager(
                     Log.e(TAG, "Capture-Loop Fehler: ${t.message}", t)
                 }
             } finally {
-                Log.i(TAG, "Capture-Loop beendet: $totalFrames Frames (≈ ${totalFrames * frameSize / sampleRate}s)")
+                val durSec = totalFrames * frameSize / sampleRate
+                Log.i(TAG, "Capture-Loop beendet: $totalFrames Frames (≈ ${durSec}s)")
+                TestLog.log("Capture-Loop beendet: $totalFrames Frames (≈ ${durSec}s)")
                 channel.close()
             }
         }
@@ -223,6 +227,7 @@ class AudioCaptureManager(
 
     fun stopCapture() {
         closeWavCapture()
+        TestLog.close()
         try {
             captureJob?.cancel()
         } catch (_: Exception) {}
@@ -256,6 +261,8 @@ class AudioCaptureManager(
             }
             val name = "testaufnahme_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())}.wav"
             val file = File(dir, name)
+            // 0.5.70: Diagnose-Log-Datei neben der WAV (unabhängig vom logcat)
+            TestLog.open(dir, name.replace(".wav", ".log"))
             val out = DataOutputStream(BufferedOutputStream(FileOutputStream(file)))
             out.writeBytes("RIFF")
             writeLeInt(out, 36)          // Chunk-Size (wird am Ende gepatcht)
