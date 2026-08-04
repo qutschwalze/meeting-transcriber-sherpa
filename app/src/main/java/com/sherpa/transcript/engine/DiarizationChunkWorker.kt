@@ -292,6 +292,13 @@ class DiarizationChunkWorker(
         TestLog.log("CHUNK chunk=${chunk.startSec}-${chunk.endSec}s overlap=${chunk.overlapSec}s " +
                 "engineSegs=${engineSegments.size} mapped=${correctedSegments.size} " +
                 "globalBestand=${globalSegments.size} retry=${retryOffsetSecApplied}s")
+        // 0.5.72: Segment-Grenzen + Dauern loggen – Diagnose: Warum skip die
+        // Voice-Bank? (Log-Befund 0.5.71: vb skip=2 im Chunk [0,15], obwohl der
+        // Host mit derselben WAV Segmente >= 2s findet → Bank kann nicht enrollen
+        // → nur 1 Sprecher wird etabliert.)
+        val segsDesc = engineSegments.sortedBy { it.startSec }.take(12)
+            .joinToString(" ") { s -> "[${"%.2f".format(s.startSec)}-${"%.2f".format(s.endSec)}]spk${s.speaker}(${"%.1f".format(s.endSec - s.startSec)}s)" }
+        TestLog.log("ENGINE_SEGS chunk=${chunk.startSec}-${chunk.endSec}: $segsDesc")
 
         return WorkerChunkResult(
             chunk = chunk,
