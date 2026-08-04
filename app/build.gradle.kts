@@ -1,8 +1,23 @@
+import java.io.FileInputStream
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
 }
+
+// ── Release-Signing (0.6.0) ────────────────────────────────────────────────
+// keystore.properties wird NICHT committet (Credentials!). Liegt hier unter
+// /root/keystores/keystore.properties (Host-Build) – auf dem Mac des
+// Entwicklers entsprechend daneben kopieren und storeFile anpassen.
+// Ohne die Datei baut `assembleRelease` unsigniert (kein Build-Bruch).
+val keystorePropsFile = file("/root/keystores/keystore.properties")
+val keystoreProps = Properties()
+if (keystorePropsFile.exists()) {
+    keystoreProps.load(FileInputStream(keystorePropsFile))
+}
+val hasReleaseSigning = keystorePropsFile.exists()
 
 android {
     namespace = "com.sherpa.transcript"
@@ -18,6 +33,17 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    signingConfigs {
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = file(keystoreProps.getProperty("storeFile"))
+                storePassword = keystoreProps.getProperty("storePassword")
+                keyAlias = keystoreProps.getProperty("keyAlias")
+                keyPassword = keystoreProps.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true
@@ -25,6 +51,9 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 
