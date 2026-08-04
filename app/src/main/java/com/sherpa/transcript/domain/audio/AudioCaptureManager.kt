@@ -238,7 +238,9 @@ class AudioCaptureManager(
                 val durSec = totalFrames * frameSize / sampleRate
                 Log.i(TAG, "Capture-Loop beendet: $totalFrames Frames (≈ ${durSec}s)")
                 TestLog.log("Capture-Loop beendet: $totalFrames Frames (≈ ${durSec}s)")
-                TestLog.close()
+                // TestLog bewusst NICHT schließen: die SAVE-Zeile (stopRecording)
+                // kommt danach noch rein; das nächste open() (nächster Test)
+                // schließt die alte Datei (Log-Befund 0.5.76: SAVE fehlte).
                 channel.close()
             }
         }
