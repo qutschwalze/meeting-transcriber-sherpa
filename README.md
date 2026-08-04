@@ -2,7 +2,18 @@
 
 100% offline Speech-to-Text App für Android mit **Sherpa-ONNX** + **Jetpack Compose** + **Kotlin**.
 
-Live-Transkription auf dem Gerät, keine Cloud, kein Netzwerk.
+Live-Transkription auf dem Gerät inkl. **Speaker Diarization** – keine Cloud, kein Netzwerk.
+
+## Features (Stand 0.6.0)
+
+- ✅ Live-ASR: Sherpa-ONNX OnlineRecognizer (Streaming), Kroko Zipformer-Transducer (Deutsch)
+- ✅ **Speaker Diarization**: ReVerb v1 (Segmentation) + NeMo Titanet Small (Embedding), offline auf dem Gerät
+- ✅ Rolling-Diarization: 15s-Chunk-Pipeline mit Overlap, Reconciler (temporales Voting) + **SessionVoiceBank** (akustisches Gedächtnis gegen Engine-Drift, 2-Kontakt-Härtung)
+- ✅ 2-Speaker-Trennung auf Mikrofon-Aufnahmen (Referenz-Testclip: Wechsel bei ~1:02, alle Segmente gelabelt)
+- ✅ 3-Schichten-Architektur: `rawFinalSegments` (Ground Truth) → `assignedFinalSegments` (Speaker-Overlay) → `displaySegments` (UI-Merge)
+- ✅ Leading-Resolve im Final: führende unbestätigte/unlabeled Segmente → erster bestätigter Sprecher
+- ✅ Debug-Mode: Testaufnahme als Roh-WAV + Diagnose-Log-Datei (`TestLog`) für Host-Analyse (Xiaomi-logcat ist unbrauchbar)
+- ✅ `scripts/host-test/`: Python-Pipeline-Simulation (exakt App-Konfiguration) für A/B-Analysen
 
 ## Architektur
 
@@ -10,33 +21,20 @@ Live-Transkription auf dem Gerät, keine Cloud, kein Netzwerk.
 UI Layer   →   Domain Layer   →   Engine (JNI/Native)
 ─────────       ───────────       ───────────────────
 Compose         AudioCapture      Sherpa-ONNX C++
-ViewModel       Transcription     ONNX Runtime
-Navigation      Model Download    Zipformer-Transducer
-                Ringbuffer
+ViewModel       Diarization       ONNX Runtime
+Navigation      VoiceBank         Zipformer-Transducer
+                ChunkedBuffer     Pyannote + Titanet
 ```
 
-## Phase 1 – Live-Transkription (MVP)
+## Phasen
 
-- ✅ Kotlin + Jetpack Compose + Material 3
-- ✅ AudioRecord Mikrofon-Capture (16kHz, Mono, 16bit PCM)
-- ✅ Sherpa-ONNX OnlineRecognizer (Streaming ASR)
-- ✅ Kroko Zipformer-Transducer — Deutsch (Banafo)
-- ✅ Endpoint-basierte Segmentierung
-- ✅ LiveScreen mit Auto-Scroll / Pause bei User-Scroll
-- ✅ Schriftgrößenregler (12-28sp, sofort wirksam)
-- ✅ Start/Stop-Aufnahme
-- ✅ Finale/nicht-finale Textdarstellung (kursiv/schwarz)
-- ✅ Status-Anzeige (Hört zu / Verarbeitet)
-- ✅ Modell-Download bei Erststart via HuggingFace
-
-## Nächste Phasen
-
-| Phase | Feature |
-|---|---|
-| **Phase 2** | Room-Datenbank, HistoryScreen |
-| **Phase 3** | Speaker Diarization (ECAPA-TDNN) |
-| **Phase 4** | Export: TXT, Markdown, JSON, ShareSheet |
-| **Phase 5** | Einstellungen, Dark Mode, Modellwahl, Privacy |
+| Phase | Feature | Status |
+|---|---|---|
+| **Phase 1** | Live-Transkription (MVP) | ✅ |
+| **Phase 3** | Speaker Diarization (2 Sprecher) | ✅ (0.6.0) |
+| **Phase 2** | Room-Datenbank, HistoryScreen | offen |
+| **Phase 4** | Export: TXT, Markdown, JSON, ShareSheet | offen |
+| **Phase 5** | Einstellungen, Dark Mode, Modellwahl, Privacy | offen |
 
 ## Voraussetzungen
 
@@ -61,18 +59,11 @@ Navigation      Model Download    Zipformer-Transducer
    gradle wrapper --gradle-version 8.10.2
    ```
 
-3. **Modell herunterladen** (oder per App bei Erststart)
-
-   ```bash
-   # Option A: Automatisch beim ersten Start der App
-   # (App zeigt Download-Fortschritt an)
-
-   # Option B: Manuell ins assets-Verzeichnis
-   bash scripts/download-model.sh
-   ```
+3. **Modelle** (liegen in `app/src/main/assets/` oder werden per App bei Erststart geladen):
+   - ASR: `sherpa-onnx-streaming-zipformer-de-kroko-2025-08-06`
+   - Diarization: `segmentation.onnx` (ReVerb v1), `embedding.onnx` (NeMo Titanet Small)
 
 4. **In Android Studio öffnen**:
-
    - `File → Open → /path/to/sherpa-transcript`
    - Sync Gradle
    - Auf Gerät ausführen (Emulator: Mikrofon via `adb emu avd hostmicon` aktivieren)
@@ -86,12 +77,18 @@ app/
 │   ├── MainActivity.kt               # Entry + Permission
 │   ├── domain/
 │   │   ├── audio/
-│   │   │   ├── AudioCaptureManager.kt  # AudioRecord-Capture
-│   │   │   └── AudioRingBuffer.kt      # Lockfreier Puffer
+│   │   │   ├── AudioCaptureManager.kt  # AudioRecord-Capture (+ Channel-Puffer, WAV-Debug)
+│   │   │   ├── ChunkedAudioBuffer.kt   # Rolling-Chunk-Quelle (15s + Overlap)
+│   │   │   └── TestLog.kt              # Diagnose-Log-Datei (Debug-Mode)
 │   │   └── model/
 │   │       └── TranscriptSegment.kt    # Datenmodell
 │   ├── engine/
 │   │   ├── SherpaOnnxEngine.kt         # ASR-Engine (JNI)
+│   │   ├── SpeakerDiarizationEngine.kt # Diarization (ReVerb + Titanet)
+│   │   ├── DiarizationChunkWorker.kt   # Chunk-Pipeline (normalize, Retry, Reconciler)
+│   │   ├── RollingReconciler.kt        # Temporales ID-Matching über Overlap-Zone
+│   │   ├── SessionVoiceBank.kt         # Akustisches Gedächtnis (Voiceprints)
+│   │   ├── TimelineComposer.kt         # Segment-Zusammenführung
 │   │   ├── ModelDownloadManager.kt     # HF-Download
 │   │   └── util/
 │   │       └── ModelCopier.kt          # Asset-Kopierer
@@ -101,6 +98,13 @@ app/
 │       └── live/                       # LiveScreen + VM
 └── libs/
     └── sherpa-onnx-1.13.4.aar         # Native SDK
+
+scripts/host-test/                      # Python-Simulation (A/B-Analyse)
+├── run_asr.py                          # ASR mit Kroko-Modell
+├── run_pipeline.py                     # Vollständige Diarization-Pipeline (1:1 App-Logik)
+├── compare_words.py                    # WER-Vergleich gegen Referenz
+├── REFERENZ_TEST.md                    # Testclip-Referenz (Di._07.52)
+└── README.md                           # Anleitung
 ```
 
 ## Lizenz
