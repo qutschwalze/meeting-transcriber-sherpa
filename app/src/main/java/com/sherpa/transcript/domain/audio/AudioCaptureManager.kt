@@ -19,12 +19,16 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.sqrt
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.isActive
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.launch
 
 /**
  * Verwaltet die Mikrofonaufnahme über Android AudioRecord.
@@ -55,11 +59,20 @@ class AudioCaptureManager(
     private var wavFile: File? = null
     private var wavDataBytes: Long = 0L
 
+    /** 0.5.69: Großer Frame-Channel (~41s) statt callbackFlow-64er-Puffer (640ms). */
+    private var frameChannel: Channel<FloatArray>? = null
+    private var captureJob: Job? = null
+
     companion object {
         private const val TAG = "AudioCaptureManager"
 
-        /** Nach wie vielen Drops wird ein Warngesamt-Log geschrieben. */
-        private const val DROP_LOG_INTERVAL = 50
+        /**
+         * 0.5.69: Channel-Kapazität in Frames (10ms/Frame). 4096 ≈ 41s Audio
+         * (~2,6MB RAM). CPU-Spitzen durch Pyannote/Voice-Bank werden gepuffert
+         * statt Frames zu droppen (Log-Beweis 0.5.68: gestauchte Sample-Zeitachse
+         * → Chunks ab 55s fast leer → 0 Segmente → Sprecher B nie gelabelt).
+         */
+        private const val CHANNEL_CAPACITY = 4096
     }
 
     /**
@@ -69,14 +82,13 @@ class AudioCaptureManager(
      *
      * @throws SecurityException wenn keine RECORD_AUDIO-Berechtigung
      */
-    fun startCapture(): Flow<FloatArray> = callbackFlow {
+    fun startCapture(): Flow<FloatArray> {
         val context = SherpaTranscriptApp.instance
         val permission = ContextCompat.checkSelfPermission(
             context, Manifest.permission.RECORD_AUDIO
         )
         if (permission != PackageManager.PERMISSION_GRANTED) {
-            close(SecurityException("RECORD_AUDIO permission not granted"))
-            return@callbackFlow
+            throw SecurityException("RECORD_AUDIO permission not granted")
         }
 
         val minBufferSize = AudioRecord.getMinBufferSize(
@@ -101,8 +113,7 @@ class AudioCaptureManager(
         )
 
         if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
-            close(Exception("AudioRecord failed to initialize"))
-            return@callbackFlow
+            throw Exception("AudioRecord failed to initialize")
         }
 
         // ── 0.5.66: Hardware-AGC aktivieren (falls das Gerät es unterstützt) ──
@@ -136,81 +147,90 @@ class AudioCaptureManager(
         // 0.5.68: Testaufnahme (Debug-Mode) – Roh-PCM als WAV für Host-Analyse
         if (saveRawWav) startWavCapture()
 
-        withContext(Dispatchers.IO) {
+        // ── 0.5.69: Großer Frame-Channel statt callbackFlow-64er-Puffer ──
+        // Log-Beweis 0.5.68 (WAV-Analyse der echten App-Aufnahme): callbackFlow
+        // hat nur 64 Frames Puffer (640ms). Der Collector macht synchron
+        // ASR-Inferenz (engine.processFrame); wenn Pyannote + Voice-Bank parallel
+        // die CPU belegen, läuft der Puffer voll und trySend droppt still Frames.
+        // Die WAV (vor trySend geschrieben) bleibt vollständig – der
+        // ChunkedAudioBuffer bekommt aber Lücken. Da pushedSampleCountMs nur für
+        // verarbeitete Frames akkumuliert, staucht sich die Sample-Zeitachse:
+        // Chunks ab ~55s zeigen auf fast leere Bereiche (normalizeAudio-RMS
+        // 0,0004 vs. 0,016 in der WAV) → 0 Segmente → Sprecher B nie gelabelt.
+        // Der CHANNEL_CAPACITY-Channel (~41s) absorbiert CPU-Spitzen; send
+        // blockiert erst bei 41s Rückstau (praktisch nie) → keine Drops.
+        val channel = Channel<FloatArray>(capacity = CHANNEL_CAPACITY)
+        frameChannel = channel
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        captureJob = scope.launch {
             val pcmShort = ShortArray(frameSize)
             val pcmFloat = FloatArray(frameSize)
-            var droppedFrames = 0L
             var totalFrames = 0L
             // 0.5.67: RMS-Diagnose 1x/Sekunde – misst den Eingangspegel der
-            // Capture-Kette (vor normalizeAudio). Log-Befund 0.5.66: RMS
-            // 0,0008-0,035 (MIC ohne AGC). Ziel: mit CAMCORDER/AGC im Bereich
-            // ~0,05-0,3 (Rekorder-Niveau), dann ist der Pegel nicht mehr die
-            // Ursache für verrauschte Titanet-Embeddings.
+            // Capture-Kette (vor normalizeAudio).
             var rmsAccum = 0.0
             var rmsCount = 0
-
-            while (isActive && audioRecord?.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
-                val bytesRead = audioRecord?.read(pcmShort, 0, frameSize) ?: -1
-                if (bytesRead > 0) {
-                    // ShortArray → normiertes FloatArray (-1..1)
-                    for (i in 0 until bytesRead) {
-                        pcmFloat[i] = pcmShort[i] / 32768.0f
-                        rmsAccum += pcmFloat[i] * pcmFloat[i]
-                    }
-                    rmsCount += bytesRead
-                    if (rmsCount >= sampleRate) {
-                        val rms = sqrt(rmsAccum / rmsCount)
-                        Log.d(TAG, "CAPTURE_RMS rms=${"%.4f".format(rms)} peakLevel=" +
-                                "${"%.3f".format(pcmFloat.maxOf { kotlin.math.abs(it) })} (source=CAMCORDER)")
-                        rmsAccum = 0.0
-                        rmsCount = 0
-                    }
-                    // 0.5.68: Roh-Samples in die WAV schreiben (Debug-Mode)
-                    val wavOut = wavStream
-                    if (wavOut != null) {
-                        try {
-                            for (i in 0 until bytesRead) {
-                                val s = (pcmFloat[i] * 32767f).toInt().coerceIn(-32768, 32767)
-                                wavOut.writeByte(s and 0xFF)
-                                wavOut.writeByte((s shr 8) and 0xFF)
+            try {
+                while (isActive && audioRecord?.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
+                    val bytesRead = audioRecord?.read(pcmShort, 0, frameSize) ?: -1
+                    if (bytesRead > 0) {
+                        // ShortArray → normiertes FloatArray (-1..1)
+                        for (i in 0 until bytesRead) {
+                            pcmFloat[i] = pcmShort[i] / 32768.0f
+                            rmsAccum += pcmFloat[i] * pcmFloat[i]
+                        }
+                        rmsCount += bytesRead
+                        if (rmsCount >= sampleRate) {
+                            val rms = sqrt(rmsAccum / rmsCount)
+                            Log.d(TAG, "CAPTURE_RMS rms=${"%.4f".format(rms)} peakLevel=" +
+                                    "${"%.3f".format(pcmFloat.maxOf { kotlin.math.abs(it) })} (source=CAMCORDER)")
+                            rmsAccum = 0.0
+                            rmsCount = 0
+                        }
+                        // 0.5.68: Roh-Samples in die WAV schreiben (Debug-Mode)
+                        val wavOut = wavStream
+                        if (wavOut != null) {
+                            try {
+                                for (i in 0 until bytesRead) {
+                                    val s = (pcmFloat[i] * 32767f).toInt().coerceIn(-32768, 32767)
+                                    wavOut.writeByte(s and 0xFF)
+                                    wavOut.writeByte((s shr 8) and 0xFF)
+                                }
+                                wavDataBytes += bytesRead * 2L
+                            } catch (t: Throwable) {
+                                Log.w(TAG, "WAV-Write fehlgeschlagen: ${t.message}")
+                                try { wavOut.close() } catch (_: Exception) {}
+                                wavStream = null
                             }
-                            wavDataBytes += bytesRead * 2L
-                        } catch (t: Throwable) {
-                            Log.w(TAG, "WAV-Write fehlgeschlagen: ${t.message}")
-                            try { wavOut.close() } catch (_: Exception) {}
-                            wavStream = null
                         }
-                    }
-                    val frame = if (bytesRead < frameSize) pcmFloat.copyOf(bytesRead) else pcmFloat
-                    totalFrames++
-                    // KRITISCH (0.5.60): trySend-Ergebnis prüfen! callbackFlow hat
-                    // nur 64 Frames Puffer (640ms). Der Collector macht synchron
-                    // ASR-Inferenz (engine.processFrame); wenn Pyannote + Voice-Bank
-                    // parallel die CPU belegen, läuft der Puffer voll und trySend
-                    // droppt still Frames → Audio geht verloren (Log-Beweis:
-                    // Chunk [55,75] in 0.5.58 fast leer trotz normaler Aufnahme).
-                    // Der Zähler macht die Drops sichtbar und quantifiziert sie.
-                    if (!trySend(frame).isSuccess) {
-                        droppedFrames++
-                        if (droppedFrames % DROP_LOG_INTERVAL == 1L || droppedFrames == 1L) {
-                            Log.w(TAG, "FLOW DROP: $droppedFrames Frames verworfen " +
-                                    "(Puffer voll, total=$totalFrames, " +
-                                    "verlorenes Audio ≈ ${droppedFrames * frame.size / sampleRate}s)")
-                        }
+                        val frame = if (bytesRead < frameSize) pcmFloat.copyOf(bytesRead) else pcmFloat
+                        totalFrames++
+                        // send statt trySend: blockiert erst bei 41s Rückstau (kein Drop)
+                        if (!channel.isClosedForSend) channel.send(frame)
                     }
                 }
-            }
-            if (droppedFrames > 0) {
-                Log.w(TAG, "Capture beendet: $droppedFrames/$totalFrames Frames gedroppt " +
-                        "(≈ ${droppedFrames * frameSize / sampleRate}s Audio verloren)")
+            } catch (t: Throwable) {
+                if (t !is CancellationException) {
+                    Log.e(TAG, "Capture-Loop Fehler: ${t.message}", t)
+                }
+            } finally {
+                Log.i(TAG, "Capture-Loop beendet: $totalFrames Frames (≈ ${totalFrames * frameSize / sampleRate}s)")
+                channel.close()
             }
         }
-
-        awaitClose { stopCapture() }
+        return channel.receiveAsFlow()
     }
 
     fun stopCapture() {
         closeWavCapture()
+        try {
+            captureJob?.cancel()
+        } catch (_: Exception) {}
+        captureJob = null
+        try {
+            frameChannel?.close()
+        } catch (_: Exception) {}
+        frameChannel = null
         try {
             audioRecord?.apply {
                 if (recordingState == AudioRecord.RECORDSTATE_RECORDING) stop()
