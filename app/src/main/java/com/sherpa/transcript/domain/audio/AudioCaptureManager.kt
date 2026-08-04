@@ -9,6 +9,7 @@ import android.media.audiofx.AutomaticGainControl
 import android.util.Log
 import androidx.core.content.ContextCompat
 import com.sherpa.transcript.SherpaTranscriptApp
+import kotlin.math.sqrt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
@@ -66,7 +67,12 @@ class AudioCaptureManager(
         val bufferSize = (sampleRate / 5).coerceAtLeast(minBufferSize) * 2
 
         audioRecord = AudioRecord(
-            MediaRecorder.AudioSource.MIC,
+            // 0.5.67: CAMCORDER statt MIC – Log-Befund 0.5.66: AGC nicht verfügbar
+            // (isAvailable=false), Pegel konstant zu leise (RMS 0,0008-0,035 →
+            // Boost 10x Limit). Der HyperOS3-Rekorder nutzt einen HAL-Pfad mit
+            // AGC. CAMCORDER verwendet auf Xiaomi oft den Vorverstärker-Pfad
+            // mit eigenem Gain/AGC – messbar über das CAPTURE_RMS-Diagnose-Log.
+            MediaRecorder.AudioSource.CAMCORDER,
             sampleRate,
             AudioFormat.CHANNEL_IN_MONO,
             AudioFormat.ENCODING_PCM_16BIT,
@@ -111,6 +117,13 @@ class AudioCaptureManager(
             val pcmFloat = FloatArray(frameSize)
             var droppedFrames = 0L
             var totalFrames = 0L
+            // 0.5.67: RMS-Diagnose 1x/Sekunde – misst den Eingangspegel der
+            // Capture-Kette (vor normalizeAudio). Log-Befund 0.5.66: RMS
+            // 0,0008-0,035 (MIC ohne AGC). Ziel: mit CAMCORDER/AGC im Bereich
+            // ~0,05-0,3 (Rekorder-Niveau), dann ist der Pegel nicht mehr die
+            // Ursache für verrauschte Titanet-Embeddings.
+            var rmsAccum = 0.0
+            var rmsCount = 0
 
             while (isActive && audioRecord?.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
                 val bytesRead = audioRecord?.read(pcmShort, 0, frameSize) ?: -1
@@ -118,6 +131,15 @@ class AudioCaptureManager(
                     // ShortArray → normiertes FloatArray (-1..1)
                     for (i in 0 until bytesRead) {
                         pcmFloat[i] = pcmShort[i] / 32768.0f
+                        rmsAccum += pcmFloat[i] * pcmFloat[i]
+                    }
+                    rmsCount += bytesRead
+                    if (rmsCount >= sampleRate) {
+                        val rms = sqrt(rmsAccum / rmsCount)
+                        Log.d(TAG, "CAPTURE_RMS rms=${"%.4f".format(rms)} peakLevel=" +
+                                "${"%.3f".format(pcmFloat.maxOf { kotlin.math.abs(it) })} (source=CAMCORDER)")
+                        rmsAccum = 0.0
+                        rmsCount = 0
                     }
                     val frame = if (bytesRead < frameSize) pcmFloat.copyOf(bytesRead) else pcmFloat
                     totalFrames++
