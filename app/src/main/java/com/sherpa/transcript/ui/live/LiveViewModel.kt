@@ -146,12 +146,15 @@ class LiveViewModel : ViewModel() {
         // → matchte verschiedene Sprecher fälschlich (Log-Befund 0.5.60: sim 0.672
         // → global=0). 0.62 = konservativ. minIdentifySec=2s: 1s-Segmente erzeugten
         // Falsch-Matches (sim 0.669) und werden seit 0.5.61 nicht mehr aufgelöst.
+        // 0.5.62: pendingConfirmThreshold 0.35 (BESTÄTIGUNG locker – die App-
+        // Aufnahme hat niedrigere Intra-Sims als die Rekorder-WAV; mit 0.62 blieb
+        // alles pending). matchThreshold bleibt 0.62 (RESOLVE strikt).
         SessionVoiceBank(
             computer = SherpaEmbeddingComputer(SherpaTranscriptApp.instance.assets),
             matchThreshold = 0.62f,
             minEnrollmentSec = 2f,
             minIdentifySec = 2f,
-            pendingConfirmThreshold = 0.62f,
+            pendingConfirmThreshold = 0.35f,
         )
     }
     private val diarizationChunkWorker by lazy {

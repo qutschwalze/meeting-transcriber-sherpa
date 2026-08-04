@@ -113,8 +113,23 @@ class SessionVoiceBank(
      * besser als falsch gelabelt). Konsistent mit dem Enrollment-Gate.
      */
     private val minIdentifySec: Float = 2f,
-    /** Mindest-Ähnlichkeit zwischen 2 Kontakten für die Enrollment-Bestätigung. */
-    private val pendingConfirmThreshold: Float = 0.62f,
+    /**
+     * Mindest-Ähnlichkeit zwischen 2 Kontakten für die Enrollment-Bestätigung.
+     *
+     * 0.5.62: Von 0.62 zurück auf 0.35. Log-Befund 0.5.61: Mit 0.62 bestätigte
+     * die Bank GAR NICHTS (Bank=0 bestätigt durchgehend, alle pending) – die
+     * App-Aufnahme (Mikrofon, Raumklang) hat deutlich niedrigere Intra-
+     * Similarities als die saubere Rekorder-WAV (0.17–0.32 zwischen Kontakten).
+     * Die 0.62-Kalibrierung galt für die Rekorder-WAV, nicht für die App.
+     *
+     * WICHTIG: Diese Schwelle ist BEWUSST getrennt von [matchThreshold]:
+     * - matchThreshold 0.62: Resolve gegen BESTÄTIGTE Voiceprints (verhindert
+     *   falsches B→A-Merging, Log-Beweis 0.5.61: KEIN Match bei 0.22–0.32)
+     * - pendingConfirmThreshold 0.35: NUR Bestätigung, dass 2 Kontakte derselben
+     *   ID ähnlich genug sind. Das bestätigte Voiceprint (Durchschnitt aus 2
+     *   Kontakten) wird danach trotzdem nur mit 0.62 gematcht.
+     */
+    private val pendingConfirmThreshold: Float = 0.35f,
 ) {
 
     companion object {
@@ -174,7 +189,16 @@ class SessionVoiceBank(
         val embedding = computer.computeEmbedding(samples) ?: return null
 
         var bestId: Int? = null
-        var bestSim = matchThreshold // nur Matches ÜBER der Schwelle zählen
+        // 0.5.62: Getrennte Schwellen!
+        // - bestätigte Voiceprints: matchThreshold (0.62, strikt – verhindert
+        //   falsches B→A-Merging, Log-Beweis 0.5.61)
+        // - pending Enrollments:   pendingConfirmThreshold (0.35, locker – der
+        //   2. Kontakt derselben ID soll bestätigt werden, sonst bleibt ALLES
+        //   pending wie in 0.5.61: Bank=0 bestätigt, sim 0.17–0.32)
+        // Der beste Treffer (egal ob Voiceprint oder pending) wird am Ende
+        // gegen die ZU IHM PASSENDE Schwelle geprüft.
+        var bestSim = 0f
+        var bestIsPending = false
         // Diagnose: Similarity-Verteilung sichtbar machen (auch unter Threshold)
         val sims = StringBuilder()
         for ((id, vp) in voiceprints) {
@@ -184,9 +208,11 @@ class SessionVoiceBank(
             if (sim > bestSim) {
                 bestSim = sim
                 bestId = id
+                bestIsPending = false
             }
         }
-        // Pending Enrollments matchen ebenfalls (Drift vor Bestätigung auflösen)
+        // Pending Enrollments matchen ebenfalls (Drift vor Bestätigung auflösen) –
+        // ABER mit der LOCKEREN Bestätigungsschwelle, sonst wird nie bestätigt
         for ((id, pending) in pendingEnrollments) {
             val sim = cosineSimilarity(embedding, pending.embedding)
             if (sims.isNotEmpty()) sims.append(", ")
@@ -194,16 +220,18 @@ class SessionVoiceBank(
             if (sim > bestSim) {
                 bestSim = sim
                 bestId = id
+                bestIsPending = true
             }
         }
-        if (bestId != null) {
+        val effectiveThreshold = if (bestIsPending) pendingConfirmThreshold else matchThreshold
+        if (bestId != null && bestSim > effectiveThreshold) {
             // Match gegen ein pending = 2. Kontakt → Enrollment bestätigen
             val pending = pendingEnrollments[bestId]
-            if (pending != null) {
+            if (pending != null && bestIsPending) {
                 confirmPending(bestId, embedding)
             }
             Log.d(TAG, String.format("identify: MATCH → global=%d sim=%.3f (threshold=%.3f, [%s])",
-                    bestId, bestSim, matchThreshold, sims))
+                    bestId, bestSim, effectiveThreshold, sims))
         } else {
             // Kein Match über Threshold – nur verbose (kommt bei jedem neuen Sprecher vor)
             val maxSim = voiceprints.entries.maxByOrNull { cosineSimilarity(embedding, it.value) }
