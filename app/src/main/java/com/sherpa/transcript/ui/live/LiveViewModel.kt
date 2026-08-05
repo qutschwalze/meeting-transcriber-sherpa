@@ -718,8 +718,8 @@ class LiveViewModel : ViewModel() {
     }
 
     /**
-     * 0.6.1: Verbleibende UNLABELED Segmente über den zeitlich nächsten bestätigten
-     * Nachbarn labeln.
+     * 0.6.1/0.6.4: Verbleibende Segmente ohne bestätigten Sprecher über den
+     * zeitlich nächsten bestätigten Nachbarn labeln.
      *
      * Geräte-Befund 0.6.0 (Release-Test 11:08, 86,9s): ein 0,5s-Fragment im
      * Rest-Chunk [70,86.9] (~76,2s) blieb unlabeled – zu kurz für die Voice-Bank
@@ -727,19 +727,33 @@ class LiveViewModel : ViewModel() {
      * (resolveLeadingUnconfirmedSpeakerLabels) greift nur für Segmente VOR dem
      * ersten bestätigten Sprecher. Ergebnis: labeled=13/14 statt 14/14.
      *
+     * Geräte-Befund 0.6.3 (Export-Test 12:06): 0,47s- und 0,64s-Fragmente wurden
+     * vom Reconciler als EIGENE globale IDs etabliert (new, kein Zone-Vote), die
+     * Bank skipped sie (< 2s) → sie bleiben unbestätigt im Bestand und erscheinen
+     * nach renumber als zusätzliche Sprecher im Export ("Sprecher 3 · 00:01:51:
+     * sitze arbeitslos zu" = akustisch die Fortsetzung von Sprecher 2). Diese
+     * Segmente haben eine speakerId (kein null) – der 0.6.1-Resolve ließ sie
+     * unangetastet. 0.6.4 behandelt deshalb auch Segmente mit UNBESTÄTIGTEN IDs.
+     *
      * Konservativ (Nutzer-Prinzip "besser unlabeled als falsch"): nur Segmente
-     * OHNE speakerId werden behandelt, und nur wenn der nächste BESTÄTIGTE
-     * Nachbar EINDEUTIG ist – beide Nachbarn (vor+nach) derselbe bestätigte
-     * Sprecher ODER nur ein Nachbar existiert. Zwischen zwei VERSCHIEDENEN
-     * bestätigten Speakern (Wechselgrenze) bleibt das Segment unlabeled.
+     * ohne bestätigte ID (unlabeled ODER unbestätigte Fragment-ID) werden
+     * behandelt, und nur wenn der nächste BESTÄTIGTE Nachbar EINDEUTIG ist –
+     * beide Nachbarn (vor+nach) derselbe bestätigte Sprecher ODER nur ein
+     * Nachbar existiert. Zwischen zwei VERSCHIEDENEN bestätigten Speakern
+     * (Wechselgrenze) bleibt das Segment unangetastet.
      * Läuft nur im Final-Lauf (forceFinal), nach dem Leading-Resolve.
      */
-    private fun resolveRemainingUnlabeledByNearestConfirmed() {
-        val confirmed = assignedFinalSegments.filter { !it.speakerId.isNullOrBlank() }
+    private fun resolveRemainingUnconfirmedByNearestConfirmed() {
+        val confirmedIds = sessionVoiceBank.enrolledSpeakerIds
+        if (confirmedIds.isEmpty()) return
+        val confirmed = assignedFinalSegments.filter { seg ->
+            seg.speakerId?.removePrefix("speaker_")?.toIntOrNull() in confirmedIds
+        }
         if (confirmed.isEmpty()) return
         var resolved = 0
         assignedFinalSegments = assignedFinalSegments.map { seg ->
-            if (!seg.speakerId.isNullOrBlank()) return@map seg
+            val spkNum = seg.speakerId?.removePrefix("speaker_")?.toIntOrNull()
+            if (spkNum != null && spkNum in confirmedIds) return@map seg // bestätigt → unangetastet
             val prev = confirmed.lastOrNull { it.endTimeMs <= seg.startTimeMs }
             val next = confirmed.firstOrNull { it.startTimeMs >= seg.endTimeMs }
             val candidate = when {
@@ -749,7 +763,7 @@ class LiveViewModel : ViewModel() {
                     prev.speakerId to (prev.speakerLabel ?: prev.speakerId)
                 prev == null && next != null ->
                     next.speakerId to (next.speakerLabel ?: next.speakerId)
-                else -> null // zwei verschiedene bestätigte Nachbarn → unlabeled lassen
+                else -> null // zwei verschiedene bestätigte Nachbarn → unangetastet
             }
             if (candidate != null) {
                 resolved++
@@ -758,7 +772,7 @@ class LiveViewModel : ViewModel() {
         }
         if (resolved > 0) {
             bestAssignmentQuality = computeQuality(assignedFinalSegments)
-            val msg = "resolveRemainingUnlabeledByNearestConfirmed: $resolved unlabeled Segment(e) über bestätigte Nachbarn gelabelt"
+            val msg = "resolveRemainingUnconfirmedByNearestConfirmed: $resolved Segment(e) (unlabeled/unbestätigt) über bestätigte Nachbarn gelabelt"
             Log.i(TAG, msg)
             TestLog.log(msg)
         }
@@ -1228,10 +1242,11 @@ class LiveViewModel : ViewModel() {
                         // dem ersten bestätigten Sprecher zuordnen – MUSS vor renumber laufen,
                         // damit die Nummerierung nach der Auflösung stimmt.
                         if (forceFinal) resolveLeadingUnconfirmedSpeakerLabels()
-                        // 0.6.1: verbleibende unlabeled Segmente (z.B. kurze Fragmente
-                        // ohne Bank-Bestätigung) über den eindeutigen bestätigten
+                        // 0.6.1/0.6.4: verbleibende unlabeled/unbestätigte Segmente
+                        // (z.B. kurze Fragmente ohne Bank-Bestätigung, die als eigene
+                        // IDs im Bestand stehen) über den eindeutigen bestätigten
                         // Nachbarn labeln – MUSS vor renumber laufen.
-                        if (forceFinal) resolveRemainingUnlabeledByNearestConfirmed()
+                        if (forceFinal) resolveRemainingUnconfirmedByNearestConfirmed()
                         renumberLiveSpeakerIds()
                         // FIRST_2SPK: erster 2-Speaker-Zustand der Session – Umschaltpunkt-Marker
                         if (!firstTwoSpeakerLogged && mergedQuality.distinctSpeakers >= 2) {
