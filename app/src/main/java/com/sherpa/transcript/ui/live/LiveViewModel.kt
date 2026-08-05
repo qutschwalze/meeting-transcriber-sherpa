@@ -10,6 +10,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.sherpa.transcript.SherpaTranscriptApp
 import com.sherpa.transcript.data.local.SegmentEntity
+import com.sherpa.transcript.data.local.SettingsStore
 import com.sherpa.transcript.data.local.TranscriptEntity
 import com.sherpa.transcript.data.repository.TranscriptRepository
 import com.sherpa.transcript.domain.audio.AudioCaptureManager
@@ -331,7 +332,27 @@ class LiveViewModel : ViewModel() {
      */
     private var lastGoodDiarizationCandidate: List<TranscriptSegment>? = null
 
-    init { checkModels() }
+    init {
+        checkModels()
+        // Phase 5 (0.6.8): Persistente Einstellungen – Schriftgröße + Debug-Mode
+        // aus dem SettingsStore laden und live auf Änderungen reagieren
+        // (z.B. wenn der User im Einstellungen-Screen die Schriftgröße ändert).
+        val settings = SettingsStore.current
+        _uiState.update {
+            it.copy(fontSize = settings.fontSize.value, debugMode = settings.debugMode.value)
+        }
+        viewModelScope.launch {
+            settings.fontSize.collect { size ->
+                _uiState.update { it.copy(fontSize = size) }
+            }
+        }
+        viewModelScope.launch {
+            settings.debugMode.collect { enabled ->
+                _uiState.update { it.copy(debugMode = enabled) }
+                audioCapture.saveRawWav = enabled
+            }
+        }
+    }
 
     private fun checkModels() {
         val ctx = SherpaTranscriptApp.instance
@@ -475,7 +496,8 @@ class LiveViewModel : ViewModel() {
     private var firstTwoSpeakerLogged = false
 
     fun toggleDebugMode() {
-        _uiState.update { it.copy(debugMode = !it.debugMode) }
+        // Phase 5 (0.6.8): über den Store persistieren – der Flow aktualisiert den State
+        SettingsStore.current.setDebugMode(!_uiState.value.debugMode)
     }
 
     private fun deriveUiSegments() {
@@ -1625,7 +1647,11 @@ class LiveViewModel : ViewModel() {
     private fun sessionRelativeMs(): Long = System.currentTimeMillis() - recordingStartedAt
     fun onUserScroll() { _uiState.update { it.copy(autoScrollEnabled = false) } }
     fun onScrollToLatest() { _uiState.update { it.copy(autoScrollEnabled = true) } }
-    fun onFontSizeChanged(newSize: Float) { _uiState.update { it.copy(fontSize = newSize) } }
+    fun onFontSizeChanged(newSize: Float) {
+        _uiState.update { it.copy(fontSize = newSize) }
+        // Phase 5 (0.6.8): persistent speichern (Flow aktualisiert andere Screens)
+        SettingsStore.current.setFontSize(newSize)
+    }
 
     override fun onCleared() {
         super.onCleared()

@@ -36,7 +36,7 @@ Navigation      VoiceBank         Zipformer-Transducer
 | **Phase 3** | Speaker Diarization (2 Sprecher) | ✅ (0.6.0) |
 | **Phase 4** | Export: TXT, Markdown, JSON + ShareSheet | ✅ (0.6.2) |
 | **Phase 2** | History/Detail-Screen + **Room-Datenbank** (0.6.6: JSON-Store abgelöst, einmalige JSON→SQLite-Migration) | ✅ |
-| **Phase 5** | Einstellungen, Dark Mode, Modellwahl, Privacy | offen |
+| **Phase 5** | Einstellungen: Dark Mode (System/hell/dunkel), Schriftgröße persistent, Debug-Schalter, Modell-Info (0.6.8) – Modellwahl/Privacy offen | ✅ (0.6.8) |
 
 ## Voraussetzungen
 
