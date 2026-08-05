@@ -457,11 +457,17 @@ object TimelineComposer {
 
         for (seg in sorted) {
             val last = merged.lastOrNull()
+            // 0.6.5: Merge auch bei gleichem LABEL (nicht nur gleicher ID) – im
+            // Rolling-Lauf kann derselbe akustische Sprecher durch Chunk-Wechsel
+            // verschiedene speakerId-Werte haben (Drift); das Label ist nach
+            // renumber die stabile Anzeige-Größe. Beide Segmente müssen gelabelt
+            // sein (konservativ: unlabeled bleibt getrennt).
             val canMerge = last != null
                 && last.isFinal
                 && seg.isFinal
                 && !last.speakerId.isNullOrBlank()
-                && last.speakerId == seg.speakerId
+                && !seg.speakerId.isNullOrBlank()
+                && (last.speakerId == seg.speakerId || last.speakerLabel == seg.speakerLabel)
                 && seg.startTimeMs >= last.endTimeMs
                 && (seg.startTimeMs - last.endTimeMs) <= MERGE_PAUSE_MS
 

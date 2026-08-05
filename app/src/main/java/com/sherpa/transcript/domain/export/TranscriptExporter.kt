@@ -88,9 +88,11 @@ object TranscriptExporter {
         for (block in groupBySpeaker(segments)) {
             sb.append("\n## ").append(block.label ?: "Unbekannt")
             sb.append(" · ").append(formatTimestampHms(block.startMs)).append('\n')
-            // 0.6.3: Sätze innerhalb eines Blocks als Fließtext verbinden (soft break),
-            // nicht als getrennte Absätze – deutlich besser lesbar
-            sb.append(block.texts.joinToString("\n")).append('\n')
+            // 0.6.3: Sätze eines Blocks als Fließtext verbinden.
+            // 0.6.5: mit LEERZEICHEN statt soft break – die ASR-Segmente splitten
+            // bei kurzen Pausen mitten im Satz; Zeilenumbrüche zerstückeln den
+            // Text (Geräte-Befund 0.6.4: "…fallen mir schon ein\nBeispiel der…").
+            sb.append(block.texts.joinToString(" ")).append('\n')
         }
         return sb.toString().trimEnd() + "\n"
     }
