@@ -718,6 +718,53 @@ class LiveViewModel : ViewModel() {
     }
 
     /**
+     * 0.6.1: Verbleibende UNLABELED Segmente über den zeitlich nächsten bestätigten
+     * Nachbarn labeln.
+     *
+     * Geräte-Befund 0.6.0 (Release-Test 11:08, 86,9s): ein 0,5s-Fragment im
+     * Rest-Chunk [70,86.9] (~76,2s) blieb unlabeled – zu kurz für die Voice-Bank
+     * (min 2s → skip), kein Aggregations-Nachbar, und die 0.5.63-Heuristik
+     * (resolveLeadingUnconfirmedSpeakerLabels) greift nur für Segmente VOR dem
+     * ersten bestätigten Sprecher. Ergebnis: labeled=13/14 statt 14/14.
+     *
+     * Konservativ (Nutzer-Prinzip "besser unlabeled als falsch"): nur Segmente
+     * OHNE speakerId werden behandelt, und nur wenn der nächste BESTÄTIGTE
+     * Nachbar EINDEUTIG ist – beide Nachbarn (vor+nach) derselbe bestätigte
+     * Sprecher ODER nur ein Nachbar existiert. Zwischen zwei VERSCHIEDENEN
+     * bestätigten Speakern (Wechselgrenze) bleibt das Segment unlabeled.
+     * Läuft nur im Final-Lauf (forceFinal), nach dem Leading-Resolve.
+     */
+    private fun resolveRemainingUnlabeledByNearestConfirmed() {
+        val confirmed = assignedFinalSegments.filter { !it.speakerId.isNullOrBlank() }
+        if (confirmed.isEmpty()) return
+        var resolved = 0
+        assignedFinalSegments = assignedFinalSegments.map { seg ->
+            if (!seg.speakerId.isNullOrBlank()) return@map seg
+            val prev = confirmed.lastOrNull { it.endTimeMs <= seg.startTimeMs }
+            val next = confirmed.firstOrNull { it.startTimeMs >= seg.endTimeMs }
+            val candidate = when {
+                prev != null && next != null && prev.speakerId == next.speakerId ->
+                    prev.speakerId to (prev.speakerLabel ?: prev.speakerId)
+                prev != null && next == null ->
+                    prev.speakerId to (prev.speakerLabel ?: prev.speakerId)
+                prev == null && next != null ->
+                    next.speakerId to (next.speakerLabel ?: next.speakerId)
+                else -> null // zwei verschiedene bestätigte Nachbarn → unlabeled lassen
+            }
+            if (candidate != null) {
+                resolved++
+                seg.copy(speakerId = candidate.first, speakerLabel = candidate.second)
+            } else seg
+        }
+        if (resolved > 0) {
+            bestAssignmentQuality = computeQuality(assignedFinalSegments)
+            val msg = "resolveRemainingUnlabeledByNearestConfirmed: $resolved unlabeled Segment(e) über bestätigte Nachbarn gelabelt"
+            Log.i(TAG, msg)
+            TestLog.log(msg)
+        }
+    }
+
+    /**
      * Baut aus allen rawFinalSegments die aktuell beste Speaker-Overlay-Liste auf.
      * Verlustfrei: jedes Rohsegment ist enthalten, ggf. mit Label aus assignedFinalSegments.
      */
@@ -1181,6 +1228,10 @@ class LiveViewModel : ViewModel() {
                         // dem ersten bestätigten Sprecher zuordnen – MUSS vor renumber laufen,
                         // damit die Nummerierung nach der Auflösung stimmt.
                         if (forceFinal) resolveLeadingUnconfirmedSpeakerLabels()
+                        // 0.6.1: verbleibende unlabeled Segmente (z.B. kurze Fragmente
+                        // ohne Bank-Bestätigung) über den eindeutigen bestätigten
+                        // Nachbarn labeln – MUSS vor renumber laufen.
+                        if (forceFinal) resolveRemainingUnlabeledByNearestConfirmed()
                         renumberLiveSpeakerIds()
                         // FIRST_2SPK: erster 2-Speaker-Zustand der Session – Umschaltpunkt-Marker
                         if (!firstTwoSpeakerLogged && mergedQuality.distinctSpeakers >= 2) {
