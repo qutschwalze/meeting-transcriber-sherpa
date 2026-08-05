@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Phase 4 (0.6.2): Export-Dateien im Cache-Ordner über FileProvider teilen -->
+<paths>
+    <cache-path name="exports" path="exports/" />
+</paths>
