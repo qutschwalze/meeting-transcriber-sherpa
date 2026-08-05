@@ -1,5 +1,8 @@
 package com.sherpa.transcript.ui.detail
 
+import android.content.Context
+import android.content.Intent
+import android.util.Log
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -14,6 +17,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -27,14 +33,21 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.FileProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.sherpa.transcript.data.local.SegmentEntity
 import com.sherpa.transcript.data.local.TranscriptEntity
+import com.sherpa.transcript.domain.export.TranscriptExporter
+import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -64,6 +77,31 @@ fun TranscriptDetailScreen(
                             Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = "Zurück",
                         )
+                    }
+                },
+                actions = {
+                    // Phase 4 (0.6.2): Export als TXT/Markdown/JSON via ShareSheet
+                    val context = LocalContext.current
+                    var exportMenuOpen by remember { mutableStateOf(false) }
+                    IconButton(
+                        onClick = { exportMenuOpen = true },
+                        enabled = uiState.transcript != null && uiState.segments.isNotEmpty(),
+                    ) {
+                        Icon(Icons.Default.Share, contentDescription = "Exportieren")
+                    }
+                    DropdownMenu(
+                        expanded = exportMenuOpen,
+                        onDismissRequest = { exportMenuOpen = false },
+                    ) {
+                        ExportFormat.entries.forEach { format ->
+                            DropdownMenuItem(
+                                text = { Text(format.label) },
+                                onClick = {
+                                    exportMenuOpen = false
+                                    exportTranscript(context, uiState.transcript, uiState.segments, format)
+                                },
+                            )
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -211,4 +249,45 @@ private fun formatTimestamp(ms: Long): String {
     val min = totalSec / 60
     val sec = totalSec % 60
     return "${min}:${sec.toString().padStart(2, '0')}"
+}
+
+// ─── Phase 4 (0.6.2): Export ──────────────────────────────────────────
+
+enum class ExportFormat(val label: String, val extension: String, val mime: String) {
+    TXT("Text (.txt)", "txt", "text/plain"),
+    MARKDOWN("Markdown (.md)", "md", "text/markdown"),
+    JSON("JSON (.json)", "json", "application/json"),
+}
+
+private fun exportTranscript(
+    context: Context,
+    transcript: TranscriptEntity?,
+    segments: List<SegmentEntity>,
+    format: ExportFormat,
+) {
+    if (transcript == null) return
+    val content = when (format) {
+        ExportFormat.TXT -> TranscriptExporter.formatTxt(transcript, segments)
+        ExportFormat.MARKDOWN -> TranscriptExporter.formatMarkdown(transcript, segments)
+        ExportFormat.JSON -> TranscriptExporter.formatJson(transcript, segments)
+    }
+    shareFile(context, "transcript_${transcript.transcriptId.take(8)}.${format.extension}", content, format.mime)
+}
+
+private fun shareFile(context: Context, fileName: String, content: String, mime: String) {
+    try {
+        val dir = File(context.cacheDir, "exports").apply { mkdirs() }
+        val file = File(dir, fileName)
+        file.writeText(content)
+        val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = mime
+            putExtra(Intent.EXTRA_STREAM, uri)
+            putExtra(Intent.EXTRA_SUBJECT, fileName)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        context.startActivity(Intent.createChooser(intent, "Transkript exportieren"))
+    } catch (t: Throwable) {
+        Log.e("TranscriptDetail", "Export fehlgeschlagen: ${t.message}")
+    }
 }
