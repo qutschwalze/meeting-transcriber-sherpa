@@ -744,14 +744,33 @@ class LiveViewModel : ViewModel() {
      * Läuft nur im Final-Lauf (forceFinal), nach dem Leading-Resolve.
      */
     private fun resolveRemainingUnconfirmedByNearestConfirmed() {
+        val resolved = resolveListByNearestConfirmed(assignedFinalSegments)
+        if (resolved != assignedFinalSegments) {
+            assignedFinalSegments = resolved
+            bestAssignmentQuality = computeQuality(assignedFinalSegments)
+            val msg = "resolveRemainingUnconfirmedByNearestConfirmed: unlabeled/unbestätigte Segmente über bestätigte " +
+                    "Nachbarn gelabelt (jetzt ${assignedFinalSegments.count { !it.speakerId.isNullOrBlank() }}/${assignedFinalSegments.size} gelabelt)"
+            Log.i(TAG, msg)
+            TestLog.log(msg)
+        }
+    }
+
+    /**
+     * 0.6.7: Pure Variante des Nachbar-Resolves – arbeitet auf einer beliebigen
+     * Segment-Liste. Wird im Final auf assignedFinalSegments UND in der Save-Phase
+     * auf dem Overlay angewendet (das Overlay enthält auch raw-ASR-Segmente ohne
+     * Diarization-Overlay, z.B. den Ausklang nach dem letzten Diarization-Segment –
+     * Geräte-Befund 0.6.6: "## Unbekannt · 00:01:34").
+     */
+    private fun resolveListByNearestConfirmed(segments: List<TranscriptSegment>): List<TranscriptSegment> {
         val confirmedIds = sessionVoiceBank.enrolledSpeakerIds
-        if (confirmedIds.isEmpty()) return
-        val confirmed = assignedFinalSegments.filter { seg ->
+        if (confirmedIds.isEmpty()) return segments
+        val confirmed = segments.filter { seg ->
             seg.speakerId?.removePrefix("speaker_")?.toIntOrNull() in confirmedIds
         }
-        if (confirmed.isEmpty()) return
-        var resolved = 0
-        assignedFinalSegments = assignedFinalSegments.map { seg ->
+        if (confirmed.isEmpty()) return segments
+        var changed = false
+        val result = segments.map { seg ->
             val spkNum = seg.speakerId?.removePrefix("speaker_")?.toIntOrNull()
             if (spkNum != null && spkNum in confirmedIds) return@map seg // bestätigt → unangetastet
             val prev = confirmed.lastOrNull { it.endTimeMs <= seg.startTimeMs }
@@ -766,16 +785,11 @@ class LiveViewModel : ViewModel() {
                 else -> null // zwei verschiedene bestätigte Nachbarn → unangetastet
             }
             if (candidate != null) {
-                resolved++
+                changed = true
                 seg.copy(speakerId = candidate.first, speakerLabel = candidate.second)
             } else seg
         }
-        if (resolved > 0) {
-            bestAssignmentQuality = computeQuality(assignedFinalSegments)
-            val msg = "resolveRemainingUnconfirmedByNearestConfirmed: $resolved Segment(e) (unlabeled/unbestätigt) über bestätigte Nachbarn gelabelt"
-            Log.i(TAG, msg)
-            TestLog.log(msg)
-        }
+        return if (changed) result else segments
     }
 
     /**
@@ -1472,7 +1486,11 @@ class LiveViewModel : ViewModel() {
 
             // Ab hier Save-Phase – keine Commits mehr erlaubt
             isSavingFinalResult = true
-            val overlay = buildAssignedOverlayForAllRawSegments()
+            // 0.6.7: Das Overlay enthält auch raw-ASR-Segmente ohne Diarization-Overlay
+            // (z.B. Ausklang nach dem letzten Diarization-Segment) – die über die
+            // bestätigten Nachbarn gelabelt werden (Geräte-Befund 0.6.6:
+            // "## Unbekannt · 00:01:34" im Export).
+            val overlay = resolveListByNearestConfirmed(buildAssignedOverlayForAllRawSegments())
             logSaveSpeakerStage("beforeSave overlay", overlay)
             // Segment-Splitting: lange ASR-Segmente an Diarization-Grenzen aufteilen
             val splitOverlay = if (lastDiarizationSegments.isNotEmpty()) {
