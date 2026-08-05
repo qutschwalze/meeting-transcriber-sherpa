@@ -23,20 +23,40 @@ object TranscriptExporter {
      * Gruppiert aufeinanderfolgende Segmente mit demselben speakerLabel zu Blöcken
      * (Referenz-Stil: "Sprecher 1 00:00:08" + alle Sätze bis zum nächsten Sprecher).
      * Unlabeled Segmente bilden einen Block ohne Label (ehrlich, kein Rate-Label).
+     * 0.6.3: Segment-Texte werden vor dem Gruppieren gesäubert (cleanSegmentText).
      */
     fun groupBySpeaker(segments: List<SegmentEntity>): List<Block> {
         val blocks = mutableListOf<Block>()
         for (seg in segments) {
+            val clean = cleanSegmentText(seg.text)
+            if (clean.isBlank()) continue
             val label = seg.speakerLabel
             val last = blocks.lastOrNull()
             if (last != null && last.label == label) {
-                last.texts += seg.text.trim()
+                last.texts += clean
             } else {
-                blocks += Block(label = label, startMs = seg.startTimeMs).apply { texts += seg.text.trim() }
+                blocks += Block(label = label, startMs = seg.startTimeMs).apply { texts += clean }
             }
         }
-        // Leere Blöcke (nur leere Texte) verwerfen
-        return blocks.filter { b -> b.texts.any { it.isNotBlank() } }
+        return blocks
+    }
+
+    /**
+     * 0.6.3: ASR-Segmentierungs-Artfakte am Segmentanfang entfernen.
+     *
+     * Geräte-Befund 0.6.2 (Export-Test 11:32, transcript_e2c4341b.md): viele
+     * Segmente beginnen mit einem führenden Punkt/Leerzeichen (z.B. ". Das ist
+     * noch gar nicht abzusehen") – die Endpoint-Segmentierung lässt den Punkt
+     * am Segmentende weg und das nächste Segment beginnt mit dem Satzzeichen.
+     * Entfernt führende Satzzeichen (.,;:!?) + Whitespace wiederholt. Pure
+     * Funktion (JVM-testbar).
+     */
+    fun cleanSegmentText(raw: String): String {
+        var s = raw.trim()
+        while (s.isNotEmpty() && s[0] in ".,;:!?") {
+            s = s.substring(1).trimStart()
+        }
+        return s
     }
 
     // ─── TXT ────────────────────────────────────────────────────────────
@@ -68,7 +88,9 @@ object TranscriptExporter {
         for (block in groupBySpeaker(segments)) {
             sb.append("\n## ").append(block.label ?: "Unbekannt")
             sb.append(" · ").append(formatTimestampHms(block.startMs)).append('\n')
-            block.texts.forEach { sb.append(it).append("\n\n") }
+            // 0.6.3: Sätze innerhalb eines Blocks als Fließtext verbinden (soft break),
+            // nicht als getrennte Absätze – deutlich besser lesbar
+            sb.append(block.texts.joinToString("\n")).append('\n')
         }
         return sb.toString().trimEnd() + "\n"
     }

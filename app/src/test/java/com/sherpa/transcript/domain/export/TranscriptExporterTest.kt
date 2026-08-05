@@ -97,4 +97,34 @@ class TranscriptExporterTest {
         assertEquals("a\\nb", TranscriptExporter.jsonEscape("a\nb"))
         assertEquals("a\\u0001b", TranscriptExporter.jsonEscape("a\u0001b"))
     }
+
+    @Test
+    fun `cleanSegmentText entfernt führende Satzzeichen und Whitespace`() {
+        assertEquals("Das ist noch gar nicht abzusehen", TranscriptExporter.cleanSegmentText(". Das ist noch gar nicht abzusehen"))
+        assertEquals("mit meinem Sohn", TranscriptExporter.cleanSegmentText(", mit meinem Sohn"))
+        assertEquals("Hallo", TranscriptExporter.cleanSegmentText("...Hallo"))
+        assertEquals("Hallo", TranscriptExporter.cleanSegmentText("   ,,Hallo  "))
+        assertEquals("3. Punkt bleibt", TranscriptExporter.cleanSegmentText("3. Punkt bleibt")) // Zahl + Punkt nicht trimmen
+        assertEquals("", TranscriptExporter.cleanSegmentText("..."))
+        assertEquals("Nichts zu tun", TranscriptExporter.cleanSegmentText("Nichts zu tun"))
+    }
+
+    @Test
+    fun `groupBySpeaker säubert Segment-Texte vor der Gruppierung`() {
+        val dirty = listOf(
+            SegmentEntity("s1", "t1", 8_000, 12_000, ". Nicht mehr merken.", "speaker_0", "Sprecher 1"),
+            SegmentEntity("s2", "t1", 12_000, 16_000, ", aber der Erfahrungsweg ist aus.", "speaker_0", "Sprecher 1"),
+        )
+        val blocks = TranscriptExporter.groupBySpeaker(dirty)
+        assertEquals(1, blocks.size)
+        assertEquals(listOf("Nicht mehr merken.", "aber der Erfahrungsweg ist aus."), blocks[0].texts)
+    }
+
+    @Test
+    fun `formatMarkdown verbindet Block-Sätze als Fließtext ohne Absatz-Leerzeile`() {
+        val md = TranscriptExporter.formatMarkdown(transcript, segments)
+        assertTrue(md.contains("Nicht mehr merken.\nAber der Erfahrungsweg ist aus."))
+        assertFalse(md.contains("Nicht mehr merken.\n\nAber der Erfahrungsweg ist aus."))
+        assertTrue(md.contains("Ich hab neulich mit meinem Sohn geredet.\nEr sagt das ähnlich."))
+    }
 }
