@@ -121,10 +121,11 @@ class TranscriptExporterTest {
     }
 
     @Test
-    fun `formatMarkdown verbindet Block-Sätze als Fließtext ohne Absatz-Leerzeile`() {
+    fun `formatMarkdown verbindet Block-Sätze als zusammenhängenden Fließtext`() {
         val md = TranscriptExporter.formatMarkdown(transcript, segments)
-        assertTrue(md.contains("Nicht mehr merken.\nAber der Erfahrungsweg ist aus."))
-        assertFalse(md.contains("Nicht mehr merken.\n\nAber der Erfahrungsweg ist aus."))
-        assertTrue(md.contains("Ich hab neulich mit meinem Sohn geredet.\nEr sagt das ähnlich."))
+        // 0.6.5: Leerzeichen-Verbindung – kein Zeilenumbruch mitten im Satz
+        assertTrue(md.contains("Nicht mehr merken. Aber der Erfahrungsweg ist aus."))
+        assertFalse(md.contains("Nicht mehr merken.\n"))
+        assertTrue(md.contains("Ich hab neulich mit meinem Sohn geredet. Er sagt das ähnlich."))
     }
 }
