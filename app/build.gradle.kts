@@ -5,6 +5,7 @@ plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
+    id("com.google.devtools.ksp")
 }
 
 // ── Release-Signing (0.6.0) ────────────────────────────────────────────────
@@ -27,8 +28,8 @@ android {
         applicationId = "com.sherpa.transcript"
         minSdk = 26
         targetSdk = 35
-        versionCode = 109
-        versionName = "0.6.5"
+        versionCode = 110
+        versionName = "0.6.6"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -104,9 +105,16 @@ dependencies {
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 
+    // Room (0.6.6): SQLite-Datenbank für Transkripte – schnelle Metadaten-Queries
+    // statt JSON-Datei-Parsing (App-Start/Verlauf wurden mit vielen Transkripten langsam)
+    implementation("androidx.room:room-runtime:2.7.2")
+    implementation("androidx.room:room-ktx:2.7.2")
+    ksp("androidx.room:room-compiler:2.7.2")
+
     // Apache Commons Compress (für tar.bz2-Entpackung der Speaker-Modelle)
     implementation("org.apache.commons:commons-compress:1.27.1")
 
     // Unit-Tests
     testImplementation("junit:junit:4.13.2")
+    testImplementation("androidx.room:room-testing:2.7.2")
 }

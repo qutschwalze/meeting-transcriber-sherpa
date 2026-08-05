@@ -15,6 +15,7 @@ Live-Transkription auf dem Gerät inkl. **Speaker Diarization** – keine Cloud,
 - ✅ Debug-Mode: Testaufnahme als Roh-WAV + Diagnose-Log-Datei (`TestLog`) für Host-Analyse (Xiaomi-logcat ist unbrauchbar)
 - ✅ `scripts/host-test/`: Python-Pipeline-Simulation (exakt App-Konfiguration) für A/B-Analysen
 - ✅ Export (0.6.2): Detail-Screen → Share-Icon → TXT / Markdown / JSON (Referenz-Stil mit Sprecherblöcken, ShareSheet via FileProvider)
+- ✅ Room-Datenbank (0.6.6): SQLite statt JSON-Datei-Store – schnelle Metadaten-Queries (App-Start/Verlauf skalieren), einmalige JSON→SQLite-Migration, JSON-Dateien bleiben als Backup
 
 ## Architektur
 
@@ -34,7 +35,7 @@ Navigation      VoiceBank         Zipformer-Transducer
 | **Phase 1** | Live-Transkription (MVP) | ✅ |
 | **Phase 3** | Speaker Diarization (2 Sprecher) | ✅ (0.6.0) |
 | **Phase 4** | Export: TXT, Markdown, JSON + ShareSheet | ✅ (0.6.2) |
-| **Phase 2** | History/Detail-Screen (JSON-Store, bewusst ohne Room-Abhängigkeit) | ✅ (Vor-0.6) |
+| **Phase 2** | History/Detail-Screen + **Room-Datenbank** (0.6.6: JSON-Store abgelöst, einmalige JSON→SQLite-Migration) | ✅ |
 | **Phase 5** | Einstellungen, Dark Mode, Modellwahl, Privacy | offen |
 
 ## Voraussetzungen
