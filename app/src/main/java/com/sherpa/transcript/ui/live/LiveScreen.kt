@@ -324,7 +324,7 @@ private fun BottomBar(
                     Icon(
                         imageVector = Icons.Default.Stop,
                         contentDescription = "Stopp",
-                        modifier = Modifier.size(24.dp),
+                        modifier = Modifier.size(32.dp),
                     )
                 }
             } else {
@@ -341,10 +341,12 @@ private fun BottomBar(
                                 strokeWidth = 3.dp,
                             )
                         } else {
+                            // 0.6.9: Mikrofon deutlich größer (36dp statt 24dp) –
+                            // bei 56dp-Button wirkte 24dp wie ein Punkt
                             Icon(
                                 imageVector = Icons.Default.Mic,
                                 contentDescription = "Aufnahme starten",
-                                modifier = Modifier.size(24.dp),
+                                modifier = Modifier.size(36.dp),
                             )
                         }
                     }
