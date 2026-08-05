@@ -214,8 +214,11 @@ private fun InfoRow(label: String, value: String) {
 @Composable
 private fun assetSize(context: android.content.Context, assetName: String): String {
     return try {
-        val fd = context.assets.openFd(assetName)
-        val kb = fd.length / 1024
+        // openFd schlägt bei komprimierten Assets fehl (IOException) – open() mit
+        // available() funktioniert für komprimierte und unkomprimierte Assets
+        // (Geräte-Befund 0.6.9: "nicht gefunden" trotz vorhandener Assets).
+        val size = context.assets.open(assetName).use { it.available().toLong() }
+        val kb = size / 1024
         if (kb >= 1024) "%.1f MB".format(kb / 1024.0) else "$kb KiB"
     } catch (_: Exception) {
         "nicht gefunden"
