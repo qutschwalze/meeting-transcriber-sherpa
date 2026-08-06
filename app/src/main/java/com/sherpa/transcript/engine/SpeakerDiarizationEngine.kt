@@ -34,7 +34,9 @@ data class DiarizationSegment(
 )
 
 /**
- * Offizielle Sherpa-ONNX Speaker-Diarization mit pyannote + NeMo Titanet.
+ * Offizielle Sherpa-ONNX Speaker-Diarization mit pyannote + 3D-Speaker ERes2Net
+ * (0.6.12: embedding.onnx = 3dspeaker_speech_eres2net_base – trennt 3-4 Stimmen
+ * auch auf Lautsprecher-Mikrofon-Aufnahmen, wo Titanet Small sie merged).
  * Wie im offiziellen APK: sherpa-onnx-...-pyannote_audio-nemo.apk
  */
 class SpeakerDiarizationEngine(private val context: Context, private val assetManager: AssetManager? = null) {
