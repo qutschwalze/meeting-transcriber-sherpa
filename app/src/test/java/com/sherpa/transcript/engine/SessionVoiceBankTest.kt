@@ -44,8 +44,8 @@ class SessionVoiceBankTest {
     @Test
     fun `enroll dann identify - gleiche Stimme wird erkannt`() {
         val bank = SessionVoiceBank(FakeComputer())
-        // 1. Kontakt → nur pending, noch kein Voiceprint
-        bank.enroll(globalId = 0, samples = samplesOf(1f, 10f), durationMs = 10_000L)
+        // 1. Kontakt (3s < Quick-Confirm 4s) → nur pending, noch kein Voiceprint
+        bank.enroll(globalId = 0, samples = samplesOf(1f, 10f), durationMs = 3_000L)
         assertEquals("1. Kontakt = pending, noch kein bestätigter Sprecher", 0, bank.speakerCount)
         assertEquals("1 pending Enrollment", 1, bank.pendingCount)
 
@@ -59,8 +59,8 @@ class SessionVoiceBankTest {
     @Test
     fun `einmaliger Fehlcluster wird nie eingeschrieben`() {
         val bank = SessionVoiceBank(FakeComputer())
-        // 1. Kontakt einer Stimme, die nie wieder auftaucht
-        bank.enroll(globalId = 0, samples = samplesOf(1f, 10f), durationMs = 10_000L)
+        // 1. Kontakt einer Stimme, die nie wieder auftaucht (3s < Quick-Confirm)
+        bank.enroll(globalId = 0, samples = samplesOf(1f, 10f), durationMs = 3_000L)
         assertEquals("pending, nicht eingeschrieben", 0, bank.speakerCount)
         assertEquals("1 pending", 1, bank.pendingCount)
 
@@ -74,10 +74,25 @@ class SessionVoiceBankTest {
     @Test
     fun `identify - fremde Stimme liefert keinen Match`() {
         val bank = SessionVoiceBank(FakeComputer())
-        bank.enroll(globalId = 0, samples = samplesOf(1f, 10f), durationMs = 10_000L)
+        bank.enroll(globalId = 0, samples = samplesOf(1f, 10f), durationMs = 3_000L)
 
         val match = bank.identify(samplesOf(2f, 5f))
         assertNull("Stimme B ist nicht Stimme A", match)
+    }
+
+    @Test
+    fun `Phase 6 Quick-Confirm - langer erster Kontakt wird sofort bestaetigt`() {
+        val bank = SessionVoiceBank(FakeComputer())
+        // 1. Kontakt mit >= 4s Redezeit (Phase 6: Quick-Confirm für Meetings) →
+        // sofort bestätigt, KEIN 2. Kontakt nötig
+        val enrolled = bank.enroll(globalId = 0, samples = samplesOf(1f, 10f), durationMs = 6_000L)
+        assertTrue("langer 1. Kontakt wird sofort eingeschrieben", enrolled)
+        assertEquals("sofort bestätigt", 1, bank.speakerCount)
+        assertEquals("kein pending mehr", 0, bank.pendingCount)
+
+        // identify erkennt die Stimme (Match gegen den bestätigten Voiceprint)
+        val match = bank.identify(samplesOf(1f, 5f))
+        assertEquals("Stimme A → global 0", 0, match)
     }
 
     @Test

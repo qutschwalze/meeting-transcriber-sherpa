@@ -235,20 +235,30 @@ class DiarizationChunkWorker(
             debug = debug,
         )
 
-        // ── 4b (Hebel G): Voice-Bank-Fallback für "neue" IDs ──
-        // Wenn der Reconciler eine ID als NEU deklariert hat (Anker-Lücke in der
-        // Zone), fragt die Bank akustisch nach: Ist das vielleicht ein bekannter
-        // Sprecher, dessen Stimme die Engine nur neu geclustert hat?
-        // - Match über Threshold → Drift aufgelöst, ID wird zurückgemappt
-        // - Kein Match → wirklich neuer Sprecher → wird eingeschrieben (enroll)
+        // ── 4b (Hebel G, Phase 6): Voice-Bank für ALLE lokalen IDs ──
+        // Nicht nur new-IDs: Auch gemappte Segmente werden gegen die Bank
+        // identifiziert (wiederkehrende Stimme → Mapping auf die Bank-ID =
+        // ID-Stabilität; 2. Kontakt gegen ein pending → confirmPending passiert
+        // in identify()). Die Bank wird PRO lokaler ID neu geprüft – nach einem
+        // Enroll ist sie nicht mehr leer, der nächste Kontakt (z.B. der
+        // Monologue-Split derselben Stimme) wird dann identified und auf die
+        // bestehende pending-ID gemappt statt als eigene Stimme eingeschrieben.
+        // Kein Match + nicht new → Phantom-/Fehlzuordnungs-Regel:
+        //   a) Reconciler-Ziel-ID ohne Bank-Verankerung → echte neue Stimme
+        //      (der 1. Kontakt war zu kurz fürs Enrollment) → unter der Ziel-ID
+        //      enrollen (Quick-Confirm greift bei langer Redezeit)
+        //   b) Ziel-ID in der Bank (Zone-Vote-Fehlzuordnung, z.B. B auf A
+        //      gemappt) → frische ID + enroll (2. Kontakt bestätigt sie dann)
         var finalMapping = result.mapping
         var finalNewSpeakerIds = result.newSpeakerIds
         var driftResolvedCount = 0
         var enrolledCount = 0
         var skippedCount = 0
         val bankSize = voiceBank?.speakerCount ?: 0
-        if (voiceBank != null && result.newSpeakerIds.isNotEmpty()) {
-            for (localId in result.newSpeakerIds) {
+        var freshGlobalId = (globalSegments.maxOfOrNull { it.speakerId } ?: -1) + 1
+        if (voiceBank != null) {
+            val allLocalIds = absoluteSegments.map { it.speaker }.distinct().sorted()
+            for (localId in allLocalIds) {
                 val segsOfSpeaker = absoluteSegments.filter { it.speaker == localId }
                 val best = segsOfSpeaker.maxByOrNull { it.endSec - it.startSec } ?: continue
                 val samples = extractSegmentSamples(chunk, best)
@@ -259,25 +269,55 @@ class DiarizationChunkWorker(
                 }
                 val durationMs = ((best.endSec - best.startSec) * 1000f).toLong()
 
-                val matchedGlobalId = voiceBank.identify(samples)
+                val bankNonEmpty = voiceBank.speakerCount > 0 || voiceBank.pendingCount > 0
+                val matchedGlobalId = if (bankNonEmpty) voiceBank.identify(samples) else null
                 if (matchedGlobalId != null) {
-                    // Drift aufgelöst: lokale ID → bestehende globale ID
+                    // Stimme bekannt → lokale ID auf die Bank-ID mappen (Drift/Stabilität)
                     finalMapping = finalMapping + (localId to matchedGlobalId)
                     finalNewSpeakerIds = finalNewSpeakerIds - localId
                     driftResolvedCount++
                     Log.d(TAG, "VOICE_BANK resolve: local=$localId → global=$matchedGlobalId " +
                             "(dur=${durationMs}ms, statt neue ID ${result.mapping[localId]})")
                     TestLog.log("VB local=$localId dur=${durationMs}ms → RESOLVE auf global=$matchedGlobalId (statt neue ID ${result.mapping[localId]})")
-                } else {
+                    continue
+                }
+                val targetGlobalId = result.mapping[localId]
+                if (localId in finalNewSpeakerIds) {
                     // Wirklich neuer Sprecher → in die Bank einschreiben
-                    val newGlobalId = result.mapping[localId] ?: continue
-                    val enrolled = voiceBank.enroll(newGlobalId, samples, durationMs)
-                    if (enrolled) {
-                        enrolledCount++
-                        TestLog.log("VB local=$localId dur=${durationMs}ms → ENROLL global=$newGlobalId OK")
+                    if (targetGlobalId != null) {
+                        val enrolled = voiceBank.enroll(targetGlobalId, samples, durationMs)
+                        if (enrolled) {
+                            enrolledCount++
+                            TestLog.log("VB local=$localId dur=${durationMs}ms → ENROLL global=$targetGlobalId OK")
+                        } else {
+                            skippedCount++
+                            TestLog.log("VB local=$localId dur=${durationMs}ms → ENROLL global=$targetGlobalId SKIP")
+                        }
+                    }
+                } else if (targetGlobalId != null) {
+                    // Phase 6: Phantom/Fehlzuordnung (nicht new, aber Bank kennt die Stimme nicht)
+                    if (!voiceBank.hasVoiceprintFor(targetGlobalId)) {
+                        // a) Phantom-ID: Ziel existiert nicht in der Bank → echte neue Stimme
+                        val enrolled = voiceBank.enroll(targetGlobalId, samples, durationMs)
+                        if (enrolled) {
+                            enrolledCount++
+                            TestLog.log("VB local=$localId dur=${durationMs}ms → ENROLL-Phantom global=$targetGlobalId OK (Ziel-ID war nicht in der Bank)")
+                        } else {
+                            skippedCount++
+                            TestLog.log("VB local=$localId dur=${durationMs}ms → ENROLL-Phantom global=$targetGlobalId SKIP")
+                        }
                     } else {
-                        skippedCount++
-                        TestLog.log("VB local=$localId dur=${durationMs}ms → ENROLL global=$newGlobalId SKIP")
+                        // b) Fehlzuordnung auf echte Bank-ID (Zone-Vote) → frische ID
+                        finalMapping = finalMapping + (localId to freshGlobalId)
+                        val enrolled = voiceBank.enroll(freshGlobalId, samples, durationMs)
+                        freshGlobalId++
+                        if (enrolled) {
+                            enrolledCount++
+                            TestLog.log("VB local=$localId dur=${durationMs}ms → ENROLL-Fehlzuordnung neue ID=${freshGlobalId - 1} OK (Ziel ${targetGlobalId} war in Bank, aber kein Match)")
+                        } else {
+                            skippedCount++
+                            TestLog.log("VB local=$localId dur=${durationMs}ms → ENROLL-Fehlzuordnung neue ID=${freshGlobalId - 1} SKIP")
+                        }
                     }
                 }
             }
@@ -285,11 +325,6 @@ class DiarizationChunkWorker(
                 Log.d(TAG, "VOICE_BANK: $driftResolvedCount Drift-ID(s) aufgelöst, " +
                         "$enrolledCount enrolled, $skippedCount skipped (Bank=${voiceBank.speakerCount} Sprecher)")
             }
-        } else if (voiceBank != null && result.newSpeakerIds.isEmpty()) {
-            // Diagnose: Bank ist aktiv, aber der Reconciler meldet keine neuen IDs
-            Log.d(TAG, "VOICE_BANK check: keine neuen IDs in diesem Chunk (Bank=${voiceBank.speakerCount} Sprecher)")
-        } else if (voiceBank == null) {
-            Log.d(TAG, "VOICE_BANK check: Bank NICHT aktiv (voiceBank=null) – Drift-Schutz aus!")
         }
         // Mapping auf die (evtl. korrigierten) globalen IDs anwenden
         val correctedSegments = if (finalMapping == result.mapping) {

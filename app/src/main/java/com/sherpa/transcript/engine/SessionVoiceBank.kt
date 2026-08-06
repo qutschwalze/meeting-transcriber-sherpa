@@ -131,6 +131,18 @@ class SessionVoiceBank(
      *   Kontakten) wird danach trotzdem nur mit 0.62 gematcht.
      */
     private val pendingConfirmThreshold: Float = 0.35f,
+    /**
+     * Phase 6 (Quick-Confirm): Mindest-Redezeit eines 1. Kontakts, ab der das
+     * pending Enrollment SOFORT bestätigt wird (kein 2. Kontakt nötig).
+     *
+     * Podiums-Befund (Host, 5-Minuten-Clip mit 4 Speakern): Eine Stimme mit
+     * 6,1 s Redezeit an genau EINER Stelle (einmaliger Kurzbeitrag) blieb ewig
+     * pending – die 2-Kontakt-Härtung braucht 2 Auftritte. Für echte Meetings
+     * (jeder Teilnehmer = eigener Sprecher, auch bei einem Beitrag) bestätigt
+     * Quick-Confirm lange 1. Kontakte (>= 4 s) direkt. Kurze Fragmente (< 4 s)
+     * bleiben pending (konservativ, unverändert).
+     */
+    private val quickConfirmSec: Float = 4f,
 ) {
 
     companion object {
@@ -306,11 +318,26 @@ class SessionVoiceBank(
             return false
         }
 
-        // 1. Kontakt: nur pending anlegen – noch KEIN Voiceprint
+        // 1. Kontakt: pending anlegen; Quick-Confirm (Phase 6) bei langer Redezeit
         pendingEnrollments[globalId] = PendingEnrollment(embedding)
+        if (durationMs >= (quickConfirmSec * 1000f).toLong()) {
+            confirmPending(globalId, embedding)
+            Log.d(TAG, "enroll QUICK-CONFIRMED: global=$globalId ($durationMs ms >= ${quickConfirmSec}s, 1. Kontakt) – Bank hat ${voiceprints.size} Sprecher")
+            TestLog.log("VB local=$globalId dur=${durationMs}ms → QUICK-CONFIRMED (1. Kontakt >= ${quickConfirmSec}s) – Bank hat ${voiceprints.size} Sprecher")
+            return true
+        }
         Log.d(TAG, "enroll pending: global=$globalId ($durationMs ms, 1. Kontakt) – wartet auf 2. Bestätigung (Bank=${voiceprints.size} bestätigt, ${pendingEnrollments.size} pending)")
         return false
     }
+
+    /**
+     * Phase 6: Existiert für die globale ID bereits ein Eintrag in der Bank
+     * (bestätigtes Voiceprint ODER pending)? Der Worker nutzt das für die
+     * Phantom-/Fehlzuordnungs-Regel (Reconciler-Ziel-ID ohne Bank-Verankerung
+     * → echte neue Stimme → enroll).
+     */
+    fun hasVoiceprintFor(globalId: Int): Boolean =
+        globalId in voiceprints || globalId in pendingEnrollments
 
     /** Bestätigt ein pending Enrollment (2. Kontakt): Voiceprint aus Ø beider Kontakte. */
     private fun confirmPending(globalId: Int, embedding: FloatArray) {

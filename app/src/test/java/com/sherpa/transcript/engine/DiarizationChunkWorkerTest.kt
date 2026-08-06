@@ -538,12 +538,12 @@ class DiarizationChunkWorkerTest {
         buffer.pushValueFrames(1f, 2000)                 // 0-20s
         buffer.pushValueFrames(1f, 2500, startMs = 15_000L) // 15-40s
 
-        // Chunk 1 [0,20]: Engine findet Speaker 0 NUR in [0,10]
+        // Chunk 1 [0,20]: Engine findet Speaker 0 NUR in [0,3] (kurz, < 4s → pending)
         // Chunk 2 [15,40]: Engine DRIFTET – nennt dieselbe Stimme lokal 1
-        // → Zone [15,20] hat keinen Anker von global 0 (Bestand endet bei 10s)
+        // → Zone [15,20] hat keinen Anker von global 0 (Bestand endet bei 3s)
         // → Reconciler würde neue ID vergeben, aber die BANK erkennt Stimme A
         val fake = FakeDiarizer(ArrayDeque(listOf(
-            listOf(localSeg(0, 0f, 10f)),  // absolut [0,10]
+            listOf(localSeg(0, 0f, 3f)),   // absolut [0,3] – kurz (< 4s, keine Quick-Confirm)
             listOf(localSeg(1, 0f, 25f)),  // absolut [15,40], Drift!
         )))
         val voiceBank = SessionVoiceBank(ValueComputer())
@@ -574,8 +574,8 @@ class DiarizationChunkWorkerTest {
         buffer.pushValueFrames(2f, 2000, startMs = 20_000L) // 20-40s
 
         val fake = FakeDiarizer(ArrayDeque(listOf(
-            listOf(localSeg(0, 0f, 10f)),  // absolut [0,10] Stimme A
-            listOf(localSeg(1, 5f, 25f)),  // absolut [20,40] Stimme B (nach Zone!)
+            listOf(localSeg(0, 0f, 3f)),   // absolut [0,3] Stimme A (kurz, < 4s)
+            listOf(localSeg(1, 5f, 8f)),   // absolut [20,23] Stimme B (kurz, < 4s)
         )))
         val voiceBank = SessionVoiceBank(ValueComputer())
         val worker = DiarizationChunkWorker(buffer, fake, voiceBank = voiceBank)
@@ -605,9 +605,9 @@ class DiarizationChunkWorkerTest {
         // Chunk 3: B in [35,55] (Zone [35,40] ohne Anker, Bestand endet bei 35)
         //   → Reconciler will neue ID 2, aber Bank matcht auf pending 1 → CONFIRMED
         val fake = FakeDiarizer(ArrayDeque(listOf(
-            listOf(localSeg(0, 0f, 10f)),   // absolut [0,10] Stimme A
-            listOf(localSeg(1, 5f, 20f)),   // absolut [20,35] Stimme B
-            listOf(localSeg(0, 0f, 20f)),   // absolut [35,55] Stimme B erneut
+            listOf(localSeg(0, 0f, 3f)),   // absolut [0,3] Stimme A (kurz, < 4s)
+            listOf(localSeg(1, 5f, 8f)),   // absolut [20,23] Stimme B (kurz, < 4s)
+            listOf(localSeg(0, 0f, 20f)),  // absolut [35,55] Stimme B erneut (2. Kontakt)
         )))
         val voiceBank = SessionVoiceBank(ValueComputer())
         val worker = DiarizationChunkWorker(buffer, fake, voiceBank = voiceBank)
