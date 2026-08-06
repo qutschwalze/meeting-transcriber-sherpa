@@ -157,6 +157,10 @@ class LiveViewModel : ViewModel() {
             minEnrollmentSec = 2f,
             minIdentifySec = 2f,
             pendingConfirmThreshold = 0.35f,
+            // Phase 6 (0.6.11): Quick-Confirm – langer 1. Kontakt (>= 4s) wird
+            // sofort bestätigt (etabliert einmalige Kurzbeiträge in Meetings
+            // mit 3+ Speakern; Host-verifiziert mit dem 4-Sprecher-Podium).
+            quickConfirmSec = 4f,
         )
     }
     private val diarizationChunkWorker by lazy {
@@ -314,7 +318,7 @@ class LiveViewModel : ViewModel() {
     }
 
     /** Aktueller Clustering-Testmodus, wird an SpeakerDiarizationEngine durchgereicht. */
-    var clusteringMode: DiarizationClusteringMode = DiarizationClusteringMode.FIXED_2
+    var clusteringMode: DiarizationClusteringMode = DiarizationClusteringMode.AUTO_HIGHER_THRESHOLD
 
     // ── Diarization-Serialisierung ──
     private val diarizationMutex = Mutex()

@@ -23,7 +23,8 @@ REPO = os.path.abspath(os.path.join(BASE, "..", ".."))
 WAV = sys.argv[1] if len(sys.argv) > 1 else os.path.join(BASE, "clip16k.wav")
 ASR_JSON = sys.argv[2] if len(sys.argv) > 2 else os.path.join(BASE, "asr_out.json")
 SEG_MODEL = os.path.join(REPO, "app/src/main/assets/segmentation.onnx")
-EMB_MODEL = os.path.join(REPO, "app/src/main/assets/embedding.onnx")
+# Phase 6: Embedding-Modell per Env wählbar (z.B. EMB_MODEL=/tmp/sherpa-test/eres2net.onnx)
+EMB_MODEL = os.environ.get("EMB_MODEL", os.path.join(REPO, "app/src/main/assets/embedding.onnx"))
 CHUNK_SEC, OVERLAP_SEC = 15.0, 5.0  # LiveViewModel: chunkSec=15f, Overlap-Default 5f
 SAMPLE_RATE = 16000
 EPS = 0.01
@@ -222,24 +223,28 @@ class VoiceBank:
         emb = self._embed(samples)
         if emb is None:
             return None
-        best_id, best_sim = None, VB_MATCH_THRESHOLD
+        best_id, best_sim, best_is_pending = None, 0.0, False
         sims = []
         for gid, vp in self.voiceprints.items():
             sim = self.cosine(emb, vp)
             sims.append((gid, sim, "confirmed"))
             if sim > best_sim:
-                best_sim, best_id = sim, gid
+                best_sim, best_id, best_is_pending = sim, gid, False
         if not confirmed_only:
             for gid, p in self.pending.items():
                 sim = self.cosine(emb, p)
                 sims.append((gid, sim, "pending"))
                 if sim > best_sim:
-                    best_sim, best_id = sim, gid
-        if best_id is not None and best_id in self.pending:
-            self._confirm(best_id, emb)
-        if not confirmed_only:
+                    best_sim, best_id, best_is_pending = sim, gid, True
+        # 0.5.76-Abgleich mit der Kotlin-identify: bestSim startet bei 0 (nicht bei
+        # matchThreshold) und die Schwelle ist effektiv (0.35 pending / 0.62 confirmed);
+        # ohne Match wird null zurueckgegeben (Return-Bug war in der App, hier nie).
+        threshold = VB_PENDING_CONFIRM if best_is_pending else VB_MATCH_THRESHOLD
+        if best_id is not None and best_sim > threshold:
+            if best_is_pending and best_id in self.pending:
+                self._confirm(best_id, emb)
             return best_id
-        return best_id
+        return None
 
     def enroll(self, gid, samples, dur_ms):
         if dur_ms < VB_MIN_ENROLL_SEC * 1000 or samples.size == 0:
@@ -260,6 +265,13 @@ class VoiceBank:
             self.pending[gid] = emb
             return False
         self.pending[gid] = emb
+        # Phase 6 (Quick-Confirm): langer 1. Kontakt (>= QUICK_CONFIRM_SEC) wird
+        # sofort bestätigt – etabliert einmalige Kurzbeiträge (z.B. eine Stimme
+        # mit 6s Redezeit in einer Podiumsrunde) als eigenen Sprecher. Kurze
+        # Fragmente (< 4s) bleiben pending (konservativ).
+        if QUICK_CONFIRM_SEC > 0 and dur_ms >= QUICK_CONFIRM_SEC * 1000:
+            self._confirm(gid, emb)
+            return True
         return False
 
     def _confirm(self, gid, emb):
@@ -275,11 +287,19 @@ class VoiceBank:
 
 
 # ── Diarization-Engine (einmal instanziieren, pro Chunk process) ──────────────
+# Phase 6: Clustering-Modus per Umgebungsvariable testbar
+#   NUM_CLUSTERS=-1 (oder 0) = AUTO (threshold-basiert), 2 = FIXED_2, 4 = FIXED_4
+#   THRESHOLD=0.3 (Standard)
+import os
+NUM_CLUSTERS = int(os.environ.get("NUM_CLUSTERS", "2"))
+THRESHOLD = float(os.environ.get("THRESHOLD", "0.3"))
+# Phase 6: Quick-Confirm – langer 1. Kontakt sofort bestätigen (0 = aus)
+QUICK_CONFIRM_SEC = float(os.environ.get("QUICK_CONFIRM_SEC", "0"))
 cfg = sherpa_onnx.OfflineSpeakerDiarizationConfig(
     segmentation=sherpa_onnx.OfflineSpeakerSegmentationModelConfig(
         pyannote=sherpa_onnx.OfflineSpeakerSegmentationPyannoteModelConfig(SEG_MODEL)),
     embedding=sherpa_onnx.SpeakerEmbeddingExtractorConfig(model=EMB_MODEL, num_threads=2, provider="cpu"),
-    clustering=sherpa_onnx.FastClusteringConfig(num_clusters=2, threshold=0.3),
+    clustering=sherpa_onnx.FastClusteringConfig(num_clusters=NUM_CLUSTERS, threshold=THRESHOLD),
     min_duration_on=0.1,
     # 0.5.71-Abgleich: App nutzt minDurationOff=0.05 (SpeakerDiarizationEngine.kt),
     # nicht 0.1 – korrigiert, damit die Simulation die echte Segmentierung
@@ -320,11 +340,20 @@ for ci, c in enumerate(chunks):
     zone_start, zone_end = c["start"], c["start"] + c["overlap"]
     mapped, mapping, new_ids, _ = reconcile(absolute, zone_start, zone_end, global_bestand)
 
-    # ── Hebel G: Voice-Bank für als NEU deklarierte IDs ──
+    # ── Hebel G (Phase 6): Voice-Bank für ALLE lokalen IDs befragen ──
+    # Nicht nur new-IDs: Auch gemappte Segmente werden gegen die Bank identifiziert
+    # (wiederkehrende Stimme → Mapping auf die Bank-ID = ID-Stabilität; 2. Kontakt
+    # gegen ein pending → confirmPending passiert in identify()). Nur bei leerer
+    # Bank entfällt identify (1. Kontakte werden direkt als pending enrolled).
     final_mapping = dict(mapping)
     final_new = set(new_ids)
-    if voice_bank.speaker_count + len(voice_bank.pending) > 0 and new_ids:
-        for local_id in sorted(new_ids):
+    all_local = sorted(set(s["speaker"] for s in absolute))
+    if all_local:
+        first_contacts = []
+        bank_was_empty = voice_bank.speaker_count + len(voice_bank.pending) == 0
+        # Frische globale IDs für Fehlzuordnungen (müssen über allen Bestands-IDs liegen)
+        next_fresh_global_id = (max([s["speaker"] for s in global_bestand], default=-1) + 1)
+        for local_id in all_local:
             segs_of = [s for s in absolute if s["speaker"] == local_id]
             if not segs_of:
                 continue
@@ -338,34 +367,54 @@ for ci, c in enumerate(chunks):
             if samples.size == 0:
                 continue
             dur_ms = (best["end"] - best["start"]) * 1000.0
-            matched = voice_bank.identify(samples)
-            if matched is not None:
-                final_mapping[local_id] = matched
-                final_new.discard(local_id)
-                print(f"  chunk {ci}: VOICE_BANK resolve local={local_id} -> global={matched} (dur={dur_ms:.0f}ms)", file=sys.stderr)
-            else:
+            # Phase 6: bank_nonempty pro lokaler ID NEU prüfen – nach einem Enroll
+            # ist die Bank nicht mehr leer, der nächste Kontakt (z.B. der
+            # Monologue-Split derselben Stimme) wird dann identified und auf die
+            # bestehende pending-ID gemappt (statt als eigene Stimme enrolled).
+            bank_nonempty = voice_bank.speaker_count + len(voice_bank.pending) > 0
+            if bank_nonempty:
+                matched = voice_bank.identify(samples)
+                if matched is not None:
+                    final_mapping[local_id] = matched
+                    final_new.discard(local_id)
+                    print(f"  chunk {ci}: VOICE_BANK identify local={local_id} -> global={matched} (dur={dur_ms:.0f}ms)", file=sys.stderr)
+                    continue
+                # Phase-6-Diagnose: warum kein Match? (sims gegen Bank + Reconciler-Zuordnung)
+                emb_diag = voice_bank._embed(samples)
+                sims_diag = {}
+                for g, vp in voice_bank.voiceprints.items():
+                    sims_diag[f"c{g}"] = round(voice_bank.cosine(emb_diag, vp), 3)
+                for g, p in voice_bank.pending.items():
+                    sims_diag[f"p{g}"] = round(voice_bank.cosine(emb_diag, p), 3)
+                print(f"  chunk {ci}: local={local_id} KEIN Match dur={dur_ms:.0f}ms new={local_id in new_ids} "
+                      f"reconciler->global={mapping.get(local_id)} sims={sims_diag}", file=sys.stderr)
+            if local_id in new_ids:
                 new_gid = mapping.get(local_id)
                 if new_gid is not None:
                     voice_bank.enroll(new_gid, samples, dur_ms)
-    elif voice_bank.speaker_count + len(voice_bank.pending) == 0 and new_ids:
-        # 1. Kontakte direkt als pending enrollen (Bank ist noch leer)
-        for local_id in sorted(new_ids):
-            segs_of = [s for s in absolute if s["speaker"] == local_id]
-            if not segs_of:
-                continue
-            best = max(segs_of, key=lambda s: s["end"] - s["start"])
-            rel_start = max(0.0, min(best["start"] - c["start"], c["end"] - c["start"]))
-            rel_end = max(0.0, min(best["end"] - c["start"], c["end"] - c["start"]))
-            i0 = int(rel_start * SAMPLE_RATE)
-            i1 = int(rel_end * SAMPLE_RATE)
-            samples = raw[i0:i1] if i1 > i0 else np.array([], dtype=np.float32)
-            if samples.size == 0:
-                continue
-            dur_ms = (best["end"] - best["start"]) * 1000.0
-            new_gid = mapping.get(local_id)
-            if new_gid is not None:
-                voice_bank.enroll(new_gid, samples, dur_ms)
-        print(f"  chunk {ci}: voice_bank enrolls (leer->pending): {sorted(voice_bank.pending)}", file=sys.stderr)
+                    first_contacts.append(new_gid)
+            else:
+                # Phase 6: Fehlzuordnungs-/Phantom-Regel – der Reconciler hat die
+                # lokale ID auf eine bestehende globale ID gemappt, aber die Bank
+                # erkennt die Stimme nicht (identify=null). Zwei Fälle:
+                # a) Phantom-ID: Ziel-ID existiert in der Bank NICHT (der 1. Kontakt
+                #    dieser Stimme war zu kurz fuer das Enrollment < 2s) -> es ist
+                #    eine echte neue Stimme -> unter der Ziel-ID enrollen.
+                # b) Fehlzuordnung auf echte Bank-ID (Zone-Vote): z.B. Sprecher B
+                #    wird auf Sprecher A gemappt, obwohl die Stimmen verschieden
+                #    sind -> frische ID + enroll (2. Kontakt bestaetigt sie dann).
+                target_gid = mapping.get(local_id)
+                if target_gid is not None and target_gid not in voice_bank.voiceprints and target_gid not in voice_bank.pending:
+                    voice_bank.enroll(target_gid, samples, dur_ms)
+                    print(f"  chunk {ci}: VOICE_BANK enroll-Phantom local={local_id} -> global={target_gid} (dur={dur_ms:.0f}ms)", file=sys.stderr)
+                elif target_gid is not None:
+                    fresh = next_fresh_global_id
+                    next_fresh_global_id += 1
+                    final_mapping[local_id] = fresh
+                    voice_bank.enroll(fresh, samples, dur_ms)
+                    print(f"  chunk {ci}: VOICE_BANK enroll-Fehlzuordnung local={local_id} -> neue ID {fresh} (dur={dur_ms:.0f}ms, alte Ziel-ID {target_gid} in Bank)", file=sys.stderr)
+        if first_contacts and bank_was_empty:
+            print(f"  chunk {ci}: voice_bank enrolls (leer->pending): {sorted(set(first_contacts))}", file=sys.stderr)
 
     corrected = ([{**s, "speaker": final_mapping.get(s["speaker"], s["speaker"])} for s in absolute]
                  if final_mapping != mapping else mapped)
