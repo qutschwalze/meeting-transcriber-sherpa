@@ -12,6 +12,7 @@ import com.sherpa.transcript.SherpaTranscriptApp
 import com.sherpa.transcript.data.local.SegmentEntity
 import com.sherpa.transcript.data.local.SettingsStore
 import com.sherpa.transcript.data.local.TranscriptEntity
+import com.sherpa.transcript.domain.export.TranscriptExporter
 import com.sherpa.transcript.data.repository.TranscriptRepository
 import com.sherpa.transcript.domain.audio.AudioCaptureManager
 import com.sherpa.transcript.domain.audio.ChunkedAudioBuffer
@@ -1564,6 +1565,24 @@ class LiveViewModel : ViewModel() {
             val entitySpeakerIds = segEntities.mapNotNull { it.speakerId }.distinct().map { it.removePrefix("speaker_") }.sorted()
             Log.i(TAG, "saveStage beforeEntityInsert: entities=${segEntities.size} labeled=${segEntities.count { it.speakerId != null }} speakers=${entitySpeakerIds.size} ids=[${entitySpeakerIds.joinToString(",")}]")
             repository.saveTranscriptWithSegments(transcript, segEntities)
+            // 0.6.13: Markdown direkt ins Testaufnahmen-Verzeichnis legen (Debug-Modus) –
+            // die .md liegt dann neben WAV+Log (getExternalFilesDir(DOWNLOADS)/testaufnahmen/)
+            // für den direkten Upload bereit – kein Share/Umweg mehr nötig
+            if (_uiState.value.debugMode) {
+                try {
+                    val md = TranscriptExporter.formatMarkdown(transcript, segEntities)
+                    val base = SherpaTranscriptApp.instance.getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS)
+                    if (base != null) {
+                        val dir = java.io.File(base, "testaufnahmen")
+                        dir.mkdirs()
+                        val mdFile = java.io.File(dir, "transcript_${transcriptId}.md")
+                        mdFile.writeText(md)
+                        TestLog.log("EXPORT_MD: transcript_${transcriptId}.md geschrieben (${md.length} Zeichen)")
+                    }
+                } catch (t: Throwable) {
+                    Log.w(TAG, "EXPORT_MD: Markdown konnte nicht geschrieben werden: ${t.message}")
+                }
+            }
             Log.i(TAG, "Saved '$title' — ${segEntities.size} Segmente, ${labeledCount}/$speakerCount labeled, $speakerCount Sprecher, ${totalDurationMs / 1000}s Aufnahme")
         }}
     }
