@@ -191,7 +191,7 @@ class SessionVoiceBank(
      * Ein Match gegen ein pending gilt als 2. Kontakt und bestätigt das Enrollment.
      * @return globale Speaker-ID bei Match über Threshold, sonst null.
      */
-    fun identify(samples: FloatArray): Int? {
+    fun identify(samples: FloatArray, confirmedOnly: Boolean = false): Int? {
         if (samples.isEmpty() || (voiceprints.isEmpty() && pendingEnrollments.isEmpty())) return null
         // 0.5.61: Kurze Segmente (< minIdentifySec) nicht auflösen – ihr Embedding
         // ist akustisch instabil und erzeugt FALSCH-Matches (Log-Befund 0.5.60:
@@ -227,15 +227,20 @@ class SessionVoiceBank(
             }
         }
         // Pending Enrollments matchen ebenfalls (Drift vor Bestätigung auflösen) –
-        // ABER mit der LOCKEREN Bestätigungsschwelle, sonst wird nie bestätigt
-        for ((id, pending) in pendingEnrollments) {
-            val sim = cosineSimilarity(embedding, pending.embedding)
-            if (sims.isNotEmpty()) sims.append(", ")
-            sims.append(String.format("%d~=%.3f", id, sim))
-            if (sim > bestSim) {
-                bestSim = sim
-                bestId = id
-                bestIsPending = true
+        // ABER mit der LOCKEREN Bestätigungsschwelle, sonst wird nie bestätigt.
+        // 0.6.14: confirmedOnly=true überspringt die pending (nur bestätigte
+        // Voiceprints, 0.62 – für die Backchannel-Korrektur der Overlay-Zuordnung,
+        // wo eine lockere 0.35-pending-Schwelle ähnliche Stimmen falsch mergen würde)
+        if (!confirmedOnly) {
+            for ((id, pending) in pendingEnrollments) {
+                val sim = cosineSimilarity(embedding, pending.embedding)
+                if (sims.isNotEmpty()) sims.append(", ")
+                sims.append(String.format("%d~=%.3f", id, sim))
+                if (sim > bestSim) {
+                    bestSim = sim
+                    bestId = id
+                    bestIsPending = true
+                }
             }
         }
         val effectiveThreshold = if (bestIsPending) pendingConfirmThreshold else matchThreshold

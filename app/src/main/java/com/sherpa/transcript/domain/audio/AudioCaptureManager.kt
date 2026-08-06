@@ -57,6 +57,9 @@ class AudioCaptureManager(
     var saveRawWav: Boolean = false
     private var wavStream: DataOutputStream? = null
     private var wavFile: File? = null
+
+    /** 0.6.14: Aktuelle Debug-WAV (für die akustische Overlay-Korrektur), null ohne Debug. */
+    val currentTestWavFile: File? get() = wavFile
     private var wavDataBytes: Long = 0L
 
     /** 0.5.75: Zähler für den periodischen WAV-Header-Patch (alle 500 Frames ≈ 5s). */
