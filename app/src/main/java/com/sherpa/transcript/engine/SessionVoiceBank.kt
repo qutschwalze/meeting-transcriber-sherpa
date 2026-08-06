@@ -10,7 +10,9 @@ import kotlin.math.sqrt
 /**
  * Abstraktion der Embedding-Berechnung – unit-testbar per Fake.
  * Die echte Implementierung ([SherpaEmbeddingComputer]) nutzt Sherpa-ONNX
- * mit dem bereits vorhandenen `embedding.onnx` (NeMo Titanet Small).
+ * mit dem bereits vorhandenen `embedding.onnx` (3D-Speaker ERes2Net, 0.6.12 –
+ * vorher NeMo Titanet Small; ERes2Net trennt 4 Stimmen auf Lautsprecher-
+ * Mikrofon-Aufnahmen, Host-verifiziert mit der 5-Minuten-Podiums-WAV).
  */
 fun interface SpeakerEmbeddingComputer {
     /** Berechnet ein Speaker-Embedding aus 16kHz-Audio-Samples. Null bei Fehler. */
