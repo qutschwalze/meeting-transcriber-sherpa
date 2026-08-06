@@ -492,6 +492,40 @@ if confirmed_ids:
             for g in global_bestand:
                 print(f"    [{g['start']:6.2f}-{g['end']:6.2f}] spk{g['speaker']}", file=sys.stderr)
 
+# ── 0.6.14: Overlay-Korrektur (Backchannel) ──────────────────────────────────
+# Jedes ASR-Segment (>= 2s) wird zeitlich dem Diarization-Segment mit der
+# größten Überlappung zugeordnet und dann AKUSTISCH gegen die bestätigten
+# Voiceprints verifiziert (confirmed-only, 0.62). Klarer Match auf einen
+# ANDEREN Sprecher -> Zuordnung korrigieren. (Geräte-Befund: "also Wähler..."
+# akustisch Sprecher 3, aber zeitlich Sprecher 4 zugeordnet – Einwurf-Grenze)
+overlay_corrected = 0
+if confirmed_ids:
+    for a in asr:
+        s0, s1 = a["start_sec"], a["end_sec"]
+        if s1 - s0 < 2.0:
+            continue
+        best_ov, best_spk = 0.0, None
+        for d in global_bestand:
+            ov = min(s1, d["end"]) - max(s0, d["start"])
+            if ov > best_ov:
+                best_ov, best_spk = ov, d["speaker"]
+        if best_spk is None or best_spk not in confirmed_ids:
+            continue
+        i0, i1 = int(s0 * SAMPLE_RATE), int(s1 * SAMPLE_RATE)
+        if i1 > len(raw) or i0 >= i1:
+            continue
+        samples = raw[i0:i1]
+        matched = voice_bank.identify(samples, confirmed_only=True)
+        if 225.0 <= s0 <= 250.0:
+            # Diagnose: Similarities der ASR-Segmente im Backchannel-Bereich
+            emb_d = voice_bank._embed(samples)
+            sims_d = {g: round(voice_bank.cosine(emb_d, vp), 3) for g, vp in voice_bank.voiceprints.items()}
+            print(f"  OVERLAY_DIAG: ASR [{s0:.1f}-{s1:.1f}] '{a['text'][:40].strip()}' zeitlich spk{best_spk} sims={sims_d} -> match={matched}", file=sys.stderr)
+        if matched is not None and matched != best_spk:
+            overlay_corrected += 1
+            print(f"  OVERLAY_CORRECT: ASR [{s0:.1f}-{s1:.1f}] '{a['text'][:45].strip()}...' zeitlich spk{best_spk} -> akustisch spk{matched}", file=sys.stderr)
+print(f"# OVERLAY: {len(asr)} ASR-Segmente, {overlay_corrected} akustisch korrigiert", file=sys.stderr)
+
 # ── TimelineComposer ──────────────────────────────────────────────────────────
 def compact_raw(segs):
     if len(segs) < 2:

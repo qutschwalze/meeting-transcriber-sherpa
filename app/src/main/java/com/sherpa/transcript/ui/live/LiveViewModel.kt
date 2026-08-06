@@ -836,6 +836,66 @@ class LiveViewModel : ViewModel() {
     }
 
     /**
+     * 0.6.14: Backchannel-Korrektur der Overlay-Zuordnung über die Voice-Bank.
+     * Jedes ASR-Segment (>= 2s) wird gegen die BESTÄTIGTEN Voiceprints geprüft
+     * (confirmedOnly – keine pending, keine lockeren 0.35-Matches). Matcht die
+     * Stimme klar (0.62) auf einen ANDEREN Sprecher als die zeitliche
+     * Zuordnung, wird korrigiert (der Einwurf-Fall: "also Wähler..." akustisch
+     * Sprecher 3, zeitlich Sprecher 4 zugeordnet).
+     * Nur im Debug-Modus aktiv (die Roh-WAV für die Samples existiert nur dort).
+     */
+    private fun correctOverlayByVoiceBank(overlay: List<TranscriptSegment>): List<TranscriptSegment> {
+        val wavFile = audioCapture.currentTestWavFile ?: return overlay
+        if (!wavFile.exists()) return overlay
+        var corrected = 0
+        val result = overlay.map { seg ->
+            val speakerNum = seg.speakerId?.removePrefix("speaker_")?.toIntOrNull()
+            if (speakerNum == null) return@map seg
+            val durationMs = seg.endTimeMs - seg.startTimeMs
+            if (durationMs < 2000) return@map seg
+            val samples = readWavSamples(wavFile, seg.startTimeMs, seg.endTimeMs)
+            if (samples == null || samples.isEmpty()) return@map seg
+            val matched = sessionVoiceBank.identify(samples, confirmedOnly = true)
+            if (matched != null && matched != speakerNum) {
+                corrected++
+                val label = "Sprecher ${matched + 1}"
+                Log.d(TAG, "VB_CORRECT: Segment ${seg.segmentId} (${seg.startTimeMs}-${seg.endTimeMs}ms) zeitlich ${seg.speakerId} → akustisch speaker_$matched (Backchannel-Korrektur)")
+                TestLog.log("VB_CORRECT: Segment ${seg.startTimeMs}-${seg.endTimeMs}ms zeitlich ${seg.speakerId} → akustisch speaker_$matched")
+                seg.copy(speakerId = "speaker_$matched", speakerLabel = label)
+            } else seg
+        }
+        if (corrected > 0) {
+            Log.i(TAG, "VB_CORRECT: $corrected Overlay-Segment(e) akustisch korrigiert (Backchannel)")
+        }
+        return result
+    }
+
+    /** Liest 16kHz-mono-s16le-WAV-Samples (Debug-WAV, 44-Byte-Header) für ein Zeitfenster. */
+    private fun readWavSamples(file: java.io.File, startMs: Long, endMs: Long): FloatArray? {
+        return try {
+            java.io.FileInputStream(file).use { fis ->
+                val header = 44L
+                val bytesPerSec = 16000L * 2L
+                val startByte = header + startMs * bytesPerSec / 1000L
+                val endByte = header + endMs * bytesPerSec / 1000L
+                val count = ((endByte - startByte) / 2L).toInt()
+                if (count <= 0 || count > 16000 * 60) return null
+                val buf = ByteArray(count * 2)
+                if (fis.skip(startByte) < startByte) return null
+                if (fis.read(buf) < buf.size) return null
+                FloatArray(count) { i ->
+                    val lo = buf[i * 2].toInt() and 0xFF
+                    val hi = buf[i * 2 + 1].toInt()
+                    (lo or (hi shl 8)).toShort().toFloat() / 32768f
+                }
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "readWavSamples fehlgeschlagen: ${t.message}")
+            null
+        }
+    }
+
+    /**
      * Vergleicht zwei Speaker-Zuordnungen und liefert den Unterschied.
      * Basis ist rawFinalSegments (die Segmentmenge). previous und next
      * werden per segmentId verglichen.
@@ -1517,7 +1577,9 @@ class LiveViewModel : ViewModel() {
             // (z.B. Ausklang nach dem letzten Diarization-Segment) – die über die
             // bestätigten Nachbarn gelabelt werden (Geräte-Befund 0.6.6:
             // "## Unbekannt · 00:01:34" im Export).
-            val overlay = resolveListByNearestConfirmed(buildAssignedOverlayForAllRawSegments())
+            val overlay = correctOverlayByVoiceBank(
+                resolveListByNearestConfirmed(buildAssignedOverlayForAllRawSegments())
+            )
             logSaveSpeakerStage("beforeSave overlay", overlay)
             // Segment-Splitting: lange ASR-Segmente an Diarization-Grenzen aufteilen
             val splitOverlay = if (lastDiarizationSegments.isNotEmpty()) {
