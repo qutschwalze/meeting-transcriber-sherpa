@@ -346,6 +346,21 @@ class SessionVoiceBank(
     fun hasVoiceprintFor(globalId: Int): Boolean =
         globalId in voiceprints || globalId in pendingEnrollments
 
+    /**
+     * Phase 6 (0.6.15): Beste Similarity gegen die BESTÄTIGTEN Voiceprints.
+     * Für die Quick-Confirm-/Fehlzuordnungs-Entscheidung: sim < 0.45 = KLAR
+     * fremde Stimme (echte neue Stimme → etablieren), sim 0.45–0.62 =
+     * Drift-Verdacht (die eigene Stimme, zeitlich verzerrt – Langzeit-Meeting-
+     * Befund 0.6.14: 24-Minuten-Aufnahme → 6+ bestätigte Sprecher statt der
+     * echten Zahl) → NICHT etablieren, beim Reconciler-Mapping bleiben.
+     */
+    fun bestConfirmedSimilarity(samples: FloatArray): Float {
+        if (samples.isEmpty() || voiceprints.isEmpty()) return 0f
+        if (samples.size < (minIdentifySec * 16000).toInt()) return 0f
+        val embedding = computer.computeEmbedding(samples) ?: return 0f
+        return voiceprints.values.maxOfOrNull { cosineSimilarity(embedding, it) } ?: 0f
+    }
+
     /** Bestätigt ein pending Enrollment (2. Kontakt): Voiceprint aus Ø beider Kontakte. */
     private fun confirmPending(globalId: Int, embedding: FloatArray) {
         val pending = pendingEnrollments.remove(globalId) ?: return

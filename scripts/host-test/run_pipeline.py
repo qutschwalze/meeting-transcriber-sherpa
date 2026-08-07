@@ -350,6 +350,7 @@ for ci, c in enumerate(chunks):
     all_local = sorted(set(s["speaker"] for s in absolute))
     if all_local:
         first_contacts = []
+        skipped_count = 0
         bank_was_empty = voice_bank.speaker_count + len(voice_bank.pending) == 0
         # Frische globale IDs für Fehlzuordnungen (müssen über allen Bestands-IDs liegen)
         next_fresh_global_id = (max([s["speaker"] for s in global_bestand], default=-1) + 1)
