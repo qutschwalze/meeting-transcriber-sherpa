@@ -1637,9 +1637,13 @@ class LiveViewModel : ViewModel() {
                     if (base != null) {
                         val dir = java.io.File(base, "testaufnahmen")
                         dir.mkdirs()
-                        val mdFile = java.io.File(dir, "transcript_${transcriptId}.md")
+                        // 0.6.15: Dateiname an die WAV koppeln (testaufnahme_<ts>.md) –
+                        // der Copy-Job (testaufnahme_*-Muster) nimmt die .md dann mit
+                        val mdName = audioCapture.currentTestWavFile?.name
+                            ?.replace(".wav", ".md") ?: "transcript_${transcriptId}.md"
+                        val mdFile = java.io.File(dir, mdName)
                         mdFile.writeText(md)
-                        TestLog.log("EXPORT_MD: transcript_${transcriptId}.md geschrieben (${md.length} Zeichen)")
+                        TestLog.log("EXPORT_MD: $mdName geschrieben (${md.length} Zeichen)")
                     }
                 } catch (t: Throwable) {
                     Log.w(TAG, "EXPORT_MD: Markdown konnte nicht geschrieben werden: ${t.message}")
