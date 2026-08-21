@@ -19,3 +19,14 @@ keystore.properties
 
 # Test-WAVs (nicht mehr benötigt)
 *.wav
+
+# Debug-Upload-Server: hochgeladene Dateien + Metadaten (nur Server-Code kommt ins Repo)
+debug-server/uploads/
+debug-server/metadata/
+.venv-debug-server/
+
+# Host-Test-Artefakte (Analyse-Skripte sind eingecheckt, Ergebnisse nicht)
+scripts/host-test/pipeline_*.log
+scripts/host-test/asr_out_*.json
+scripts/host-test/pipeline_out.json
+__pycache__/

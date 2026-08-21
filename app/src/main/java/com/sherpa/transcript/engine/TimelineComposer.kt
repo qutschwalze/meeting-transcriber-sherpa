@@ -449,10 +449,17 @@ object TimelineComposer {
     /**
      * Führt benachbarte finale Segmente mit gleichem Sprecher
      * und kurzer Pause zusammen – NUR für die Anzeige.
+     *
+     * 0.6.19: Ein-Sprecher-Modus → Pause-Grenze auf 5s.
      */
     fun mergeSegmentsForDisplay(segments: List<TranscriptSegment>): List<TranscriptSegment> {
         if (segments.isEmpty()) return emptyList()
         val sorted = segments.sortedBy { it.startTimeMs }
+
+        // 0.6.19: Ein-Sprecher-Modus → großzügigeres Merging
+        val distinctSpeakers = sorted.mapNotNull { it.speakerId?.takeIf { s -> s.isNotBlank() } }.distinct().size
+        val pauseLimitMs = if (distinctSpeakers <= 1) 5000L else MERGE_PAUSE_MS
+
         val merged = mutableListOf<TranscriptSegment>()
 
         for (seg in sorted) {
@@ -469,7 +476,7 @@ object TimelineComposer {
                 && !seg.speakerId.isNullOrBlank()
                 && (last.speakerId == seg.speakerId || last.speakerLabel == seg.speakerLabel)
                 && seg.startTimeMs >= last.endTimeMs
-                && (seg.startTimeMs - last.endTimeMs) <= MERGE_PAUSE_MS
+                && (seg.startTimeMs - last.endTimeMs) <= pauseLimitMs
 
             if (canMerge) {
                 merged[merged.lastIndex] = last.copy(

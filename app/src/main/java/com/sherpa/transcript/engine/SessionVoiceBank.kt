@@ -248,6 +248,39 @@ class SessionVoiceBank(
             // Match gegen ein pending = 2. Kontakt → Enrollment bestätigen
             val pending = pendingEnrollments[bestId]
             if (pending != null && bestIsPending) {
+                // ── 0.6.20 (Option A3): Drift-Vorprüfung beim 2-Kontakt-Bestätigen ──
+                // Der 2. Kontakt einer Phantom-ID matcht ihren EIGENEN pending
+                // (sim≈1.0) – wenn er gleichzeitig gegen eine ANDERE bestehende
+                // Bank-Stimme (confirmed ODER pending) mit >= pendingConfirmThreshold
+                // matcht, gehört der Kontakt akustisch zu dieser Stimme (ID-Drift
+                // über Chunk-Grenzen). Dann KEIN neuer bestätigter Sprecher:
+                // pending verwerfen + Kontakt auf die bestehende Stimme leiten.
+                // Host-verifiziert (Simulation, 11:08-WAV): Bank 7 → 4 bestätigte
+                // = exakt die 4 realen Stimmen (FIXED_5), 46%-unlabeled-Symptom
+                // adressiert. diagnose-Zeile: VB_DRIFT_ABFANG.
+                var driftId: Int? = null
+                for ((id, vp) in voiceprints) {
+                    if (id != bestId && cosineSimilarity(embedding, vp) >= pendingConfirmThreshold) {
+                        driftId = id
+                        break
+                    }
+                }
+                if (driftId == null) {
+                    for ((id, p) in pendingEnrollments) {
+                        if (id != bestId && cosineSimilarity(embedding, p.embedding) >= pendingConfirmThreshold) {
+                            driftId = id
+                            break
+                        }
+                    }
+                }
+                if (driftId != null) {
+                    pendingEnrollments.remove(bestId)
+                    Log.d(TAG, String.format("identify: Drift-Vorprüfung – pending global=%d gehört zu bestehender Stimme global=%d (sim>=%.3f), kein neuer Sprecher",
+                        bestId, driftId, pendingConfirmThreshold))
+                    TestLog.log(String.format("VB_DRIFT_ABFANG pending=%d → global=%d (sim>=%.3f)",
+                        bestId, driftId, pendingConfirmThreshold))
+                    return driftId
+                }
                 confirmPending(bestId, embedding)
             }
             Log.d(TAG, String.format("identify: MATCH → global=%d sim=%.3f (threshold=%.3f, [%s])",

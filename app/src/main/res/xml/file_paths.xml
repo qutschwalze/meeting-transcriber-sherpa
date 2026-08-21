@@ -2,4 +2,6 @@
 <!-- Phase 4 (0.6.2): Export-Dateien im Cache-Ordner über FileProvider teilen -->
 <paths>
     <cache-path name="exports" path="exports/" />
+    <!-- 0.6.16: Debug-Upload – testaufnahmen im externen Files-Ordner -->
+    <external-files-path name="testaufnahmen" path="Download/testaufnahmen/" />
 </paths>

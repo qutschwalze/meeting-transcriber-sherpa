@@ -335,10 +335,18 @@ object FinalTranscriptComposer {
      *
      * Analog zu TimelineComposer.mergeSegmentsForDisplay(), aber für den
      * finalen Save (und mit eigenen Schwellenwerten).
+     *
+     * 0.6.19: Bei Ein-Sprecher-Modus (<= 1 label) wird die Pause-Grenze
+     * auf 5s erhöht – der Text soll zusammenhängend sein.
      */
     fun compactSegmentsForHistory(segments: List<TranscriptSegment>): List<TranscriptSegment> {
         if (segments.isEmpty()) return emptyList()
         val sorted = segments.sortedBy { it.startTimeMs }
+
+        // 0.6.19: Ein-Sprecher-Modus → großzügigeres Merging
+        val distinctSpeakers = sorted.mapNotNull { it.speakerId?.takeIf { s -> s.isNotBlank() } }.distinct().size
+        val pauseLimitMs = if (distinctSpeakers <= 1) 5000L else MAX_PAUSE_FOR_COMPACT_MS
+
         val merged = mutableListOf<TranscriptSegment>()
 
         for (seg in sorted) {
@@ -349,7 +357,7 @@ object FinalTranscriptComposer {
                     && !last.speakerId.isNullOrBlank()
                     && last.speakerId == seg.speakerId
                     && seg.startTimeMs >= last.endTimeMs
-                    && (seg.startTimeMs - last.endTimeMs) <= MAX_PAUSE_FOR_COMPACT_MS
+                    && (seg.startTimeMs - last.endTimeMs) <= pauseLimitMs
 
             if (canMerge) {
                 merged[merged.lastIndex] = last.copy(

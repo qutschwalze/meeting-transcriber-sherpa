@@ -1,6 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
-    <!-- HuggingFace und andere legitime Modell-Quellen -->
+    <!-- 0.6.18: Debug-Upload-Server braucht HTTP zu lokalen IPs.
+         base-config erlaubt HTTP generell (für den Dev-Server).
+         domain-config schränkt HuggingFace/GitHub auf HTTPS-only ein. -->
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
     <domain-config cleartextTrafficPermitted="false">
         <domain includeSubdomains="true">huggingface.co</domain>
         <domain includeSubdomains="true">github.com</domain>

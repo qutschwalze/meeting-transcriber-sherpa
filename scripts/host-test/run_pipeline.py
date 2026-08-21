@@ -242,6 +242,30 @@ class VoiceBank:
         threshold = VB_PENDING_CONFIRM if best_is_pending else VB_MATCH_THRESHOLD
         if best_id is not None and best_sim > threshold:
             if best_is_pending and best_id in self.pending:
+                # ── Option A (0.6.20-Test, Teil 3): Drift-Vorprüfung im
+                # identify()-Bestätigungspfad. Der 2. Kontakt einer Phantom-ID
+                # matcht ihren EIGENEN pending (sim≈1.0) und wird hier sofort
+                # bestätigt. Wenn der Kontakt gleichzeitig gegen eine ANDERE
+                # bestEHENDE Bank-Stimme (confirmed ODER pending) >= 0.35 matcht,
+                # ist er wahrscheinlich dieselbe akustische Stimme in einer
+                # driftenden ID → Pending NICHT bestätigen, stattdessen die
+                # andere Stimme zurückgeben (Identität zusammenführen).
+                drift_match = None
+                for other_gid, vp in self.voiceprints.items():
+                    if other_gid != best_id and self.cosine(emb, vp) >= VB_PENDING_CONFIRM:
+                        drift_match = other_gid
+                        break
+                if drift_match is None:
+                    for other_gid, p in self.pending.items():
+                        if other_gid != best_id and self.cosine(emb, p) >= VB_PENDING_CONFIRM:
+                            drift_match = other_gid
+                            break
+                if drift_match is not None:
+                    self.pending.pop(best_id, None)
+                    print(f"  BANK_OPTIONA3: identify-Bestätigung für pending global={best_id} "
+                          f"abgefangen – gleiche Stimme wie global={drift_match} (sim>={VB_PENDING_CONFIRM}), "
+                          f"auf bestehende Stimme geleitet", file=sys.stderr)
+                    return drift_match
                 self._confirm(best_id, emb)
             return best_id
         return None
@@ -260,6 +284,31 @@ class VoiceBank:
         if gid in self.pending:
             sim = self.cosine(self.pending[gid], emb)
             if sim >= VB_PENDING_CONFIRM:
+                # ── Option A (0.6.20-Test, Teil 2): Drift-Vorprüfung auch beim
+                # 2-Kontakt-Bestätigen. Der 2. Kontakt einer Phantom-ID matcht
+                # ihren EIGENEN pending mit sim≈1.0 – aber wenn er gleichzeitig
+                # gegen eine ANDERE bestehende Bank-Stimme (confirmed ODER
+                # pending) mit >= VB_PENDING_CONFIRM matcht, gehört die ID
+                # akustisch zu dieser Stimme (ID-Drift) und darf NICHT als
+                # eigener bestätigter Sprecher durchgehen.
+                drift_match = None
+                for other_gid, vp in self.voiceprints.items():
+                    if other_gid != gid and self.cosine(emb, vp) >= VB_PENDING_CONFIRM:
+                        drift_match = other_gid
+                        break
+                if drift_match is None:
+                    for other_gid, p in self.pending.items():
+                        if other_gid != gid and self.cosine(emb, p) >= VB_PENDING_CONFIRM:
+                            drift_match = other_gid
+                            break
+                if drift_match is not None:
+                    # ID gehört zu einer bestehenden Stimme → pending-Eintrag
+                    # löschen und NICHT neu bestätigen (FINAL_RESOLVE übernimmt).
+                    self.pending.pop(gid, None)
+                    print(f"  BANK_OPTIONA2: 2-Kontakt-Bestätigung für global={gid} "
+                          f"verweigert – matcht bestehende Stimme global={drift_match} >= {VB_PENDING_CONFIRM})",
+                          file=sys.stderr)
+                    return False
                 self._confirm(gid, emb)
                 return True
             self.pending[gid] = emb
@@ -270,6 +319,29 @@ class VoiceBank:
         # mit 6s Redezeit in einer Podiumsrunde) als eigenen Sprecher. Kurze
         # Fragmente (< 4s) bleiben pending (konservativ).
         if QUICK_CONFIRM_SEC > 0 and dur_ms >= QUICK_CONFIRM_SEC * 1000:
+            # ── Option A (0.6.20-Test): Drift-Vorprüfung vor dem Quick-Confirm ──
+            # Konservativ: Wenn dieser Kontakt gegen eine BEREITS bestehende
+            # Bank-Stimme (confirmed ODER pending) mit >= VB_PENDING_CONFIRM matcht,
+            # ist er vermutlich ein driftender Kontakt derselben Stimme (der
+            # Reconciler hat die ID nur nicht stabil gehalten). Dann NICHT sofort
+            # als neuer bestätigter Sprecher etablieren – die ID bleibt pending
+            # und wird über den 2-Kontakt-Weg oder FINAL_RESOLVE aufgelöst.
+            # Verhindert Phantom-Sprecher durch ID-Drift (Befund 11:08-WAV:
+            # 7 bestätigte Bank-Speaker bei nur 4 realen Stimmen).
+            drift_match = False
+            for other_gid, vp in self.voiceprints.items():
+                if other_gid != gid and self.cosine(emb, vp) >= VB_PENDING_CONFIRM:
+                    drift_match = True
+                    break
+            if not drift_match:
+                for other_gid, p in self.pending.items():
+                    if other_gid != gid and self.cosine(emb, p) >= VB_PENDING_CONFIRM:
+                        drift_match = True
+                        break
+            if drift_match:
+                print(f"  BANK_OPTIONA: Quick-Confirm für global={gid} verweigert "
+                      f"(Drift-Vorprüfung: matcht bestehende Stimme >= {VB_PENDING_CONFIRM})", file=sys.stderr)
+                return False
             self._confirm(gid, emb)
             return True
         return False

@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sherpa Debug Uploads</title>
+<style>
+  :root { --bg:#0d1117; --card:#161b22; --border:#30363d; --text:#e6edf3;
+          --muted:#8b949e; --accent:#58a6ff; --green:#3fb950; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+         background:var(--bg); color:var(--text); padding:24px; max-width:1100px; margin:0 auto; }
+  h1 { font-size:1.6rem; margin-bottom:4px; }
+  .sub { color:var(--muted); font-size:0.85rem; margin-bottom:24px; }
+  .stats { display:flex; gap:16px; margin-bottom:20px; flex-wrap:wrap; }
+  .stat { background:var(--card); border:1px solid var(--border); border-radius:8px;
+          padding:12px 20px; min-width:140px; }
+  .stat .n { font-size:1.6rem; font-weight:700; color:var(--accent); }
+  .stat .l { font-size:0.75rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px; }
+  .btns { margin-bottom:16px; display:flex; gap:8px; align-items:center; }
+  .btns span { color:var(--muted); font-size:0.82rem; }
+  .sbtn { background:var(--card); border:1px solid var(--border); color:var(--text);
+          padding:6px 14px; border-radius:6px; cursor:pointer; font-size:0.82rem; }
+  .sbtn:hover { border-color:var(--accent); }
+  .sbtn.on { background:var(--accent); color:#000; border-color:var(--accent); }
+  .dg { margin-bottom:28px; }
+  .dh { font-size:1.1rem; font-weight:600; color:var(--green); margin-bottom:10px;
+        padding-bottom:6px; border-bottom:1px solid var(--border); }
+  table { width:100%; border-collapse:collapse; background:var(--card); border-radius:8px;
+          overflow:hidden; border:1px solid var(--border); }
+  th { background:#1c2129; text-align:left; padding:10px 14px; font-size:0.75rem;
+       color:var(--muted); text-transform:uppercase; letter-spacing:0.5px; }
+  td { padding:10px 14px; border-top:1px solid var(--border); font-size:0.88rem; }
+  tr:hover td { background:#1c2129; }
+  a { color:var(--accent); text-decoration:none; }
+  a:hover { text-decoration:underline; }
+  .tag { display:inline-block; padding:2px 8px; border-radius:4px; font-size:0.72rem; font-weight:600; }
+  .t-audio { background:#1f3a5f; color:#79c0ff; }
+  .t-json { background:#2a1f3a; color:#d2a8ff; }
+  .t-log { background:#1f3a2a; color:#7ee787; }
+  .t-markdown { background:#2a2a1f; color:#e3b341; }
+  .t-image { background:#3a2a1f; color:#ffa657; }
+  .t-other { background:#30363d; color:#8b949e; }
+  .m { color:var(--muted); font-size:0.82rem; }
+  .empty { text-align:center; padding:60px 20px; color:var(--muted); }
+  #ri { position:fixed; top:12px; right:16px; font-size:0.72rem; color:var(--muted);
+        opacity:0; transition:opacity 0.3s; }
+</style>
+</head>
+<body>
+<h1>🎙️ Sherpa Debug Uploads</h1>
+<p class="sub">Auto-refreshes every 30 seconds &middot; <span id="lr"></span></p>
+<div class="stats" id="st"></div>
+<div id="fl"></div>
+<div id="ri">↻ refreshing…</div>
+<script>
+function hs(b){
+  if (b < 1024) return b + ' B';
+  if (b < 1048576) return (b/1024).toFixed(1) + ' KB';
+  return (b/1048576).toFixed(1) + ' MB';
+}
+function tc(t){
+  if (t === 'audio') return 't-audio';
+  if (t === 'json') return 't-json';
+  if (t === 'log') return 't-log';
+  if (t === 'markdown') return 't-markdown';
+  if (t === 'image') return 't-image';
+  return 't-other';
+}
+function fr(f, sd){
+  var h = '<tr><td><a href="/files/' + encodeURIComponent(f.relative_path) + '">' + escapeHtml(f.filename) + '</a></td>' +
+          '<td><span class="tag ' + tc(f.file_type) + '">' + (f.file_type || '—') + '</span></td>' +
+          '<td>' + hs(f.size) + '</td>';
+  if (sd) h += '<td class="m">' + (f.device || '—') + '</td>';
+  h += '<td class="m">' + (f.session_id || '—') + '</td>' +
+       '<td class="m">' + (f.uploaded_at ? new Date(f.uploaded_at).toLocaleString() : '—') + '</td></tr>';
+  return h;
+}
+function escapeHtml(s){
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function render(files, sb){
+  if (sb) _sb = sb;
+  var s;
+  if (_sb === 'newest') s = files.slice().sort(function(a,b){ return (b.uploaded_at||'').localeCompare(a.uploaded_at||''); });
+  else if (_sb === 'size') s = files.slice().sort(function(a,b){ return b.size - a.size; });
+  else s = files;
+
+  var t = files.length, ts = 0, ty = {}, dv = {};
+  files.forEach(function(f){ ts += f.size; ty[f.file_type] = 1; if (f.device) dv[f.device] = 1; });
+  document.getElementById('st').innerHTML =
+    '<div class="stat"><div class="n">' + t + '</div><div class="l">Files</div></div>' +
+    '<div class="stat"><div class="n">' + hs(ts) + '</div><div class="l">Total Size</div></div>' +
+    '<div class="stat"><div class="n">' + Object.keys(ty).length + '</div><div class="l">Types</div></div>' +
+    '<div class="stat"><div class="n">' + Object.keys(dv).length + '</div><div class="l">Devices</div></div>';
+
+  if (!files.length) {
+    document.getElementById('fl').innerHTML = '<div class="empty">No files uploaded yet.</div>';
+    return;
+  }
+
+  var h = '<div class="btns"><span>Sort:</span>' +
+    '<button class="sbtn" data-sb="date">Nach Datum</button>' +
+    '<button class="sbtn" data-sb="newest">Neueste zuerst</button>' +
+    '<button class="sbtn" data-sb="size">Größte zuerst</button></div>';
+
+  if (_sb === 'date') {
+    var g = {};
+    s.forEach(function(f){ var d = f.relative_path.split('/')[0]; if (!g[d]) g[d] = []; g[d].push(f); });
+    Object.keys(g).sort().reverse().forEach(function(d){
+      var df = g[d];
+      h += '<div class="dg"><div class="dh">📅 ' + d + ' (' + df.length + ' files)</div>' +
+           '<table><thead><tr><th>File</th><th>Type</th><th>Size</th><th>Device</th><th>Session</th><th>Uploaded</th></tr></thead><tbody>';
+      df.forEach(function(f){ h += fr(f, true); });
+      h += '</tbody></table></div>';
+    });
+  } else {
+    h += '<table><thead><tr><th>File</th><th>Type</th><th>Size</th><th>Uploaded</th><th>Session</th></tr></thead><tbody>';
+    s.forEach(function(f){ h += fr(f, false); });
+    h += '</tbody></table>';
+  }
+  document.getElementById('fl').innerHTML = h;
+
+  // Sort buttons: event delegation via data-sb (no inline onclick strings!)
+  var btns = document.querySelectorAll('.sbtn');
+  for (var i = 0; i < btns.length; i++) {
+    (function(btn){
+      btn.onclick = function(){ render(window._allFiles, btn.getAttribute('data-sb')); };
+    })(btns[i]);
+  }
+  // Active button
+  for (var j = 0; j < btns.length; j++) {
+    if (btns[j].getAttribute('data-sb') === _sb) btns[j].classList.add('on');
+    else btns[j].classList.remove('on');
+  }
+}
+var _sb = 'date';
+window._allFiles = [];
+function load(){
+  document.getElementById('ri').style.opacity = '1';
+  fetch('/api/files').then(function(r){ return r.json(); }).then(function(f){
+    window._allFiles = f;
+    render(f);
+    document.getElementById('lr').textContent = 'Last refreshed: ' + new Date().toLocaleTimeString();
+    document.getElementById('ri').style.opacity = '0';
+  }).catch(function(e){
+    console.error('fetch failed:', e);
+    document.getElementById('ri').style.opacity = '0';
+  });
+}
+load();
+setInterval(load, 30000);
+</script>
+</body>
+</html>

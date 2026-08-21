@@ -9,6 +9,7 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.sherpa.transcript.SherpaTranscriptApp
+import com.sherpa.transcript.data.debug.DebugUploadClient
 import com.sherpa.transcript.data.local.SegmentEntity
 import com.sherpa.transcript.data.local.SettingsStore
 import com.sherpa.transcript.data.local.TranscriptEntity
@@ -242,8 +243,10 @@ class LiveViewModel : ViewModel() {
         val newDurationMs = endMs - startMs
         if (newDurationMs < 500L && newWords.size < 2 && pauseMs < 1500L) {
             val resultWords = existingWords.size + newWords.size
+            // 0.6.19: Führende Satzzeichen beim Merge bereinigen
+            val mergedText = cleanLeadingPunctuation(existingStr + " " + newStr)
             rawFinalSegments[rawFinalSegments.lastIndex] = last.copy(
-                text = existingStr + " " + newStr,
+                text = mergedText,
                 endTimeMs = maxOf(last.endTimeMs, endMs),
             )
             Log.d(TAG, "rawFinalSegments MERGE (micro): #${rawFinalSegments.size} old=${existingWords.size} new=${newWords.size} res=$resultWords \"${newText.take(30)}\"")
@@ -266,7 +269,8 @@ class LiveViewModel : ViewModel() {
             } else if (overlapWords >= maxOverlap) {
                 existingStr
             } else {
-                existingStr + " " + newWords.drop(overlapWords).joinToString(" ")
+                // 0.6.19: Führende Satzzeichen beim Merge bereinigen
+                cleanLeadingPunctuation(existingStr + " " + newWords.drop(overlapWords).joinToString(" "))
             }
             val resultWords = mergedText.trim().split("\\s+".toRegex()).size
             val action = when {
@@ -1610,6 +1614,9 @@ class LiveViewModel : ViewModel() {
                 saveTranscript(transcriptId, segmentsToSave)
             }
             currentTranscriptId = null; currentUtteranceStartMs = null; lastPartialText = ""; lastForcedFlushTime = 0L; lastForcedFlushText = ""
+
+            // 0.6.16: Debug-Upload – alle Dateien zum Server senden (nach Save)
+            if (_uiState.value.debugMode) triggerDebugUpload()
         }
     }
 
@@ -1653,6 +1660,39 @@ class LiveViewModel : ViewModel() {
         }}
     }
 
+    /**
+     * 0.6.16: Automatischer Debug-Upload – sendet alle Dateien im testaufnahmen-
+     * Verzeichnis (WAV, .log, .md) an den konfigurierten Upload-Server.
+     * Läuft fire-and-forget im Hintergrund; Fehler werden geloggt aber nicht
+     * dem User angezeigt (Upload ist optional).
+     */
+    private fun triggerDebugUpload() {
+        viewModelScope.launch {
+            try {
+                // Kurze Pause: TestLog.close() + .md-Schreiben sind async –
+                // 500ms reicht in der Praxis (io-Bound)
+                delay(500)
+                val ctx = SherpaTranscriptApp.instance
+                val base = ctx.getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS)
+                val dir = java.io.File(base, "testaufnahmen")
+                if (!dir.exists()) {
+                    Log.w(TAG, "DebugUpload: kein testaufnahmen-Ordner")
+                    return@launch
+                }
+                val sessionId = currentTranscriptId ?: "session_${System.currentTimeMillis()}"
+                val result = DebugUploadClient.uploadDebugBundle(
+                    dir, sessionId, skipChunks = true
+                )
+                result.fold(
+                    onSuccess = { Log.i(TAG, "DebugUpload: $it") },
+                    onFailure = { Log.w(TAG, "DebugUpload fehlgeschlagen: ${it.message}") },
+                )
+            } catch (t: Throwable) {
+                Log.w(TAG, "DebugUpload Error: ${t.message}")
+            }
+        }
+    }
+
     private fun handleResult(text: String, isFinal: Boolean) {
         val normalizedText = text.trim()
         if (normalizedText.isBlank()) return
@@ -1667,7 +1707,7 @@ class LiveViewModel : ViewModel() {
             val utteranceDuration = now - (currentUtteranceStartMs ?: now)
             if (utteranceDuration > 6000L) {
                 val forcedFinal = TranscriptSegment(
-                    text = normalizedText,
+                    text = cleanLeadingPunctuation(normalizedText),
                     startTimeMs = currentUtteranceStartMs ?: now,
                     endTimeMs = now,
                     isFinal = true,
@@ -1701,7 +1741,7 @@ class LiveViewModel : ViewModel() {
         }
 
         // Final
-        val finalText = normalizedText.ifBlank { lastPartialText }.trim()
+        val finalText = cleanLeadingPunctuation(normalizedText.ifBlank { lastPartialText })
         if (finalText.isBlank()) return
         val startMs = currentUtteranceStartMs ?: now
         lastForcedFlushTime = 0L; lastForcedFlushText = ""
@@ -1731,6 +1771,19 @@ class LiveViewModel : ViewModel() {
 
         _uiState.update { it.copy(recordingState = RecordingState.Listening) }
         deriveUiSegments()
+    }
+
+    /**
+     * 0.6.19: Führende Satzzeichen entfernen, die durch ASR-Segmentierung entstehen.
+     * Die Endpoint-Segmentierung lässt den Satzzeichen am Ende weg und das
+     * nächste Segment beginnt mit ".", "?", "!" etc.
+     */
+    private fun cleanLeadingPunctuation(text: String): String {
+        var s = text.trimStart()
+        while (s.isNotEmpty() && s[0] in ".,;:!?'\"") {
+            s = s.substring(1).trimStart()
+        }
+        return s.ifBlank { text.trim() }
     }
 
     private fun sessionRelativeMs(): Long = System.currentTimeMillis() - recordingStartedAt

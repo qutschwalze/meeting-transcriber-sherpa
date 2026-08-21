@@ -31,6 +31,12 @@ class SettingsStore private constructor(context: Context) {
     private val _debugMode = MutableStateFlow(prefs.getBoolean(KEY_DEBUG, false))
     val debugMode: StateFlow<Boolean> = _debugMode.asStateFlow()
 
+    /** 0.6.16: URL des Debug-Upload-Servers (Standard: Emulator-localhost). */
+    private val _debugServerUrl = MutableStateFlow(
+        prefs.getString(KEY_DEBUG_SERVER_URL, DEFAULT_DEBUG_SERVER_URL) ?: DEFAULT_DEBUG_SERVER_URL
+    )
+    val debugServerUrl: StateFlow<String> = _debugServerUrl.asStateFlow()
+
     fun setThemeMode(mode: ThemeMode) {
         prefs.edit().putString(KEY_THEME, mode.name).apply()
         _themeMode.value = mode
@@ -46,10 +52,18 @@ class SettingsStore private constructor(context: Context) {
         _debugMode.value = enabled
     }
 
+    fun setDebugServerUrl(url: String) {
+        val normalized = url.trimEnd('/')
+        prefs.edit().putString(KEY_DEBUG_SERVER_URL, normalized).apply()
+        _debugServerUrl.value = normalized
+    }
+
     companion object {
         private const val KEY_THEME = "themeMode"
         private const val KEY_FONT_SIZE = "fontSize"
         private const val KEY_DEBUG = "debugMode"
+        private const val KEY_DEBUG_SERVER_URL = "debugServerUrl"
+        private const val DEFAULT_DEBUG_SERVER_URL = "http://10.0.2.2:8520"
 
         @Volatile
         private var instance: SettingsStore? = null
