@@ -42,6 +42,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.sherpa.transcript.BuildConfig
 import com.sherpa.transcript.data.debug.DebugUploadClient
+import com.sherpa.transcript.data.local.AsrLanguageMode
 import com.sherpa.transcript.data.local.SettingsStore
 import com.sherpa.transcript.data.local.ThemeMode
 import kotlinx.coroutines.Dispatchers
@@ -64,6 +65,7 @@ fun SettingsScreen(settingsStore: SettingsStore = SettingsStore.current) {
     val fontSize by settingsStore.fontSize.collectAsState()
     val debugMode by settingsStore.debugMode.collectAsState()
     val debugServerUrl by settingsStore.debugServerUrl.collectAsState()
+    val asrLanguageMode by settingsStore.asrLanguageMode.collectAsState()
 
     // 0.6.16: Upload-Status
     val context = LocalContext.current
@@ -121,6 +123,36 @@ fun SettingsScreen(settingsStore: SettingsStore = SettingsStore.current) {
             item {
                 Spacer(modifier = Modifier.height(16.dp))
                 SectionTitle("Transkript")
+            }
+
+            // 0.6.24: ASR-Sprachmodus – Deutsch Standard, Englisch optional
+            item {
+                Text(
+                    text = "Spracherkennung",
+                    style = MaterialTheme.typography.titleSmall,
+                )
+                Text(
+                    text = "Deutsch ist Standard. Englisch lädt ein zweites Modell (~38 MB) und erkennt die Sprache automatisch in den ersten 3 Sekunden.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    AsrLanguageMode.entries.forEach { mode ->
+                        FilterChip(
+                            selected = asrLanguageMode == mode,
+                            onClick = { settingsStore.setAsrLanguageMode(mode) },
+                            label = {
+                                Text(
+                                    when (mode) {
+                                        AsrLanguageMode.DE_ONLY -> "Nur Deutsch"
+                                        AsrLanguageMode.DE_EN_AUTO -> "Deutsch + Englisch"
+                                    }
+                                )
+                            },
+                        )
+                    }
+                }
             }
 
             item {

@@ -10,6 +10,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.sherpa.transcript.SherpaTranscriptApp
 import com.sherpa.transcript.data.debug.DebugUploadClient
+import com.sherpa.transcript.data.local.AsrLanguageMode
 import com.sherpa.transcript.data.local.SegmentEntity
 import com.sherpa.transcript.data.local.SettingsStore
 import com.sherpa.transcript.data.local.TranscriptEntity
@@ -128,6 +129,17 @@ class LiveViewModel : ViewModel() {
          * true  = Diagnose-Modus (0.5.45): alle neuen IDs in den UI-Bestand.
          */
         private const val ALLOW_NEW_SPEAKER_IDS = false
+
+        /**
+         * 0.6.23/0.6.24: Auto-Spracherkennung DE/EN. Aktiv wenn der User in den
+         * Einstellungen DE_EN_AUTO gewählt hat (Standard: DE_ONLY – Kroko
+         * transkribiert Englisch selbst überraschend gut, Testlauf 0.6.22).
+         * In den ersten [LANG_DETECT_MS] werden beide Engines parallel gefüttert;
+         * die Sprache mit dem ersten finalen ASR-Text gewinnt, die andere Engine
+         * wird gestoppt (spart CPU).
+         */
+        private const val LANG_DETECT_MS = 3000L
+        private const val EN_MODEL = "en-zipformer"
     }
 
     private val _uiState = MutableStateFlow(LiveUiState())
@@ -135,6 +147,8 @@ class LiveViewModel : ViewModel() {
 
     private val audioCapture = AudioCaptureManager()
     private val engine = SherpaOnnxEngine(SherpaTranscriptApp.instance)
+    /** 0.6.23: Zweite ASR-Engine für die Auto-Spracherkennung (EN-Fallback). */
+    private val engineEn = SherpaOnnxEngine(SherpaTranscriptApp.instance)
     private val speakerEngine = SpeakerDiarizationEngine(SherpaTranscriptApp.instance, SherpaTranscriptApp.instance.assets)
     private val repository = TranscriptRepository()
 
@@ -183,6 +197,12 @@ class LiveViewModel : ViewModel() {
     private var diarizationJob: Job? = null
     private var currentTranscriptId: String? = null
     private var recordingStartedAt: Long = 0L
+
+    // ── 0.6.23: Auto-Sprachdetektion DE/EN ──
+    /** null = Detektion läuft, "de"/"en" = erkannt (bis dahin wird verworfen). */
+    private var currentLanguage: String? = null
+    private var deHasFinalText = false
+    private var enHasFinalText = false
 
     /**
      * KUMULIERTE Sample-Zeit (ms) seit Session-Start für den ChunkedAudioBuffer.
@@ -363,9 +383,15 @@ class LiveViewModel : ViewModel() {
         }
     }
 
+
+    /** 0.6.24: Auto-Detection nur wenn der User DE_EN_AUTO in den Einstellungen aktiviert hat. */
+    private fun useAutoLanguageDetection(): Boolean =
+        SettingsStore.current.asrLanguageMode.value == AsrLanguageMode.DE_EN_AUTO
+
     private fun checkModels() {
         val ctx = SherpaTranscriptApp.instance
         if (ModelDownloadManager.isModelDownloaded(ctx, ASR_MODEL)) { engine.initialize(ASR_MODEL); _uiState.update { it.copy(isModelReady = true) } }
+        if (useAutoLanguageDetection() && ModelDownloadManager.isModelDownloaded(ctx, EN_MODEL)) { engineEn.initialize(EN_MODEL) }
         if (SpeakerModelDownloadManager.areModelsDownloaded()) { speakerEngine.initialize(clusteringMode) }
     }
 
@@ -415,6 +441,19 @@ class LiveViewModel : ViewModel() {
                 if (!ModelDownloadManager.isModelDownloaded(SherpaTranscriptApp.instance, ASR_MODEL)) { _uiState.update { it.copy(recordingState = RecordingState.Error("ASR-Download fehlgeschlagen")) }; return@launch }
                 engine.initialize(ASR_MODEL); _uiState.update { it.copy(isModelReady = true) }
             }
+            // 0.6.23: EN-Fallback-Modell für Auto-Detection (nur laden, wenn Toggle an)
+            if (useAutoLanguageDetection() && !engineEn.isInitialized) {
+                downloadWithProgress("EN", "Lade Englisch-Modell…") {
+                    val ctx = SherpaTranscriptApp.instance
+                    if (!ModelDownloadManager.isModelDownloaded(ctx, EN_MODEL)) ModelDownloadManager.downloadModel(ctx, EN_MODEL) { done, total -> _uiState.update { it.copy(downloadProgress = if (total > 0) done.toFloat() / total else 0f) } }
+                    else true
+                }
+                if (ModelDownloadManager.isModelDownloaded(SherpaTranscriptApp.instance, EN_MODEL)) {
+                    engineEn.initialize(EN_MODEL)
+                } else {
+                    Log.w(TAG, "EN-Modell nicht verfügbar – Auto-Detection entfällt (nur Deutsch)")
+                }
+            }
             if (!speakerEngine.isInitialized) {
                 downloadWithProgress("Speaker", "Lade Sprechererkennung…") {
                     if (!SpeakerModelDownloadManager.areModelsDownloaded()) SpeakerModelDownloadManager.downloadModels { _, done, total -> _uiState.update { it.copy(downloadProgress = if (total > 0) done.toFloat() / total else 0f) } }
@@ -427,6 +466,10 @@ class LiveViewModel : ViewModel() {
             _uiState.update { it.copy(segments = emptyList(), latestSegmentId = null, recordingState = RecordingState.Listening) }
             currentTranscriptId = java.util.UUID.randomUUID().toString()
             recordingStartedAt = System.currentTimeMillis()
+            // 0.6.23: Sprachdetektion pro Session neu
+            currentLanguage = null
+            deHasFinalText = false
+            enHasFinalText = false
             rawFinalSegments.clear()
             assignedFinalSegments = emptyList()
             bestAssignmentQuality = AssignmentQuality(0, 0, 0)
@@ -448,14 +491,37 @@ class LiveViewModel : ViewModel() {
                 pushedSampleCountMs = 0L
             }
             engine.startSession()
+            // 0.6.23: EN-Engine für die Auto-Detection ebenfalls starten
+            if (useAutoLanguageDetection() && engineEn.isInitialized) engineEn.startSession()
 
             // 0.5.68: Debug-Mode → Roh-Aufnahme als WAV speichern (Host-Analyse)
             audioCapture.saveRawWav = _uiState.value.debugMode
 
             captureJob = viewModelScope.launch {
                 audioCapture.startCapture().collect { frame ->
-                    val result = engine.processFrame(frame)
-                    if (result != null && result.text.isNotBlank()) handleResult(result.text, result.isFinal)
+                    // 0.6.23: Auto-Sprachdetektion – beide Engines parallel füttern,
+                    // bis die Sprache erkannt ist (oder Timeout). Die verlierende
+                    // Engine wird gestoppt, die Gewinner-Engine weiter genutzt.
+                    if (useAutoLanguageDetection() && currentLanguage == null && engineEn.isInitialized) {
+                        val deRes = engine.processFrame(frame)
+                        val enRes = engineEn.processFrame(frame)
+                        if (deRes?.isFinal == true && deRes.text.isNotBlank()) deHasFinalText = true
+                        if (enRes?.isFinal == true && enRes.text.isNotBlank()) enHasFinalText = true
+                        if (sessionRelativeMs() >= LANG_DETECT_MS) {
+                            // Default Deutsch, wenn keiner finalen Text lieferte (z.B. Stille).
+                            // Bei beiden Sprachen mit Text gewinnt DE (primäres Modell).
+                            currentLanguage = when {
+                                enHasFinalText && !deHasFinalText -> "en"
+                                else -> "de"
+                            }
+                            if (currentLanguage == "de") engineEn.stopSession() else engine.stopSession()
+                            Log.i(TAG, "Sprache erkannt: $currentLanguage (de=$deHasFinalText en=$enHasFinalText)")
+                            TestLog.log("LANG_DETECT: $currentLanguage (de=$deHasFinalText en=$enHasFinalText)")
+                        }
+                    } else {
+                        val result = if (currentLanguage == "en") engineEn.processFrame(frame) else engine.processFrame(frame)
+                        if (result != null && result.text.isNotBlank()) handleResult(result.text, result.isFinal)
+                    }
                     if (ENABLE_CHUNKED_DIARIZATION) {
                         // Gleis 2 (neu): Frame in den Chunk-Buffer – non-blocking (~20ns Lock).
                         // KRITISCH: Sample-basierte Zeit statt Wall-Clock (0.5.58) – siehe
@@ -847,20 +913,35 @@ class LiveViewModel : ViewModel() {
      * Zuordnung, wird korrigiert (der Einwurf-Fall: "also Wähler..." akustisch
      * Sprecher 3, zeitlich Sprecher 4 zugeordnet).
      * Nur im Debug-Modus aktiv (die Roh-WAV für die Samples existiert nur dort).
+     *
+     * 0.6.23: Auch UNLABELED Segmente (>= 2s) werden akustisch aufgelöst – z.B.
+     * ein Block zwischen zwei VERSCHIEDENEN bestätigten Speakern (Wechselgrenze)
+     * bleibt in resolveListByNearestConfirmed bewusst unangetastet ("## Unbekannt"),
+     * obwohl die Stimme eindeutig einem Voiceprint gehört. Konservativ: nur wenn
+     * ein klarer 0.62-Match auf genau einen bestätigten Sprecher existiert.
      */
     private fun correctOverlayByVoiceBank(overlay: List<TranscriptSegment>): List<TranscriptSegment> {
         val wavFile = audioCapture.currentTestWavFile ?: return overlay
         if (!wavFile.exists()) return overlay
         var corrected = 0
+        var resolved = 0
         val result = overlay.map { seg ->
             val speakerNum = seg.speakerId?.removePrefix("speaker_")?.toIntOrNull()
-            if (speakerNum == null) return@map seg
             val durationMs = seg.endTimeMs - seg.startTimeMs
             if (durationMs < 2000) return@map seg
             val samples = readWavSamples(wavFile, seg.startTimeMs, seg.endTimeMs)
             if (samples == null || samples.isEmpty()) return@map seg
             val matched = sessionVoiceBank.identify(samples, confirmedOnly = true)
-            if (matched != null && matched != speakerNum) {
+            if (speakerNum == null) {
+                // 0.6.23: Unlabeled Segment akustisch auflösen
+                if (matched != null) {
+                    resolved++
+                    val label = "Sprecher ${matched + 1}"
+                    Log.d(TAG, "VB_RESOLVE_UNLABELED: Segment ${seg.segmentId} (${seg.startTimeMs}-${seg.endTimeMs}ms) unlabeled → akustisch speaker_$matched (Wechselgrenze, 0.62-Match)")
+                    TestLog.log("VB_RESOLVE_UNLABELED: Segment ${seg.startTimeMs}-${seg.endTimeMs}ms unlabeled → akustisch speaker_$matched")
+                    seg.copy(speakerId = "speaker_$matched", speakerLabel = label)
+                } else seg
+            } else if (matched != null && matched != speakerNum) {
                 corrected++
                 val label = "Sprecher ${matched + 1}"
                 Log.d(TAG, "VB_CORRECT: Segment ${seg.segmentId} (${seg.startTimeMs}-${seg.endTimeMs}ms) zeitlich ${seg.speakerId} → akustisch speaker_$matched (Backchannel-Korrektur)")
@@ -868,8 +949,8 @@ class LiveViewModel : ViewModel() {
                 seg.copy(speakerId = "speaker_$matched", speakerLabel = label)
             } else seg
         }
-        if (corrected > 0) {
-            Log.i(TAG, "VB_CORRECT: $corrected Overlay-Segment(e) akustisch korrigiert (Backchannel)")
+        if (corrected > 0 || resolved > 0) {
+            Log.i(TAG, "VB_OVERLAY: $corrected korrigiert, $resolved unlabeled aufgelöst (akustisch, confirmed-only)")
         }
         return result
     }
@@ -1542,6 +1623,8 @@ class LiveViewModel : ViewModel() {
         isStopping = true
         _uiState.update { it.copy(recordingState = RecordingState.Idle) }
         audioCapture.stopCapture(); engine.stopSession()
+        // 0.6.23: EN-Engine ebenfalls beenden
+        if (engineEn.isInitialized) engineEn.stopSession()
         // Foreground-Service beenden
         com.sherpa.transcript.service.RecordingService.stop(SherpaTranscriptApp.instance)
         logRecordPermissionState()
@@ -1804,6 +1887,8 @@ class LiveViewModel : ViewModel() {
         super.onCleared()
         captureJob?.cancel(); diarizationJob?.cancel()
         audioCapture.stopCapture(); engine.release(); speakerEngine.release()
+        // 0.6.23: EN-Engine ebenfalls freigeben (Auto-Detection)
+        engineEn.release()
         if (ENABLE_CHUNKED_DIARIZATION) {
             chunkedAudioBuffer.clear()
             diarizationChunkWorker.reset()

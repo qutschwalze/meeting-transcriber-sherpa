@@ -41,6 +41,20 @@ object ModelDownloadManager {
             ),
             estimatedSizeMb = 58,
         ),
+        // 0.6.23: Englisch für die Auto-Spracherkennung (DE/EN-Fallback).
+        // Gleiche Zipformer-Architektur wie DE – nur ein Recognizer ist zur
+        // Laufzeit aktiv (die andere Engine wird nach der Detektion gestoppt).
+        "en-zipformer" to ModelSpec(
+            name = "English Zipformer (Transducer)",
+            hfRepo = "csukuangfj/sherpa-onnx-streaming-zipformer-en-2023-06-26",
+            files = listOf(
+                "encoder-epoch-99-avg-1-chunk-16-left-128.int8.onnx",
+                "decoder-epoch-99-avg-1-chunk-16-left-128.onnx",
+                "joiner-epoch-99-avg-1-chunk-16-left-128.int8.onnx",
+                "tokens.txt",
+            ),
+            estimatedSizeMb = 38,
+        ),
         "whisper-small-de" to ModelSpec(
             name = "Whisper Small DE",
             hfRepo = "csukuangfj/sherpa-onnx-whisper-small-de",

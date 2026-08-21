@@ -9,6 +9,9 @@ import kotlinx.coroutines.flow.asStateFlow
 /** Phase 5 (0.6.8): Darstellungsmodus – System folgen, hell, dunkel. */
 enum class ThemeMode { SYSTEM, LIGHT, DARK }
 
+/** 0.6.24: ASR-Sprachmodus – Deutsch ist Standard, Englisch optional aktivierbar. */
+enum class AsrLanguageMode { DE_ONLY, DE_EN_AUTO }
+
 /**
  * Phase 5 (0.6.8): Persistente App-Einstellungen via SharedPreferences.
  * Werte werden sofort gespeichert UND als StateFlow veröffentlicht – die UI
@@ -58,11 +61,25 @@ class SettingsStore private constructor(context: Context) {
         _debugServerUrl.value = normalized
     }
 
+    /** 0.6.24: ASR-Sprachmodus – Standard NUR Deutsch (konservativ), EN optional. */
+    private val _asrLanguageMode = MutableStateFlow(
+        AsrLanguageMode.valueOf(
+            prefs.getString(KEY_ASR_LANGUAGE, AsrLanguageMode.DE_ONLY.name) ?: AsrLanguageMode.DE_ONLY.name
+        )
+    )
+    val asrLanguageMode: StateFlow<AsrLanguageMode> = _asrLanguageMode.asStateFlow()
+
+    fun setAsrLanguageMode(mode: AsrLanguageMode) {
+        prefs.edit().putString(KEY_ASR_LANGUAGE, mode.name).apply()
+        _asrLanguageMode.value = mode
+    }
+
     companion object {
         private const val KEY_THEME = "themeMode"
         private const val KEY_FONT_SIZE = "fontSize"
         private const val KEY_DEBUG = "debugMode"
         private const val KEY_DEBUG_SERVER_URL = "debugServerUrl"
+        private const val KEY_ASR_LANGUAGE = "asrLanguageMode"
         private const val DEFAULT_DEBUG_SERVER_URL = "http://10.0.2.2:8520"
 
         @Volatile

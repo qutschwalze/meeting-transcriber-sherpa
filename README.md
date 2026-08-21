@@ -4,13 +4,15 @@
 
 Live-Transkription auf dem Gerät inkl. **Speaker Diarization** – keine Cloud, kein Netzwerk.
 
-## Features (Stand 0.6.22)
+## Features (Stand 0.6.24)
 
 - ✅ Live-ASR: Sherpa-ONNX OnlineRecognizer (Streaming), Kroko Zipformer-Transducer (Deutsch)
 - ✅ **Speaker Diarization**: ReVerb v1 (Segmentation) + ERes2Net (Embedding, seit 0.6.12 für 3+ Sprecher), offline auf dem Gerät
 - ✅ Rolling-Diarization: 15s-Chunk-Pipeline mit Overlap, Reconciler (temporales Voting) + **SessionVoiceBank** (akustisches Gedächtnis gegen Engine-Drift, 2-Kontakt-Härtung)
 - ✅ **Drift-Vorprüfung** (0.6.20): Phantom-Speaker durch ID-Drift über Chunk-Grenzen werden nicht mehr fälschlich bestätigt (`VB_DRIFT_ABFANG` – host-verifiziert 7→4 bestätigte bei 4 realen Stimmen)
+- ✅ **Unlabeled-Auflösung** (0.6.23): "Unbekannt"-Blöcke zwischen verschiedenen Speakern werden akustisch aufgelöst (`VB_RESOLVE_UNLABELED`, confirmed-only 0.62)
 - ✅ 2–4-Sprecher-Trennung auf Mikrofon-/Meeting-Aufnahmen; unlabeled-Anteil <15% (Testlauf 0.6.22)
+- ✅ **ASR-Sprachmodus** (0.6.24): Deutsch Standard (`DE_ONLY`), optional "Deutsch + Englisch" in den Einstellungen (lädt EN-Zipformer ~38 MB, Auto-Detection in 3s, gewinnende Engine gewinnt)
 - ✅ 3-Schichten-Architektur: `rawFinalSegments` (Ground Truth) → `assignedFinalSegments` (Speaker-Overlay) → `displaySegments` (UI-Merge)
 - ✅ Leading-Resolve im Final: führende unbestätigte/unlabeled Segmente → erster bestätigter Sprecher
 - ✅ Text-Bereinigung (0.6.19): keine führenden Satzzeichen am Segmentanfang; Ein-Sprecher-Modus merge großzügiger (Pause bis 5s)
