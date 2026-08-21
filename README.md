@@ -4,16 +4,19 @@
 
 Live-Transkription auf dem Gerät inkl. **Speaker Diarization** – keine Cloud, kein Netzwerk.
 
-## Features (Stand 0.6.0)
+## Features (Stand 0.6.22)
 
 - ✅ Live-ASR: Sherpa-ONNX OnlineRecognizer (Streaming), Kroko Zipformer-Transducer (Deutsch)
-- ✅ **Speaker Diarization**: ReVerb v1 (Segmentation) + NeMo Titanet Small (Embedding), offline auf dem Gerät
+- ✅ **Speaker Diarization**: ReVerb v1 (Segmentation) + ERes2Net (Embedding, seit 0.6.12 für 3+ Sprecher), offline auf dem Gerät
 - ✅ Rolling-Diarization: 15s-Chunk-Pipeline mit Overlap, Reconciler (temporales Voting) + **SessionVoiceBank** (akustisches Gedächtnis gegen Engine-Drift, 2-Kontakt-Härtung)
-- ✅ 2-Speaker-Trennung auf Mikrofon-Aufnahmen (Referenz-Testclip: Wechsel bei ~1:02, alle Segmente gelabelt)
+- ✅ **Drift-Vorprüfung** (0.6.20): Phantom-Speaker durch ID-Drift über Chunk-Grenzen werden nicht mehr fälschlich bestätigt (`VB_DRIFT_ABFANG` – host-verifiziert 7→4 bestätigte bei 4 realen Stimmen)
+- ✅ 2–4-Sprecher-Trennung auf Mikrofon-/Meeting-Aufnahmen; unlabeled-Anteil <15% (Testlauf 0.6.22)
 - ✅ 3-Schichten-Architektur: `rawFinalSegments` (Ground Truth) → `assignedFinalSegments` (Speaker-Overlay) → `displaySegments` (UI-Merge)
 - ✅ Leading-Resolve im Final: führende unbestätigte/unlabeled Segmente → erster bestätigter Sprecher
+- ✅ Text-Bereinigung (0.6.19): keine führenden Satzzeichen am Segmentanfang; Ein-Sprecher-Modus merge großzügiger (Pause bis 5s)
 - ✅ Debug-Mode: Testaufnahme als Roh-WAV + Diagnose-Log-Datei (`TestLog`) für Host-Analyse (Xiaomi-logcat ist unbrauchbar)
-- ✅ `scripts/host-test/`: Python-Pipeline-Simulation (exakt App-Konfiguration) für A/B-Analysen
+- ✅ **Debug-Upload-Server** (0.6.19): Flask-Server (`debug-server/`, Port 8520) – WAV/Log/Markdown direkt vom Gerät hochladen, kein adb nötig; Web-Dashboard mit Sortierung + Löschen (Datei/Session); automatischer Upload nach jeder Aufnahme im Debug-Modus
+- ✅ `scripts/host-test/`: Python-Pipeline-Simulation (exakt App-Konfiguration) für A/B-Analysen + Host-Analyse-Skripte (`analyze_unknown_speaker.py`, `timeline_compare.py`)
 - ✅ Export (0.6.2): Detail-Screen → Share-Icon → TXT / Markdown / JSON (Referenz-Stil mit Sprecherblöcken, ShareSheet via FileProvider)
 - ✅ Room-Datenbank (0.6.6): SQLite statt JSON-Datei-Store – schnelle Metadaten-Queries (App-Start/Verlauf skalieren), einmalige JSON→SQLite-Migration, JSON-Dateien bleiben als Backup
 
