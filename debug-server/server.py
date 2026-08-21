@@ -25,13 +25,18 @@ def _save_meta(fp, device, session_id, file_type, app_version=""):
 
 def _load_meta(fp):
     mp = _meta_path(fp)
+    meta = None
     if mp.exists():
-        try: return json.loads(mp.read_text())
+        try: meta = json.loads(mp.read_text())
         except: pass
-    return {"filename": fp.name, "device": "", "session_id": "", "file_type": "",
-            "size": fp.stat().st_size if fp.exists() else 0,
-            "uploaded_at": datetime.fromtimestamp(fp.stat().st_mtime).isoformat() if fp.exists() else "",
-            "relative_path": str(fp.relative_to(UPLOAD_DIR))}
+    if meta is None:
+        meta = {"filename": fp.name, "device": "", "session_id": "", "file_type": "",
+                "size": fp.stat().st_size if fp.exists() else 0,
+                "uploaded_at": datetime.fromtimestamp(fp.stat().st_mtime).isoformat() if fp.exists() else "",
+                "relative_path": str(fp.relative_to(UPLOAD_DIR))}
+    # 0.6.22: stem (Dateiname ohne Extension) für die Session-Löschung im Dashboard
+    meta["stem"] = Path(fp.name).stem
+    return meta
 
 def _scan():
     files = []
@@ -68,6 +73,50 @@ def api_files(): return jsonify(_scan())
 
 @app.route("/files/<path:relpath>")
 def serve_file(relpath): return send_from_directory(str(UPLOAD_DIR), relpath, as_attachment=True)
+
+def _safe_relative(relpath):
+    """Path-Traversal-Schutz: nur echte relative Pfade unter UPLOAD_DIR."""
+    p = (UPLOAD_DIR / relpath).resolve()
+    if not p.is_relative_to(UPLOAD_DIR.resolve()):
+        return None
+    return p
+
+@app.route("/files/<path:relpath>", methods=["DELETE"])
+def delete_file(relpath):
+    """Löscht eine einzelne hochgeladene Datei + zugehörige Metadaten."""
+    p = _safe_relative(relpath)
+    if p is None:
+        return jsonify({"error": "Ungültiger Pfad"}), 400
+    if not p.exists() or not p.is_file():
+        return jsonify({"error": "Nicht gefunden"}), 404
+    # Metadaten-Datei liegt flach in METADATA_DIR (Name + .meta.json)
+    meta = METADATA_DIR / (p.name + ".meta.json")
+    try:
+        p.unlink()
+        if meta.exists():
+            meta.unlink()
+        return jsonify({"ok": True, "deleted": str(p.relative_to(UPLOAD_DIR))})
+    except OSError as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/session/<session_key>", methods=["DELETE"])
+def delete_session(session_key):
+    """Löscht alle Dateien einer Session (gleicher Dateiname ohne Extension)."""
+    if not session_key or "/" in session_key or "\\" in session_key or session_key.startswith("."):
+        return jsonify({"error": "Ungültiger Session-Key"}), 400
+    deleted, missing = [], []
+    for p in sorted(UPLOAD_DIR.rglob("*")):
+        if p.is_file() and p.name.endswith(".meta.json"):
+            continue
+        if p.stem == session_key:
+            p.unlink()
+            meta = METADATA_DIR / (p.name + ".meta.json")
+            if meta.exists():
+                meta.unlink()
+            deleted.append(str(p.relative_to(UPLOAD_DIR)))
+    if not deleted:
+        return jsonify({"error": "Keine Dateien für Session gefunden"}), 404
+    return jsonify({"ok": True, "deleted": deleted})
 
 @app.route("/")
 def dashboard():

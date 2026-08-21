@@ -1645,8 +1645,13 @@ class LiveViewModel : ViewModel() {
                         val dir = java.io.File(base, "testaufnahmen")
                         dir.mkdirs()
                         // 0.6.15: Dateiname an die WAV koppeln (testaufnahme_<ts>.md) –
-                        // der Copy-Job (testaufnahme_*-Muster) nimmt die .md dann mit
-                        val mdName = audioCapture.currentTestWavFile?.name
+                        // der Copy-Job (testaufnahme_*-Muster) nimmt die .md dann mit.
+                        // 0.6.22: lastTestWavName statt currentTestWavFile – der
+                        // wavFile-Zeiger ist nach stopCapture() bereits null (Bug:
+                        // die .md wurde immer als transcript_<uuid>.md benannt und
+                        // von der Upload-Session-Gruppierung übersprungen).
+                        val mdName = (audioCapture.lastTestWavName
+                            ?: audioCapture.currentTestWavFile?.name)
                             ?.replace(".wav", ".md") ?: "transcript_${transcriptId}.md"
                         val mdFile = java.io.File(dir, mdName)
                         mdFile.writeText(md)

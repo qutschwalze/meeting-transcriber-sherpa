@@ -60,6 +60,16 @@ class AudioCaptureManager(
 
     /** 0.6.14: Aktuelle Debug-WAV (für die akustische Overlay-Korrektur), null ohne Debug. */
     val currentTestWavFile: File? get() = wavFile
+
+    /**
+     * 0.6.22: Name der zuletzt gestarteten Debug-WAV – bleibt AUCH nach closeWavCapture
+     * erhalten (wavFile wird beim Stop auf null gesetzt). Die Markdown-Export-Benennung
+     * (testaufnahme_<ts>.md) braucht den Namen NACH dem Stop; vorher fiel sie auf
+     * transcript_<uuid>.md zurück → die .md wurde von der Upload-Session-Gruppierung
+     * übersprungen (Geräte-Befund 0.6.21: Upload lieferte nur .log + .wav).
+     */
+    var lastTestWavName: String? = null
+        private set
     private var wavDataBytes: Long = 0L
 
     /** 0.5.75: Zähler für den periodischen WAV-Header-Patch (alle 500 Frames ≈ 5s). */
@@ -286,6 +296,9 @@ class AudioCaptureManager(
             }
             val name = "testaufnahme_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())}.wav"
             val file = File(dir, name)
+            // 0.6.22: Namen merken – bleibt auch nach closeWavCapture erhalten
+            // (für die Markdown-Export-Benennung nach dem Stop)
+            lastTestWavName = name
             // 0.5.70: Diagnose-Log-Datei neben der WAV (unabhängig vom logcat)
             TestLog.open(dir, name.replace(".wav", ".log"))
             val out = DataOutputStream(BufferedOutputStream(FileOutputStream(file)))

@@ -35,6 +35,9 @@
   a { color:var(--accent); text-decoration:none; }
   a:hover { text-decoration:underline; }
   .tag { display:inline-block; padding:2px 8px; border-radius:4px; font-size:0.72rem; font-weight:600; }
+  .dbtn { background:transparent; border:1px solid transparent; color:var(--muted); cursor:pointer;
+          font-size:0.82rem; padding:1px 4px; border-radius:4px; }
+  .dbtn:hover { border-color:var(--border); background:var(--card); color:#ff6b6b; }
   .t-audio { background:#1f3a5f; color:#79c0ff; }
   .t-json { background:#2a1f3a; color:#d2a8ff; }
   .t-log { background:#1f3a2a; color:#7ee787; }
@@ -68,13 +71,35 @@ function tc(t){
   return 't-other';
 }
 function fr(f, sd){
-  var h = '<tr><td><a href="/files/' + encodeURIComponent(f.relative_path) + '">' + escapeHtml(f.filename) + '</a></td>' +
+  // Datei-Lösch-Button + Session-Lösch-Button (nur bei .wav – löscht WAV+Log+MD zusammen)
+  var isWav = (f.filename || '').toLowerCase().endsWith('.wav');
+  var delBtn = '<button class="dbtn" title="Datei löschen" onclick="delFile(\'' +
+               encodeURIComponent(f.relative_path).replace(/'/g, '\\\'') + '\')">🗑</button>';
+  var sessBtn = isWav ? '<button class="dbtn" title="Ganze Session löschen (WAV+Log+MD)" onclick="delSession(\'' +
+               String(f.stem || f.filename).replace(/'/g, '\\\'') + '\')">⧉</button>' : '';
+  var h = '<tr><td><a href="/files/' + encodeURIComponent(f.relative_path) + '">' + escapeHtml(f.filename) + '</a> ' +
+          delBtn + ' ' + sessBtn + '</td>' +
           '<td><span class="tag ' + tc(f.file_type) + '">' + (f.file_type || '—') + '</span></td>' +
           '<td>' + hs(f.size) + '</td>';
   if (sd) h += '<td class="m">' + (f.device || '—') + '</td>';
   h += '<td class="m">' + (f.session_id || '—') + '</td>' +
        '<td class="m">' + (f.uploaded_at ? new Date(f.uploaded_at).toLocaleString() : '—') + '</td></tr>';
   return h;
+}
+function delFile(relpath){
+  if (!confirm('Datei löschen?\n' + decodeURIComponent(relpath))) return;
+  fetch('/files/' + relpath, {method: 'DELETE'}).then(function(r){ return r.json(); }).then(function(j){
+    alert(j.ok ? 'Gelöscht: ' + j.deleted : 'Fehler: ' + (j.error || 'unbekannt'));
+    load();
+  }).catch(function(e){ alert('Löschen fehlgeschlagen: ' + e); });
+}
+function delSession(stem){
+  if (!confirm('Ganze Session löschen?\n' + stem + ' (alle zugehörigen Dateien)')) return;
+  fetch('/session/' + encodeURIComponent(stem), {method: 'DELETE'}).then(function(r){ return r.json(); }).then(function(j){
+    if (j.ok) alert('Gelöscht (' + j.deleted.length + ' Dateien)');
+    else alert('Fehler: ' + (j.error || 'unbekannt'));
+    load();
+  }).catch(function(e){ alert('Löschen fehlgeschlagen: ' + e); });
 }
 function escapeHtml(s){
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
