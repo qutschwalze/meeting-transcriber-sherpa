@@ -20,7 +20,9 @@ class SpeakerProfileStore(private val profilesFile: File) {
 
     companion object {
         private const val TAG = "SpeakerProfileStore"
-        private const val VERSION = 1
+
+        /** Version 2 (0.7.2): optionales `name`-Feld pro Profil. */
+        private const val VERSION = 2
     }
 
     init {
@@ -48,6 +50,9 @@ class SpeakerProfileStore(private val profilesFile: File) {
                             embedding = emb,
                             sampleCount = p.optInt("sampleCount", 1),
                             updatedAt = p.optLong("updatedAt", 0L),
+                            // 0.7.2: isNull-Check – JSONObject.NULL.toString() waere sonst "null"
+                            name = if (p.isNull("name")) null
+                            else p.optString("name").takeIf { it.isNotBlank() },
                         )
                     )
                 }
@@ -71,6 +76,7 @@ class SpeakerProfileStore(private val profilesFile: File) {
                         put("embedding", embJson)
                         put("sampleCount", p.sampleCount)
                         put("updatedAt", p.updatedAt)
+                        put("name", p.name ?: JSONObject.NULL)
                     }
                 )
             }

@@ -45,7 +45,23 @@ class GlobalVoiceBank(
     /** Profil-ID → Anzahl Enrollment-Beiträge (für den gewichteten Mittelwert). */
     private val counts = mutableMapOf<String, Int>()
 
+    /** Profil-ID → Anzeige-Name (0.7.2; null = "Sprecher N"). */
+    private val names = mutableMapOf<String, String?>()
+
     val size: Int get() = profiles.size
+
+    // ── Namens-API (0.7.2) ──────────────────────────────────────────
+
+    /** Setzt/ändert den Anzeige-Namen; null oder blank = "Sprecher N" zurück. */
+    fun rename(profileId: String, name: String?) {
+        names[profileId] = name?.trim()?.takeIf { it.isNotEmpty() }
+    }
+
+    fun nameFor(profileId: String): String? = names[profileId]
+
+    /** Anzeige-Label: Name oder Fallback "Sprecher N" (N = fallbackIndex+1). */
+    fun displayLabel(profileId: String, fallbackIndex: Int): String =
+        names[profileId] ?: "Sprecher ${fallbackIndex + 1}"
 
     /**
      * Bester Cosine-Match gegen alle Profile – Diagnose-Funktion.
@@ -121,7 +137,11 @@ class GlobalVoiceBank(
     fun load(profiles: List<SpeakerProfile>) {
         this.profiles.clear()
         counts.clear()
-        profiles.forEach { p -> putProfile(p.id, p.embedding, p.sampleCount) }
+        names.clear()
+        profiles.forEach { p ->
+            putProfile(p.id, p.embedding, p.sampleCount)
+            names[p.id] = p.name
+        }
     }
 
     /** Aktuellen Zustand als persistierbare Profile (für den Store). */
@@ -131,6 +151,7 @@ class GlobalVoiceBank(
             embedding = emb.copyOf(),
             sampleCount = counts.getOrDefault(id, 1),
             updatedAt = System.currentTimeMillis(),
+            name = names[id],
         )
     }
 

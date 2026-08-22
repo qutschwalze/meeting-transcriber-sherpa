@@ -99,4 +99,30 @@ class GlobalVoiceBankTest {
         assertEquals("anna", id)
         assertEquals(0.707f, sim, 0.01f)
     }
+
+    @Test
+    fun `rename und nameFor - Anzeige-Label ohne Name bleibt Sprecherbasiert`() {
+        val bank = GlobalVoiceBank().apply { putProfile("p1", emb(1f, 0f, 0f), 1) }
+        assertNull(bank.nameFor("p1"))
+        assertEquals("Sprecher 1", bank.displayLabel("p1", fallbackIndex = 0))
+
+        bank.rename("p1", "Anna")
+        assertEquals("Anna", bank.nameFor("p1"))
+        assertEquals("Anna", bank.displayLabel("p1", fallbackIndex = 0))
+
+        bank.rename("p1", "   ")   // blank -> null (Sprecher-Fallback)
+        assertNull(bank.nameFor("p1"))
+        assertEquals("Sprecher 1", bank.displayLabel("p1", fallbackIndex = 0))
+    }
+
+    @Test
+    fun `snapshot und load erhalten Namen`() {
+        val bank = GlobalVoiceBank().apply {
+            putProfile("p1", emb(1f, 0f, 0f), 2)
+            rename("p1", "Anna")
+        }
+        val restored = GlobalVoiceBank().apply { load(bank.snapshot()) }
+        assertEquals("Anna", restored.nameFor("p1"))
+        assertEquals(2, restored.profileCount("p1"))
+    }
 }

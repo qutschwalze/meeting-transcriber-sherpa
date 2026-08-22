@@ -1,6 +1,7 @@
 package com.sherpa.transcript.data.local
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -70,5 +71,20 @@ class SpeakerProfileStoreTest {
         store.saveAll(listOf(SpeakerProfile("x", floatArrayOf(1f), 1, 1L)))
         store.saveAll(emptyList())
         assertTrue(store.loadAll().isEmpty())
+    }
+
+    @Test
+    fun `name wird roundtrip gespeichert und alte Datei ohne name bleibt null`() {
+        val store = SpeakerProfileStore(storeFile())
+        store.saveAll(listOf(SpeakerProfile("p1", floatArrayOf(1f), 1, 1L, name = "Anna")))
+        assertEquals("Anna", store.loadAll().single().name)
+
+        // Altes Format (Version 1, ohne name-Feld): als null laden, kein Crash
+        storeFile().writeText(
+            """{"version":1,"profiles":[{"id":"p2","embedding":[1.0],"sampleCount":1,"updatedAt":1}]}"""
+        )
+        val loaded = SpeakerProfileStore(storeFile()).loadAll().single()
+        assertNull(loaded.name)
+        assertEquals("p2", loaded.id)
     }
 }
