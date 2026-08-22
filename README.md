@@ -2,9 +2,9 @@
 
 100% offline Speech-to-Text App für Android mit **Sherpa-ONNX** + **Jetpack Compose** + **Kotlin**.
 
-Live-Transkription auf dem Gerät inkl. **Speaker Diarization** – keine Cloud, kein Netzwerk.
+Live-Transkription auf dem Gerät inkl. **Speaker Diarization** + **persistenter Speaker-Datenbank** – keine Cloud, kein Netzwerk.
 
-## Features (Stand 0.6.24)
+## Features (Stand 0.7.2)
 
 - ✅ Live-ASR: Sherpa-ONNX OnlineRecognizer (Streaming), Kroko Zipformer-Transducer (Deutsch)
 - ✅ **Speaker Diarization**: ReVerb v1 (Segmentation) + ERes2Net (Embedding, seit 0.6.12 für 3+ Sprecher), offline auf dem Gerät
@@ -21,6 +21,10 @@ Live-Transkription auf dem Gerät inkl. **Speaker Diarization** – keine Cloud,
 - ✅ `scripts/host-test/`: Python-Pipeline-Simulation (exakt App-Konfiguration) für A/B-Analysen + Host-Analyse-Skripte (`analyze_unknown_speaker.py`, `timeline_compare.py`)
 - ✅ Export (0.6.2): Detail-Screen → Share-Icon → TXT / Markdown / JSON (Referenz-Stil mit Sprecherblöcken, ShareSheet via FileProvider)
 - ✅ Room-Datenbank (0.6.6): SQLite statt JSON-Datei-Store – schnelle Metadaten-Queries (App-Start/Verlauf skalieren), einmalige JSON→SQLite-Migration, JSON-Dateien bleiben als Backup
+- ✅ **Persistente Speaker-DB** (Phase 7, 0.7.0): Geräteweite Stimmen-Fingerprints (`GlobalVoiceBank` + JSON-Store in `filesDir/`) – bestätigte Kontakte werden automatisch am Session-Ende eingelernt (Auto-Enroll, 0.62-Schwelle confirmed-only) und in künftigen Aufnahmen **ab dem ersten Chunk wiedererkannt** – ganz ohne Namenszuweisung
+- ✅ **Namens-UI** (Phase 7a, 0.7.2): Nach dem Stoppen Segment antippen → Profil zuweisen oder „Neuer Kontakt" benennen (ENROLL aus dem Chunk-Puffer, kein WAV-Speicher); Namen erscheinen live, in History und Export (`## Anna`)
+- ✅ **Kontakt-Verwaltung** (0.7.2): Einstellungen → Profile umbenennen, zusammenführen (sample-gewichtet), löschen – zentrale `SpeakerProfiles`-Instanz, sofort persistiert
+- ✅ Geräte-verifiziert: Politik-Podcast 3/3 Sprecher über Sessions wiedererkannt (0.7.1); Duo-Podcast mit sehr ähnlichen Stimmen ist dokumentierter Grenzfall (Inter-Sim > 0.62)
 
 ## Architektur
 
@@ -42,6 +46,8 @@ Navigation      VoiceBank         Zipformer-Transducer
 | **Phase 4** | Export: TXT, Markdown, JSON + ShareSheet | ✅ (0.6.2) |
 | **Phase 5** | History/Detail-Screen + **Room-Datenbank** (0.6.6: JSON-Store abgelöst, einmalige JSON→SQLite-Migration) | ✅ |
 | **Phase 6** | Einstellungen: Dark Mode (System/hell/dunkel), Schriftgröße persistent, Debug-Schalter, Modell-Info (0.6.8) – Modellwahl/Privacy offen | ✅ (0.6.8) |
+| **Phase 7** | **Persistente Speaker-DB**: `SpeakerProfileStore` (JSON, atomar), `GlobalVoiceBank` (0.62 confirmed-only, rolling average), Auto-Enroll beim Stoppen, Worker-Integration (`VB_GLOBAL_RESOLVE`/`VB_GLOBAL_LEARN`) | ✅ (0.7.0/0.7.1) |
+| **Phase 7a** | **Namens-UI + Kontakt-Verwaltung**: Zuweisung nach Stop (Sample-Fenster aus Chunk-Puffer), Namens-Overlay (Live/Detail), Export mit Namen, Umbenennen/Zusammenführen/Löschen | ✅ (0.7.2) |
 
 ## Voraussetzungen
 
@@ -82,19 +88,24 @@ app/
 ├── src/main/java/com/sherpa/transcript/
 │   ├── SherpaTranscriptApp.kt        # Application
 │   ├── MainActivity.kt               # Entry + Permission
+│   ├── data/local/
+│   │   ├── SpeakerProfile.kt            # Persistiertes Sprecher-Profil (UUID, Embedding, Name)
+│   │   └── SpeakerProfileStore.kt       # JSON-Persistenz (atomar, Version 2, korruptionssicher)
 │   ├── domain/
 │   │   ├── audio/
 │   │   │   ├── AudioCaptureManager.kt  # AudioRecord-Capture (+ Channel-Puffer, WAV-Debug)
-│   │   │   ├── ChunkedAudioBuffer.kt   # Rolling-Chunk-Quelle (15s + Overlap)
+│   │   │   ├── ChunkedAudioBuffer.kt   # Rolling-Chunk-Quelle (15s + Overlap, readWindow für ENROLL)
 │   │   │   └── TestLog.kt              # Diagnose-Log-Datei (Debug-Mode)
 │   │   └── model/
 │   │       └── TranscriptSegment.kt    # Datenmodell
 │   ├── engine/
 │   │   ├── SherpaOnnxEngine.kt         # ASR-Engine (JNI)
-│   │   ├── SpeakerDiarizationEngine.kt # Diarization (ReVerb + Titanet)
-│   │   ├── DiarizationChunkWorker.kt   # Chunk-Pipeline (normalize, Retry, Reconciler)
+│   │   ├── SpeakerDiarizationEngine.kt # Diarization (ReVerb + ERes2Net)
+│   │   ├── DiarizationChunkWorker.kt   # Chunk-Pipeline (normalize, Retry, Reconciler, Voice-Banks)
 │   │   ├── RollingReconciler.kt        # Temporales ID-Matching über Overlap-Zone
-│   │   ├── SessionVoiceBank.kt         # Akustisches Gedächtnis (Voiceprints)
+│   │   ├── SessionVoiceBank.kt         # Akustisches Session-Gedächtnis (Voiceprints)
+│   │   ├── GlobalVoiceBank.kt          # Persistente Speaker-DB (0.62 confirmed-only, rolling average, Namen)
+│   │   ├── SpeakerProfiles.kt          # Zentrale Bank-Instanz (Live + Settings teilen den Stand)
 │   │   ├── TimelineComposer.kt         # Segment-Zusammenführung
 │   │   ├── ModelDownloadManager.kt     # HF-Download
 │   │   └── util/
@@ -102,7 +113,8 @@ app/
 │   └── ui/
 │       ├── navigation/AppNavigation.kt # Bottom Nav
 │       ├── theme/                      # Material 3 Theme
-│       └── live/                       # LiveScreen + VM
+│       ├── live/                       # LiveScreen + VM (+ AssignSpeakerSheet: Sprecher-Zuweisung)
+│       └── settings/                   # Einstellungen (+ ContactsSection: Profil-Verwaltung)
 └── libs/
     └── sherpa-onnx-1.13.4.aar         # Native SDK
 
