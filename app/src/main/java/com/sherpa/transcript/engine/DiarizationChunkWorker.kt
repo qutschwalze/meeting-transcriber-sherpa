@@ -313,6 +313,22 @@ class DiarizationChunkWorker(
                         val existing = globalProfileBySessionId.entries.firstOrNull { it.value == profileId }
                         val sessionId = existing?.key ?: freshGlobalId.also { freshGlobalId++ }
                         if (existing == null) globalProfileBySessionId[sessionId] = profileId
+                        // Session-Bank einlernen (Geräte-Befund 0.7.0 Session 2):
+                        // Ohne Enroll ist die global gemappte Session-ID für die
+                        // finalen Resolves NICHT bestätigt (die nutzen nur die
+                        // Session-Bank) → Nearest-Confirmed-Resolve mappt die
+                        // ganze Session auf den einzigen bestätigten Nachbarn
+                        // (SAVE persisted=1 speakers=1 trotz 2 erkannter Profile).
+                        // Das Enroll unter der Session-ID macht die Stimme für die
+                        // confirmed-Logik sichtbar (Quick-Confirm >= 4s bestätigt
+                        // lange Blöcke sofort). Kein Doppel-ID-Risiko: der erste
+                        // >= 2s-Kontakt einer Stimme läuft immer durch diesen
+                        // Global-Match, vorher kann kein fremdes pending entstehen.
+                        if (voiceBank != null) {
+                            val learned = voiceBank.enroll(sessionId, samples, durationMs)
+                            TestLog.log("VB_GLOBAL_LEARN session=$sessionId profil=${profileId.takeLast(8)} " +
+                                    "enroll=${if (learned) "CONFIRMED" else "pending/skip"}")
+                        }
                         finalMapping = finalMapping + (localId to sessionId)
                         finalNewSpeakerIds = finalNewSpeakerIds - localId
                         globalResolvedCount++

@@ -658,9 +658,10 @@ class DiarizationChunkWorkerTest {
         )))
         val globalBank = GlobalVoiceBank(computer = ValueComputer())
         globalBank.putProfile("p-anna", floatArrayOf(1f, 0f, 0f), 1)
+        val voiceBank = SessionVoiceBank(ValueComputer())
         val worker = DiarizationChunkWorker(
             buffer, fake,
-            voiceBank = SessionVoiceBank(ValueComputer()),
+            voiceBank = voiceBank,
             globalBank = globalBank,
         )
 
@@ -671,14 +672,17 @@ class DiarizationChunkWorkerTest {
         assertTrue("keine neue ID (Profil hat aufgeloest)", first.newSpeakerIds.isEmpty())
         assertEquals("1 globaler Resolve in Chunk 1", 1, first.globalResolvedCount)
         assertEquals("Profil-Zuordnungstabelle hat 1 Eintrag", 1, first.globalProfileMapSize)
+        assertEquals("Stimme in Session-Bank eingelernt (3s < 4s → pending)", 1, voiceBank.pendingCount)
 
         val second = worker.processNextChunk(debug = false)
         assertNotNull(second)
         second!!
-        assertEquals("Drift-Kontakt derselben Person → dieselbe Session-ID 0", mapOf(1 to 0), second.mapping)
+        assertEquals("Drift-Kontakt derselben Person → dieselbe Session-ID 0 (via Session-Bank)", mapOf(1 to 0), second.mapping)
         assertTrue("auch Chunk 2 keine neue ID", second.newSpeakerIds.isEmpty())
-        assertEquals("1 globaler Resolve in Chunk 2", 1, second.globalResolvedCount)
+        assertEquals("2. Kontakt ueber Session-Bank aufgeloest (nicht global)", 0, second.globalResolvedCount)
         assertEquals("Zuordnungstabelle unveraendert (1 Profil)", 1, second.globalProfileMapSize)
+        assertEquals("2. Kontakt bestaetigt das Enrollment", 1, voiceBank.speakerCount)
+        assertTrue("Session-ID 0 ist jetzt bestaetigt", voiceBank.enrolledSpeakerIds == setOf(0))
     }
 
     @Test
