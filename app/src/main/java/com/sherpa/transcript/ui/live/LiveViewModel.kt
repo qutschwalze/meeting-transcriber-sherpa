@@ -1951,6 +1951,42 @@ class LiveViewModel : ViewModel() {
     }
 
     /**
+     * Phase 7a (0.7.2): Weist ein ASR-Segment einem Profil zu und lernt die
+     * Stimme aus dem Chunk-Puffer-Fenster ein (der Puffer lebt bis onCleared –
+     * Zuweisung also direkt nach Stop, ohne WAV-Speicher).
+     *
+     * @param segmentId  UUID des ASR-Segments (rawFinalSegments)
+     * @param profileId  Vorhandenes Profil, auf das zugewiesen wird (oder null)
+     * @param newName    Optional: Name für das (ggf. neue) Profil
+     */
+    fun assignSpeakerToSegment(segmentId: String, profileId: String?, newName: String?) {
+        val seg = rawFinalSegments.firstOrNull { it.segmentId == segmentId } ?: return
+        val samples = chunkedAudioBuffer.readWindow(seg.startTimeMs, seg.endTimeMs)
+        if (samples.size < (2 * 16000)) {
+            Log.w(TAG, "assignSpeaker: Segment ${segmentId.take(8)} hat < 2s Audio im Puffer – übersprungen")
+            return
+        }
+        // Ziel-Profil: explizit gewählt → vorhandenes oder aus Samples identifiziert;
+        // sonst: bekannte Stimme weiterverwenden, unbekannt → neues Profil
+        val targetId = when {
+            profileId != null -> profileId
+            else -> globalVoiceBank.identifySamples(samples)
+                ?: java.util.UUID.randomUUID().toString()
+        }
+        if (globalVoiceBank.enrollFromSamples(targetId, samples)) {
+            if (newName != null) globalVoiceBank.rename(targetId, newName)
+            speakerProfileStore.saveAll(globalVoiceBank.snapshot())
+            refreshSpeakerProfiles()
+            deriveUiSegments()
+            Log.i(TAG, "VB_GLOBAL_ASSIGN segment=${segmentId.take(8)} → profil=${targetId.takeLast(8)} " +
+                    "name=${newName ?: "-"} (${samples.size / 16000}s Audio)")
+            TestLog.log("VB_GLOBAL_ASSIGN segment=${segmentId.take(8)} → profil=${targetId.takeLast(8)} name=${newName ?: "-"}")
+        } else {
+            Log.w(TAG, "assignSpeaker: Enroll fehlgeschlagen (Embedding-Fehler?) für ${targetId.takeLast(8)}")
+        }
+    }
+
+    /**
      * 0.6.19: Führende Satzzeichen entfernen, die durch ASR-Segmentierung entstehen.
      * Die Endpoint-Segmentierung lässt den Satzzeichen am Ende weg und das
      * nächste Segment beginnt mit ".", "?", "!" etc.

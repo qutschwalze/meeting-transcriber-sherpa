@@ -1,6 +1,7 @@
 package com.sherpa.transcript.engine
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -124,5 +125,29 @@ class GlobalVoiceBankTest {
         val restored = GlobalVoiceBank().apply { load(bank.snapshot()) }
         assertEquals("Anna", restored.nameFor("p1"))
         assertEquals(2, restored.profileCount("p1"))
+    }
+
+    @Test
+    fun `enrollFromSamples - zu kurzes Fenster und fremde Samples werden korrekt behandelt`() {
+        // Fake-Computer-Stil wie SessionVoiceBankTest: Sample-Wert -> One-Hot
+        val computer = SpeakerEmbeddingComputer { samples ->
+            if (samples.isEmpty()) null else when {
+                samples[0] <= 1.5f -> floatArrayOf(1f, 0f, 0f)
+                else -> floatArrayOf(0f, 1f, 0f)
+            }
+        }
+        val bank = GlobalVoiceBank(computer = computer)
+        // < 2s -> kein Enroll
+        assertFalse(bank.enrollFromSamples("p1", FloatArray(1000) { 1f }))
+        assertFalse(bank.contains("p1"))
+        // >= 2s Stimme A -> Profil angelegt
+        assertTrue(bank.enrollFromSamples("p1", FloatArray(2 * 16000) { 1f }))
+        assertTrue(bank.contains("p1"))
+        assertEquals(1, bank.profileCount("p1"))
+        // Rollend: 2. Enroll derselben Stimme
+        assertTrue(bank.enrollFromSamples("p1", FloatArray(2 * 16000) { 1f }))
+        assertEquals(2, bank.profileCount("p1"))
+        // Stimme B kein Match auf A
+        assertNull(bank.identify(floatArrayOf(0f, 1f, 0f)))
     }
 }

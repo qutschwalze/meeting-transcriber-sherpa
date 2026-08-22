@@ -105,6 +105,19 @@ class GlobalVoiceBank(
     }
 
     /**
+     * Phase 7a (0.7.2): Enroll aus Roh-Samples (manuelle Zuweisung nach Stop).
+     * Gleiche Gates wie der Worker-Pfad: mindestens [minIdentifySec] Audio,
+     * Embedding via [computer]; rolling update wenn das Profil existiert.
+     * @return true wenn die Samples eingelernt wurden (≥ 2 s + Embedding ok).
+     */
+    fun enrollFromSamples(profileId: String, samples: FloatArray): Boolean {
+        if (computer == null || samples.size < (minIdentifySec * 16000).toInt()) return false
+        val embedding = computer.computeEmbedding(samples) ?: return false
+        enroll(profileId, embedding)
+        return true
+    }
+
+    /**
      * Neues Profil anlegen oder bestehendes per rolling average aktualisieren
      * (gewichtet nach bisheriger Kontaktzahl – identisch zur SessionVoiceBank).
      * Aufruf NUR mit BESTÄTIGTEN Kontakten (Auto-Enroll-Pfad)!

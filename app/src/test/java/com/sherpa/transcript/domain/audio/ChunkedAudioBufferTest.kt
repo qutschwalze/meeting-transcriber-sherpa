@@ -218,4 +218,35 @@ class ChunkedAudioBufferTest {
         )
         assertEquals("sample-basierter Chunk = volle 25s (20s + 5s Overlap)", 25 * sampleRate, thirdSample.samples.size)
     }
+
+    @Test
+    fun `readWindow - liefert Samples des Zeitfensters`() {
+        val buffer = ChunkedAudioBuffer(sampleRate = sampleRate)
+        buffer.push(FloatArray(1600) { 1f }, 0L)    // 0-100ms
+        buffer.push(FloatArray(1600) { 2f }, 100L)  // 100-200ms
+
+        val win = buffer.readWindow(120L, 160L)     // 40ms im zweiten Frame
+        assertEquals("40ms x 16k = 640 Samples", 640, win.size)
+        assertTrue("alle Samples aus dem 2. Frame", win.all { it == 2f })
+    }
+
+    @Test
+    fun `readWindow - schneidet ueber Frame-Grenzen hinweg`() {
+        val buffer = ChunkedAudioBuffer(sampleRate = sampleRate)
+        buffer.push(FloatArray(1600) { 1f }, 0L)    // 0-100ms Wert 1
+        buffer.push(FloatArray(1600) { 2f }, 100L)  // 100-200ms Wert 2
+
+        val win = buffer.readWindow(90L, 110L)      // 10ms Frame1 + 10ms Frame2
+        assertEquals("20ms x 16k = 320 Samples", 320, win.size)
+        assertEquals("erste 160 aus Frame 1", 1f, win[0], 0f)
+        assertEquals("letzte 160 aus Frame 2", 2f, win[win.size - 1], 0f)
+    }
+
+    @Test
+    fun `readWindow - ausserhalb des Puffers liefert leeres Array`() {
+        val buffer = ChunkedAudioBuffer(sampleRate = sampleRate)
+        buffer.push(FloatArray(1600) { 1f }, 0L)
+        assertTrue(buffer.readWindow(500L, 600L).isEmpty())
+        assertTrue(buffer.readWindow(10L, 0L).isEmpty())   // invertiert
+    }
 }

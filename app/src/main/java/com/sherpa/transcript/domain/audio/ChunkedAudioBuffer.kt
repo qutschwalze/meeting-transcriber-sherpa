@@ -79,7 +79,34 @@ class ChunkedAudioBuffer(
     }
 
     /**
-     * Liefert den nächsten Chunk: `chunkSec` neues Audio + `overlapSec` Kontext
+     * Phase 7a (0.7.2): Liest die Samples eines absoluten Zeitfensters (ms) aus
+     * dem Puffer – für den manuellen ENROLL nach dem Stoppen (der Puffer lebt
+     * bis onCleared; die Aufnahme-Audio steht also für Zuweisungen bereit,
+     * ohne eine WAV dauerhaft zu speichern).
+     *
+     * @return Samples im Fenster (leer, wenn kein Overlap mit dem Puffer).
+     */
+    fun readWindow(startMs: Long, endMs: Long): FloatArray = synchronized(lock) {
+        if (frames.isEmpty() || endMs <= startMs) return@synchronized FloatArray(0)
+        val result = ArrayList<Float>()
+        for (f in frames) {
+            val fStart = f.startMs
+            val fEnd = fStart + (f.samples.size * 1000L / sampleRate)
+            val overlapStart = maxOf(fStart, startMs)
+            val overlapEnd = minOf(fEnd, endMs)
+            if (overlapEnd > overlapStart) {
+                val fromSample = ((overlapStart - fStart) * sampleRate / 1000L).toInt()
+                val toSample = ((overlapEnd - fStart) * sampleRate / 1000L)
+                    .toInt().coerceAtMost(f.samples.size)
+                if (toSample > fromSample) {
+                    for (i in fromSample until toSample) result.add(f.samples[i])
+                }
+            }
+        }
+        result.toFloatArray()
+    }
+
+    /** Liefert den nächsten Chunk: `chunkSec` neues Audio + `overlapSec` Kontext
      * vom vorherigen Chunk. Liefert null, wenn noch nicht genug neues Audio
      * eingetroffen ist (Chunk-Grenze noch nicht erreicht).
      *

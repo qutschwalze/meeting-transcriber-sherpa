@@ -43,6 +43,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.foundation.clickable
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import com.sherpa.transcript.ui.live.components.AssignSpeakerSheet
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -53,12 +60,16 @@ import com.sherpa.transcript.domain.model.RecordingState
 import com.sherpa.transcript.domain.model.TranscriptSegment
 import com.sherpa.transcript.ui.theme.SpeakerColors
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LiveScreen(
     viewModel: LiveViewModel = viewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val listState = rememberLazyListState()
+
+    // Phase 7a: Segment, das der Nutzer nach dem Stoppen zuweisen will (null = kein Sheet)
+    var assignTarget by remember { mutableStateOf<TranscriptSegment?>(null) }
 
     // Scroll-Trigger: reagiert auf neue Segmente UND Textänderungen im letzten Segment
     val scrollTrigger by remember {
@@ -127,13 +138,22 @@ fun LiveScreen(
                             derivedStateOf { segment.segmentId == uiState.latestSegmentId }
                         }
                         val isRemapped = segment.segmentId in uiState.remappedSegmentIds
-                        TranscriptSegmentItem(
-                            segment = segment,
-                            fontSize = uiState.fontSize,
-                            isLatest = isLatest,
-                            debugMode = uiState.debugMode,
-                            isRemapped = isRemapped,
-                        )
+                        // Phase 7a: Tap auf Segment (nach Stop) öffnet das Zuweisungs-Sheet
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable(
+                                    enabled = uiState.recordingState is RecordingState.Idle,
+                                ) { assignTarget = segment },
+                        ) {
+                            TranscriptSegmentItem(
+                                segment = segment,
+                                fontSize = uiState.fontSize,
+                                isLatest = isLatest,
+                                debugMode = uiState.debugMode,
+                                isRemapped = isRemapped,
+                            )
+                        }
                     }
                 }
             }
@@ -198,6 +218,24 @@ fun LiveScreen(
             onStart = viewModel::startRecording,
             onStop = viewModel::stopRecording,
         )
+
+        // ─── Phase 7a: Sprecher-Zuweisung (nur nach dem Stoppen) ──────
+        assignTarget?.let { seg ->
+            ModalBottomSheet(
+                onDismissRequest = { assignTarget = null },
+                sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+            ) {
+                AssignSpeakerSheet(
+                    segment = seg,
+                    profiles = uiState.speakerProfiles,
+                    onAssign = { sid, pid, name ->
+                        viewModel.assignSpeakerToSegment(sid, pid, name)
+                        assignTarget = null
+                    },
+                    onDismiss = { assignTarget = null },
+                )
+            }
+        }
     }
 }
 
