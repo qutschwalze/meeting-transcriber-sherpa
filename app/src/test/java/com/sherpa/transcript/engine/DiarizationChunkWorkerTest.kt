@@ -673,6 +673,7 @@ class DiarizationChunkWorkerTest {
         assertEquals("1 globaler Resolve in Chunk 1", 1, first.globalResolvedCount)
         assertEquals("Profil-Zuordnungstabelle hat 1 Eintrag", 1, first.globalProfileMapSize)
         assertEquals("Stimme in Session-Bank eingelernt (3s < 4s → pending)", 1, voiceBank.pendingCount)
+        assertEquals("Zuordnung exponiert: Session 0 → Profil p-anna", mapOf(0 to "p-anna"), worker.globalProfileBySessionId())
 
         val second = worker.processNextChunk(debug = false)
         assertNotNull(second)

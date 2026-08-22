@@ -66,6 +66,15 @@ data class LiveUiState(
     val rawCount: Int = 0,
     val labeledCount: Int = 0,
     val displayCount: Int = 0,
+    /** Phase 7a (0.7.2): bekannte Profile für Namens-Overlay + Kontakte-Screen. */
+    val speakerProfiles: List<SpeakerProfileUi> = emptyList(),
+)
+
+/** Phase 7a: Anzeige-Pendant eines persistierten Speaker-Profils (kein Embedding nötig). */
+data class SpeakerProfileUi(
+    val id: String,
+    val name: String?,
+    val sampleCount: Int,
 )
 
 data class AssignmentQuality(
@@ -617,7 +626,11 @@ class LiveViewModel : ViewModel() {
         val uiFinals = rawFinalSegments.map { raw ->
             val assigned = assignedById[raw.segmentId]
             if (assigned != null && assigned.speakerId != null) {
-                raw.copy(speakerId = assigned.speakerId, speakerLabel = assigned.speakerLabel)
+                // Phase 7a (0.7.2): Anzeige-Label über Profil-Namen auflösen (display-only!)
+                raw.copy(
+                    speakerId = assigned.speakerId,
+                    speakerLabel = resolveDisplayLabel(assigned) ?: assigned.speakerLabel,
+                )
             } else {
                 raw
             }
@@ -1696,6 +1709,7 @@ class LiveViewModel : ViewModel() {
                     Log.i(TAG, "VB_GLOBAL: autoEnroll merged=${res.mergedIds.size} new=${res.newIds.size} " +
                             "total=${globalVoiceBank.size} (Quelle: ${confirmed.size} bestätigte Kontakte)")
                     TestLog.log("VB_GLOBAL autoEnroll merged=${res.mergedIds.size} new=${res.newIds.size} total=${globalVoiceBank.size}")
+                    refreshSpeakerProfiles()
                 }
             }
 
@@ -1913,6 +1927,27 @@ class LiveViewModel : ViewModel() {
 
         _uiState.update { it.copy(recordingState = RecordingState.Listening) }
         deriveUiSegments()
+    }
+
+    /**
+     * Phase 7a (0.7.2): Anzeige-Label eines Segments über das globale Profil
+     * auflösen („Anna" statt „Sprecher 1"). Nur Display! raw/assigned bleiben
+     * unangetastet (Lossless-Persistenz).
+     * @return null wenn kein Profil benannt ist → Fallback „Sprecher N".
+     */
+    private fun resolveDisplayLabel(assigned: TranscriptSegment): String? {
+        val spkNum = assigned.speakerId?.removePrefix("speaker_")?.toIntOrNull() ?: return null
+        val profileId = diarizationChunkWorker.globalProfileBySessionId()[spkNum] ?: return null
+        return globalVoiceBank.displayLabel(profileId, fallbackIndex = spkNum)
+    }
+
+    /**
+     * Phase 7a (0.7.2): Aktualisiert die Profil-Liste im UI-State (für
+     * Namens-Overlay-Diagnose und den späteren Kontakte-/Zuweisungs-Screen).
+     */
+    private fun refreshSpeakerProfiles() {
+        val profiles = globalVoiceBank.snapshot().map { SpeakerProfileUi(it.id, it.name, it.sampleCount) }
+        _uiState.update { it.copy(speakerProfiles = profiles) }
     }
 
     /**

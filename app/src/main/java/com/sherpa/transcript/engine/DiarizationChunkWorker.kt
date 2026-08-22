@@ -134,6 +134,12 @@ class DiarizationChunkWorker(
     }
 
     /**
+     * Phase 7a (0.7.2): Session-GID → Profil-ID (read-only Kopie) für die
+     * Namens-Auflösung im ViewModel (Anzeige/Export, nie für raw/assigned).
+     */
+    fun globalProfileBySessionId(): Map<Int, String> = globalProfileBySessionId.toMap()
+
+    /**
      * Verarbeitet den nächsten Chunk, falls genügend neues Audio vorliegt.
      *
      * @return null wenn noch kein neuer Chunk verfügbar ist; sonst das Worker-Ergebnis.
