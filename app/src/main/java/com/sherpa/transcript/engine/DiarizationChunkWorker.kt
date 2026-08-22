@@ -39,6 +39,10 @@ data class WorkerChunkResult(
     val voiceBankEnrolledCount: Int = 0,
     val voiceBankSkipCount: Int = 0,
     val voiceBankSize: Int = 0,
+    /** Phase 7 (Global-Bank): wie oft ein lokales Segment über ein GLOBALES Profil aufgelöst wurde. */
+    val globalResolvedCount: Int = 0,
+    /** Phase 7: Größe der Session→Profil-Zuordnungstabelle (Diagnose). */
+    val globalProfileMapSize: Int = 0,
 )
 
 /**
@@ -61,6 +65,8 @@ class DiarizationChunkWorker(
     private val reconciler: RollingReconciler = RollingReconciler(),
     /** Hebel G: akustische Voice-Bank gegen Engine-Drift (optional, testbar). */
     private val voiceBank: SessionVoiceBank? = null,
+    /** Phase 7: persistente Speaker-Profile (optional – null = Verhalten unverändert). */
+    private val globalBank: GlobalVoiceBank? = null,
     private val chunkSec: Float = 20f,
     private val overlapSec: Float = 5f,
 ) {
@@ -114,9 +120,17 @@ class DiarizationChunkWorker(
     var globalSegments: List<SpeakerTimeRange> = emptyList()
         private set
 
+    /**
+     * Phase 7: Session-GID → globales Profil. Stabile Identität über die
+     * Session: Kontakte derselben globalen Stimme (auch bei Drift) landen
+     * auf derselben Session-ID.
+     */
+    private val globalProfileBySessionId = mutableMapOf<Int, String>()
+
     /** Reset für eine neue Aufnahme-Session. */
     fun reset() {
         globalSegments = emptyList()
+        globalProfileBySessionId.clear()
     }
 
     /**
@@ -254,6 +268,7 @@ class DiarizationChunkWorker(
         var driftResolvedCount = 0
         var enrolledCount = 0
         var skippedCount = 0
+        var globalResolvedCount = 0
         val bankSize = voiceBank?.speakerCount ?: 0
         var freshGlobalId = (globalSegments.maxOfOrNull { it.speakerId } ?: -1) + 1
         if (voiceBank != null) {
@@ -281,6 +296,33 @@ class DiarizationChunkWorker(
                     TestLog.log("VB local=$localId dur=${durationMs}ms → RESOLVE auf global=$matchedGlobalId (statt neue ID ${result.mapping[localId]})")
                     continue
                 }
+
+                // ── Phase 7: Global-Bank-Resolve ──
+                // Die Session-Bank kennt die Stimme nicht (neuer Kontakt) – aber die
+                // PERSISTENTE globale Bank vielleicht schon (Person aus früherer
+                // Session). Dann: Session-ID über das Profil vergeben/behalten und
+                // KEIN neues Enrollment (Mapping-only – die Session-Bank-Kontinuität
+                // entsteht über wiederholte Global-Matches derselben Stimme).
+                // Kein Session-Bank-Enroll hier: Eine Stimme, die global gematcht
+                // wurde, darf nicht zusätzlich als pending eingeschrieben werden –
+                // das würde zwei Session-IDs für dieselbe Person erzeugen.
+                var globalResolved = false
+                if (globalBank != null) {
+                    val profileId = globalBank.identifySamples(samples)
+                    if (profileId != null) {
+                        val existing = globalProfileBySessionId.entries.firstOrNull { it.value == profileId }
+                        val sessionId = existing?.key ?: freshGlobalId.also { freshGlobalId++ }
+                        if (existing == null) globalProfileBySessionId[sessionId] = profileId
+                        finalMapping = finalMapping + (localId to sessionId)
+                        finalNewSpeakerIds = finalNewSpeakerIds - localId
+                        globalResolvedCount++
+                        globalResolved = true
+                        Log.d(TAG, "VB_GLOBAL resolve: local=$localId → profil=${profileId.takeLast(8)} " +
+                                "(session=$sessionId, dur=${durationMs}ms, statt neue ID ${result.mapping[localId]})")
+                        TestLog.log("VB_GLOBAL_RESOLVE local=$localId → profil=${profileId.takeLast(8)} (session=$sessionId)")
+                    }
+                }
+                if (globalResolved) continue
                 val targetGlobalId = result.mapping[localId]
                 if (localId in finalNewSpeakerIds) {
                     // Wirklich neuer Sprecher → in die Bank einschreiben
@@ -366,6 +408,8 @@ class DiarizationChunkWorker(
             voiceBankEnrolledCount = enrolledCount,
             voiceBankSkipCount = skippedCount,
             voiceBankSize = bankSize,
+            globalResolvedCount = globalResolvedCount,
+            globalProfileMapSize = globalProfileBySessionId.size,
         )
     }
 

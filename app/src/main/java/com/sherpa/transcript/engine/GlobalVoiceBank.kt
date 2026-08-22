@@ -25,7 +25,12 @@ import java.util.UUID
  * zuverlässig; Auto-Enroll-only-Lauf auf 5-Min-Meeting: korrekte Zuordnung
  * 24,8 % → 75,2 %.
  */
-class GlobalVoiceBank {
+class GlobalVoiceBank(
+    /** Optionaler Embedding-Computer für den Samples-Pfad (Worker-Integration). */
+    private val computer: SpeakerEmbeddingComputer? = null,
+    /** Mindest-Redezeit für den Samples-Match (identisch zur SessionVoiceBank). */
+    private val minIdentifySec: Float = 2f,
+) {
 
     companion object {
         private const val TAG = "GlobalVoiceBank"
@@ -66,6 +71,21 @@ class GlobalVoiceBank {
         Log.v(TAG, String.format("identify: KEIN Match – beste=%.3f gegen %s (thr=%.3f)",
             best.second, best.first.takeLast(8), MATCH_THRESHOLD))
         return null
+    }
+
+    /**
+     * Samples-basierter Match (Worker-Pfad): embeddet intern über den
+     * [computer] und matcht mit derselben strikten 0.62-Schwelle.
+     * Sub-[minIdentifySec]-Segmente werden nie aufgelöst (instabiles
+     * Embedding, identische Regel wie die SessionVoiceBank).
+     *
+     * @return Profil-ID bei Match, sonst null (auch wenn kein Computer gesetzt).
+     */
+    fun identifySamples(samples: FloatArray): String? {
+        if (computer == null) return null
+        if (samples.size < (minIdentifySec * 16000).toInt()) return null
+        val embedding = computer.computeEmbedding(samples) ?: return null
+        return identify(embedding)
     }
 
     /**

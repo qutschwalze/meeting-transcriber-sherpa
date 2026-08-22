@@ -640,4 +640,70 @@ class DiarizationChunkWorkerTest {
         worker.processNextChunk(debug = false)
         assertEquals("2s-Fragment wird nicht enrolled", 0, voiceBank.speakerCount)
     }
+
+    @Test
+    fun `GlobalBank - bekannte Stimme wird ueber Profil aufgeloest statt neu enrolled`() {
+        val buffer = ChunkedAudioBuffer(sampleRate = sampleRate)
+        // 0-20s Stimme A, 15-40s weiterhin Stimme A (Drift: Engine nennt sie lokal 1)
+        buffer.pushValueFrames(1f, 2000)                 // 0-20s
+        buffer.pushValueFrames(1f, 2500, startMs = 15_000L) // 15-40s
+
+        // Chunk 1 [0,20]: lokales Segment [0,3] (kurz, < 4s → keine Quick-Confirm)
+        // Chunk 2 [15,40]: DRIFT → lokal 1, ausserhalb der Overlap-Zone → Reconciler
+        //   würde neue ID vergeben. Session-Bank ist LEER (nichts enrolled) –
+        //   aber die GLOBALE Bank kennt Stimme A als Profil "p-anna".
+        val fake = FakeDiarizer(ArrayDeque(listOf(
+            listOf(localSeg(0, 0f, 3f)),   // absolut [0,3] – Stimme A, kurz
+            listOf(localSeg(1, 0f, 25f)),  // absolut [15,40] – Stimme A, Drift
+        )))
+        val globalBank = GlobalVoiceBank(computer = ValueComputer())
+        globalBank.putProfile("p-anna", floatArrayOf(1f, 0f, 0f), 1)
+        val worker = DiarizationChunkWorker(
+            buffer, fake,
+            voiceBank = SessionVoiceBank(ValueComputer()),
+            globalBank = globalBank,
+        )
+
+        val first = worker.processNextChunk(debug = false)
+        assertNotNull(first)
+        first!!
+        assertEquals("Kontakt ueber Profil auf Session-ID 0 gemappt", mapOf(0 to 0), first.mapping)
+        assertTrue("keine neue ID (Profil hat aufgeloest)", first.newSpeakerIds.isEmpty())
+        assertEquals("1 globaler Resolve in Chunk 1", 1, first.globalResolvedCount)
+        assertEquals("Profil-Zuordnungstabelle hat 1 Eintrag", 1, first.globalProfileMapSize)
+
+        val second = worker.processNextChunk(debug = false)
+        assertNotNull(second)
+        second!!
+        assertEquals("Drift-Kontakt derselben Person → dieselbe Session-ID 0", mapOf(1 to 0), second.mapping)
+        assertTrue("auch Chunk 2 keine neue ID", second.newSpeakerIds.isEmpty())
+        assertEquals("1 globaler Resolve in Chunk 2", 1, second.globalResolvedCount)
+        assertEquals("Zuordnungstabelle unveraendert (1 Profil)", 1, second.globalProfileMapSize)
+    }
+
+    @Test
+    fun `GlobalBank - unbekannte Stimme bleibt normaler neuer Sprecher`() {
+        val buffer = ChunkedAudioBuffer(sampleRate = sampleRate)
+        // 0-20s Stimme B (Wert 2f) – NICHT in der globalen Bank
+        buffer.pushValueFrames(2f, 2000) // 0-20s
+
+        val fake = FakeDiarizer(ArrayDeque(listOf(
+            listOf(localSeg(0, 0f, 3f)), // absolut [0,3] – Stimme B, kurz
+        )))
+        val globalBank = GlobalVoiceBank(computer = ValueComputer())
+        globalBank.putProfile("p-anna", floatArrayOf(1f, 0f, 0f), 1) // Stimme A
+        val voiceBank = SessionVoiceBank(ValueComputer())
+        val worker = DiarizationChunkWorker(
+            buffer, fake,
+            voiceBank = voiceBank,
+            globalBank = globalBank,
+        )
+
+        val result = worker.processNextChunk(debug = false)
+        assertNotNull(result)
+        result!!
+        assertEquals("kein globaler Resolve (fremde Stimme)", 0, result.globalResolvedCount)
+        assertEquals("Stimme B bleibt neue ID 0", setOf(0), result.newSpeakerIds)
+        assertEquals("Session-Bank hat 1 pending (normaler Enroll-Pfad)", 1, voiceBank.pendingCount)
+    }
 }
