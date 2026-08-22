@@ -64,7 +64,33 @@ class GlobalVoiceBank(
         names[profileId] ?: "Sprecher ${fallbackIndex + 1}"
 
     /**
-     * Bester Cosine-Match gegen alle Profile – Diagnose-Funktion.
+     * Phase 7a: Zwei Profile zusammenführen. `intoId` behält ID + Namen,
+     * das Embedding wird sample-gewichtet gemittelt, `fromId` wird gelöscht.
+     */
+    fun mergeProfiles(fromId: String, intoId: String) {
+        val fromEmb = profiles[fromId] ?: return
+        val intoEmb = profiles[intoId] ?: return
+        val nFrom = counts.getOrDefault(fromId, 1)
+        val nInto = counts.getOrDefault(intoId, 1)
+        val total = nFrom + nInto
+        profiles[intoId] = FloatArray(intoEmb.size) { i ->
+            (intoEmb[i] * nInto + fromEmb[i] * nFrom) / total
+        }
+        counts[intoId] = total
+        profiles.remove(fromId)
+        counts.remove(fromId)
+        names.remove(fromId)
+    }
+
+    /** Phase 7a: Profil komplett löschen (auch Name). */
+    fun deleteProfile(profileId: String) {
+        profiles.remove(profileId)
+        counts.remove(profileId)
+        names.remove(profileId)
+    }
+
+    /**
+     * Beste Cosine-Sim gegen alle Profile (Diagnose).
      * @return (Profil-ID, Similarity) oder null bei leerer Bank.
      */
     fun bestMatch(embedding: FloatArray): Pair<String, Float>? {

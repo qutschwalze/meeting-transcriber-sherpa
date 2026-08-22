@@ -150,4 +150,30 @@ class GlobalVoiceBankTest {
         // Stimme B kein Match auf A
         assertNull(bank.identify(floatArrayOf(0f, 1f, 0f)))
     }
+
+    @Test
+    fun `mergeProfiles - zwei Profile werden eines mit gemitteltem Embedding`() {
+        val bank = GlobalVoiceBank().apply {
+            putProfile("a", emb(1f, 0f, 0f), 1)
+            rename("a", "Anna")
+            putProfile("b", emb(1f, 0f, 0f), 3)
+        }
+        bank.mergeProfiles(fromId = "b", intoId = "a")
+        assertEquals(1, bank.size)
+        assertEquals("Anna", bank.nameFor("a"))
+        assertEquals(4, bank.profileCount("a"))   // 1 + 3 (rolling)
+        assertEquals("a", bank.identify(emb(1f, 0f, 0f)))
+    }
+
+    @Test
+    fun `deleteProfile entfernt Profil inklusive Name`() {
+        val bank = GlobalVoiceBank().apply {
+            putProfile("a", emb(1f, 0f, 0f), 1)
+            rename("a", "Anna")
+        }
+        bank.deleteProfile("a")
+        assertEquals(0, bank.size)
+        assertNull(bank.nameFor("a"))
+        assertNull(bank.identify(emb(1f, 0f, 0f)))
+    }
 }

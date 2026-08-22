@@ -20,6 +20,7 @@ import com.sherpa.transcript.domain.audio.AudioCaptureManager
 import com.sherpa.transcript.domain.audio.ChunkedAudioBuffer
 import com.sherpa.transcript.data.local.SpeakerProfileStore
 import com.sherpa.transcript.engine.GlobalVoiceBank
+import com.sherpa.transcript.engine.SpeakerProfiles
 import com.sherpa.transcript.domain.audio.TestLog
 import com.sherpa.transcript.domain.model.RecordingState
 import com.sherpa.transcript.domain.model.TranscriptSegment
@@ -216,27 +217,14 @@ class LiveViewModel : ViewModel() {
     }
 
     /**
-     * Phase 7: Persistente geräteweite Speaker-Profile (GlobalVoiceBank).
-     * Lädt beim ersten Zugriff aus filesDir/speakerProfiles.json und wird nach
-     * jedem Auto-Enroll geschrieben. KEIN Reset in onCleared – die Bank
-     * überlebt Sessions.
+     * Phase 7: Persistente geräteweite Speaker-Profile – ZENTRALE Instanz
+     * (SpeakerProfiles-Objekt, geteilt mit dem Kontakte-Screen, damit keine
+     * RAM-Stände divergieren). Wird beim ersten Zugriff geladen und nach
+     * jedem Auto-Enroll/Änderung geschrieben. KEIN Reset in onCleared.
      * Privacy: speakerProfiles.json liegt in filesDir (biometrische Daten) –
-     * der Debug-Upload scannt nur das testaufnahmen-Verzeichnis und erfasst
-     * sie daher nie. Bei Upload-Erweiterungen gegenprüfen!
+     * der Debug-Upload scannt nur das testaufnahmen-Verzeichnis.
      */
-    private val globalVoiceBank by lazy {
-        GlobalVoiceBank(computer = SherpaEmbeddingComputer(SherpaTranscriptApp.instance.assets)).apply {
-            val stored = speakerProfileStore.loadAll()
-            load(stored)
-            if (stored.isNotEmpty()) {
-                Log.i(TAG, "VB_GLOBAL: ${stored.size} Profile geladen (${stored.map { it.id.takeLast(8) }.joinToString(",")})")
-            }
-        }
-    }
-
-    private val speakerProfileStore by lazy {
-        SpeakerProfileStore(java.io.File(SherpaTranscriptApp.instance.filesDir, "speakerProfiles.json"))
-    }
+    private val globalVoiceBank by lazy { SpeakerProfiles.ensureBank() }
 
     private var captureJob: Job? = null
     private var diarizationJob: Job? = null
@@ -1705,7 +1693,7 @@ class LiveViewModel : ViewModel() {
                 val confirmed = sessionVoiceBank.confirmedVoiceprints()
                 if (confirmed.isNotEmpty()) {
                     val res = globalVoiceBank.autoEnrollFrom(confirmed)
-                    withContext(Dispatchers.IO) { speakerProfileStore.saveAll(globalVoiceBank.snapshot()) }
+                    withContext(Dispatchers.IO) { SpeakerProfiles.save() }
                     Log.i(TAG, "VB_GLOBAL: autoEnroll merged=${res.mergedIds.size} new=${res.newIds.size} " +
                             "total=${globalVoiceBank.size} (Quelle: ${confirmed.size} bestätigte Kontakte)")
                     TestLog.log("VB_GLOBAL autoEnroll merged=${res.mergedIds.size} new=${res.newIds.size} total=${globalVoiceBank.size}")
@@ -1988,7 +1976,7 @@ class LiveViewModel : ViewModel() {
         }
         if (globalVoiceBank.enrollFromSamples(targetId, samples)) {
             if (newName != null) globalVoiceBank.rename(targetId, newName)
-            speakerProfileStore.saveAll(globalVoiceBank.snapshot())
+            SpeakerProfiles.save()
             refreshSpeakerProfiles()
             deriveUiSegments()
             Log.i(TAG, "VB_GLOBAL_ASSIGN segment=${segmentId.take(8)} → profil=${targetId.takeLast(8)} " +

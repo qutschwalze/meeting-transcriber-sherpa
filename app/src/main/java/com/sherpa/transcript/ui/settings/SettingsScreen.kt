@@ -390,6 +390,11 @@ fun SettingsScreen(settingsStore: SettingsStore = SettingsStore.current) {
             }
 
             item { Spacer(modifier = Modifier.height(24.dp)) }
+
+            // ── Phase 7a (0.7.2): Kontakte (Speaker-Profile) ──────────
+            item { ContactsSection() }
+
+            item { Spacer(modifier = Modifier.height(24.dp)) }
         }
     }
 }
