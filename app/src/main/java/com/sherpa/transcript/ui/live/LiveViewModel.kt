@@ -18,6 +18,8 @@ import com.sherpa.transcript.domain.export.TranscriptExporter
 import com.sherpa.transcript.data.repository.TranscriptRepository
 import com.sherpa.transcript.domain.audio.AudioCaptureManager
 import com.sherpa.transcript.domain.audio.ChunkedAudioBuffer
+import com.sherpa.transcript.data.local.SpeakerProfileStore
+import com.sherpa.transcript.engine.GlobalVoiceBank
 import com.sherpa.transcript.domain.audio.TestLog
 import com.sherpa.transcript.domain.model.RecordingState
 import com.sherpa.transcript.domain.model.TranscriptSegment
@@ -117,6 +119,14 @@ class LiveViewModel : ViewModel() {
         private const val ENABLE_CHUNKED_DIARIZATION = true
 
         /**
+         * Phase 7 (0.7.0): Persistente geräteweite Speaker-Profile.
+         * true = Auto-Enroll bestätigter Kontakte beim Stop + sofortige
+         * Wiedererkennung bekannter Stimmen über Sessions (GlobalVoiceBank).
+         * A/B gegen false möglich (eine Variable, Log-Zähler VB_GLOBAL_*).
+         */
+        private const val ENABLE_GLOBAL_VOICE_BANK = true
+
+        /**
          * Tuning-Hebel F (Diagnose, 0.5.45) – seit 0.5.53 überholt:
          * ALLOW_NEW_SPEAKER_IDS=false reaktiviert den Strip-Guard.
          *
@@ -185,12 +195,38 @@ class LiveViewModel : ViewModel() {
             diarizer = speakerEngine::process,
             reconciler = rollingReconciler,
             voiceBank = sessionVoiceBank,
+            // Phase 7: persistente Profile als zweiter akustischer Anker
+            // (wirkt nur zusammen mit der Session-Bank – beide sind immer gesetzt).
+            globalBank = globalVoiceBank.takeIf { ENABLE_GLOBAL_VOICE_BANK },
             // Tuning-Hebel 1 rückgängig (0.5.51): Chunk zurück auf 15s + 5s Overlap.
             // Log-Befund 0.5.50: 30s+10s lieferte ein 30,9s-Monster-Segment (beide
             // Sprecher verschmolzen) → speakers=1, kein FIRST_2SPK. Bei 15s+5s hatte
             // Pyannote den Wechsel eindeutig gefunden – das war der bessere Stand.
             chunkSec = 15f,
         )
+    }
+
+    /**
+     * Phase 7: Persistente geräteweite Speaker-Profile (GlobalVoiceBank).
+     * Lädt beim ersten Zugriff aus filesDir/speakerProfiles.json und wird nach
+     * jedem Auto-Enroll geschrieben. KEIN Reset in onCleared – die Bank
+     * überlebt Sessions.
+     * Privacy: speakerProfiles.json liegt in filesDir (biometrische Daten) –
+     * der Debug-Upload scannt nur das testaufnahmen-Verzeichnis und erfasst
+     * sie daher nie. Bei Upload-Erweiterungen gegenprüfen!
+     */
+    private val globalVoiceBank by lazy {
+        GlobalVoiceBank(computer = SherpaEmbeddingComputer(SherpaTranscriptApp.instance.assets)).apply {
+            val stored = speakerProfileStore.loadAll()
+            load(stored)
+            if (stored.isNotEmpty()) {
+                Log.i(TAG, "VB_GLOBAL: ${stored.size} Profile geladen (${stored.map { it.id.takeLast(8) }.joinToString(",")})")
+            }
+        }
+    }
+
+    private val speakerProfileStore by lazy {
+        SpeakerProfileStore(java.io.File(SherpaTranscriptApp.instance.filesDir, "speakerProfiles.json"))
     }
 
     private var captureJob: Job? = null
@@ -1371,11 +1407,13 @@ class LiveViewModel : ViewModel() {
                 Log.d(TAG, "ChunkedDiarization: workerSegs=${diarizationSegs.size} globalIds=[$globalLabels] " +
                         "mapping=[${workerResult.mapping}] new=[${workerResult.newSpeakerIds.sorted().joinToString(",")}] " +
                         "vb=(bank=${workerResult.voiceBankSize} resolve=${workerResult.voiceBankResolvedCount} " +
-                        "enroll=${workerResult.voiceBankEnrolledCount} skip=${workerResult.voiceBankSkipCount})")
+                        "enroll=${workerResult.voiceBankEnrolledCount} skip=${workerResult.voiceBankSkipCount}) " +
+                        "globalResolve=${workerResult.globalResolvedCount} globalMap=${workerResult.globalProfileMapSize}")
                 TestLog.log("CHUNKED epoch=$epoch workerSegs=${diarizationSegs.size} globalIds=[$globalLabels] " +
                         "new=[${workerResult.newSpeakerIds.sorted().joinToString(",")}] " +
                         "vb=(bank=${workerResult.voiceBankSize} resolve=${workerResult.voiceBankResolvedCount} " +
-                        "enroll=${workerResult.voiceBankEnrolledCount} skip=${workerResult.voiceBankSkipCount})")
+                        "enroll=${workerResult.voiceBankEnrolledCount} skip=${workerResult.voiceBankSkipCount}) " +
+                        "global=${workerResult.globalResolvedCount}/${workerResult.globalProfileMapSize}")
 
                 val merged = mergeCandidateIntoBest(candidate)
                 val mergedQuality = computeQuality(merged)
@@ -1644,6 +1682,22 @@ class LiveViewModel : ViewModel() {
             Log.d(TAG, "stopRecording: final diarization")
             if (ENABLE_CHUNKED_DIARIZATION) runChunkedDiarization(forceFinal = true) else runDiarization(forceFinal = true)
             deriveUiSegments()
+
+            // ── Phase 7: Auto-Enroll bestätigter Kontakte in die globale Bank ──
+            // Nur CONFIRMED (2-Kontakt/Quick-Confirm-gehärtet) wandert in die
+            // persistente Bank; pending verfällt. Läuft VOR isSavingFinalResult
+            // und VOR dem Cleanup – der mechanische Wiedererkennungs-Vorteil
+            // ohne jede Nutzer-Interaktion (Host-belegt: vorbank-A/B 95% korrekt).
+            if (ENABLE_GLOBAL_VOICE_BANK) {
+                val confirmed = sessionVoiceBank.confirmedVoiceprints()
+                if (confirmed.isNotEmpty()) {
+                    val res = globalVoiceBank.autoEnrollFrom(confirmed)
+                    withContext(Dispatchers.IO) { speakerProfileStore.saveAll(globalVoiceBank.snapshot()) }
+                    Log.i(TAG, "VB_GLOBAL: autoEnroll merged=${res.mergedIds.size} new=${res.newIds.size} " +
+                            "total=${globalVoiceBank.size} (Quelle: ${confirmed.size} bestätigte Kontakte)")
+                    TestLog.log("VB_GLOBAL autoEnroll merged=${res.mergedIds.size} new=${res.newIds.size} total=${globalVoiceBank.size}")
+                }
+            }
 
             // Offenes Partial als finales Segment sichern, falls vorhanden
             livePartial?.let { partial ->
