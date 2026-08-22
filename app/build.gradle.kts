@@ -117,4 +117,8 @@ dependencies {
     // Unit-Tests
     testImplementation("junit:junit:4.13.2")
     testImplementation("androidx.room:room-testing:2.7.2")
+    // org.json ist in Android eingebaut, aber im JVM-Unit-Test nur ein Stub –
+    // ohne die echte JVM-Implementierung liefern JSONObject-Methoden Defaults
+    // (isReturnDefaultValues) und der SpeakerProfileStore-Test schlägt fehl.
+    testImplementation("org.json:json:20240303")
 }
