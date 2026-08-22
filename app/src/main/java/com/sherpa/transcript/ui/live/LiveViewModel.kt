@@ -1790,7 +1790,7 @@ class LiveViewModel : ViewModel() {
             // für den direkten Upload bereit – kein Share/Umweg mehr nötig
             if (_uiState.value.debugMode) {
                 try {
-                    val md = TranscriptExporter.formatMarkdown(transcript, segEntities)
+                    val md = TranscriptExporter.formatMarkdown(transcript, segEntities, profileNames = buildExportProfileNames())
                     val base = SherpaTranscriptApp.instance.getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS)
                     if (base != null) {
                         val dir = java.io.File(base, "testaufnahmen")
@@ -1939,6 +1939,19 @@ class LiveViewModel : ViewModel() {
         val spkNum = assigned.speakerId?.removePrefix("speaker_")?.toIntOrNull() ?: return null
         val profileId = diarizationChunkWorker.globalProfileBySessionId()[spkNum] ?: return null
         return globalVoiceBank.displayLabel(profileId, fallbackIndex = spkNum)
+    }
+
+    /**
+     * Phase 7a (0.7.2): Exporter-Namens-Map. Schlüssel = speakerLabel ("Sprecher N").
+     * Hinweis: Die Abbildung über die (evtl. nach renumber umnummerierten)
+     * Session-IDs ist für die üblichen Fälle (Profil-IDs 0..2, keine Lücken)
+     * korrekt; bei exotischen Renumbers kann ein Segment ohne Namen bleiben.
+     */
+    private fun buildExportProfileNames(): Map<String, String> {
+        return diarizationChunkWorker.globalProfileBySessionId().entries.mapNotNull { (sessionId, profileId) ->
+            val name = globalVoiceBank.nameFor(profileId) ?: return@mapNotNull null
+            "Sprecher ${sessionId + 1}" to name
+        }.toMap()
     }
 
     /**

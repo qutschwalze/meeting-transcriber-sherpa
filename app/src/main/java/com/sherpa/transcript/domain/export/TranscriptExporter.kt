@@ -61,15 +61,24 @@ object TranscriptExporter {
 
     // ─── TXT ────────────────────────────────────────────────────────────
 
-    fun formatTxt(transcript: TranscriptEntity, segments: List<SegmentEntity>): String {
+    /**
+     * Phase 7a (0.7.2): [profileNames] ersetzt das Block-Label (key = speakerLabel,
+     * z.B. "Sprecher 1" → "Anna"). Leer = Verhalten wie bisher ("Sprecher N").
+     */
+    fun formatTxt(
+        transcript: TranscriptEntity,
+        segments: List<SegmentEntity>,
+        profileNames: Map<String, String> = emptyMap(),
+    ): String {
         val sb = StringBuilder()
         sb.append(transcript.title).append('\n')
         sb.append("Dauer: ").append(formatDuration(transcript.durationMs))
         sb.append(" · Sprecher: ").append(transcript.speakerCount).append('\n')
         for (block in groupBySpeaker(segments)) {
             sb.append('\n')
-            if (block.label != null) {
-                sb.append(block.label).append(' ').append(formatTimestampHms(block.startMs)).append('\n')
+            val label = block.label?.let { profileNames[it] ?: it }
+            if (label != null) {
+                sb.append(label).append(' ').append(formatTimestampHms(block.startMs)).append('\n')
             } else {
                 sb.append("— ").append(formatTimestampHms(block.startMs)).append('\n')
             }
@@ -80,13 +89,22 @@ object TranscriptExporter {
 
     // ─── Markdown ───────────────────────────────────────────────────────
 
-    fun formatMarkdown(transcript: TranscriptEntity, segments: List<SegmentEntity>): String {
+    /**
+     * Phase 7a (0.7.2): [profileNames] ersetzt das Block-Label (key = speakerLabel).
+     * Leer = Verhalten wie bisher.
+     */
+    fun formatMarkdown(
+        transcript: TranscriptEntity,
+        segments: List<SegmentEntity>,
+        profileNames: Map<String, String> = emptyMap(),
+    ): String {
         val sb = StringBuilder()
         sb.append("# ").append(transcript.title).append("\n\n")
         sb.append("**Dauer:** ").append(formatDuration(transcript.durationMs))
         sb.append(" · **Sprecher:** ").append(transcript.speakerCount).append('\n')
         for (block in groupBySpeaker(segments)) {
-            sb.append("\n## ").append(block.label ?: "Unbekannt")
+            val label = block.label?.let { profileNames[it] ?: it }
+            sb.append("\n## ").append(label ?: "Unbekannt")
             sb.append(" · ").append(formatTimestampHms(block.startMs)).append('\n')
             // 0.6.3: Sätze eines Blocks als Fließtext verbinden.
             // 0.6.5: mit LEERZEICHEN statt soft break – die ASR-Segmente splitten

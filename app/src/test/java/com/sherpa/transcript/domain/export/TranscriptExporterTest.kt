@@ -128,4 +128,25 @@ class TranscriptExporterTest {
         assertFalse(md.contains("Nicht mehr merken.\n"))
         assertTrue(md.contains("Ich hab neulich mit meinem Sohn geredet. Er sagt das ähnlich."))
     }
+
+    @Test
+    fun `formatMarkdown ersetzt benannte Profile im Block-Label`() {
+        val md = TranscriptExporter.formatMarkdown(
+            transcript, segments,
+            profileNames = mapOf("Sprecher 1" to "Anna"),
+        )
+        assertTrue("Name statt Sprecher 1", md.contains("## Anna · "))
+        assertTrue("unbenanntes Profil bleibt Sprecher N", md.contains("## Sprecher 2 · "))
+        assertFalse("kein 'Sprecher 1' mehr", md.contains("## Sprecher 1"))
+    }
+
+    @Test
+    fun `formatTxt ersetzt benannte Profile im Block-Label`() {
+        val txt = TranscriptExporter.formatTxt(
+            transcript, segments,
+            profileNames = mapOf("Sprecher 2" to "Bernd"),
+        )
+        assertTrue("Name statt Sprecher 2", txt.contains("Bernd 00:01:02"))
+        assertTrue("unbenanntes Profil bleibt", txt.contains("Sprecher 1 00:00:08"))
+    }
 }
