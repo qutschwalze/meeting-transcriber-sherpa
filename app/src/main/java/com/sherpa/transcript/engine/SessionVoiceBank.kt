@@ -186,6 +186,13 @@ class SessionVoiceBank(
     val enrolledSpeakerIds: Set<Int> get() = voiceprints.keys.toSet()
 
     /**
+     * Bestätigte Voiceprints (globalId → Vektor) – Grundlage für den
+     * Global-Auto-Enroll (Phase 7). Nur CONFIRMED, keine pending: Die
+     * globale Bank darf ausschließlich gehärtete Stimmen übernehmen.
+     */
+    fun confirmedVoiceprints(): Map<Int, FloatArray> = voiceprints.toMap()
+
+    /**
      * Gleicht Audio-Samples gegen die Bank ab – gegen bestätigte Voiceprints UND
      * gegen pending Enrollments (Drift-Auflösung auch vor der Bestätigung).
      * Ein Match gegen ein pending gilt als 2. Kontakt und bestätigt das Enrollment.

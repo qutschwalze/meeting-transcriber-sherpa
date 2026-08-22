@@ -141,4 +141,20 @@ class SessionVoiceBankTest {
         val bank = SessionVoiceBank(FakeComputer())
         assertNull("leere Bank matcht nie", bank.identify(samplesOf(1f, 5f)))
     }
+
+    @Test
+    fun `confirmedVoiceprints - nur bestaetigte Kontakte, keine pending`() {
+        val bank = SessionVoiceBank(FakeComputer())
+        // Pending-Kontakt (3s < Quick-Confirm 4s) – wird NICHT confirmed
+        bank.enroll(globalId = 7, samples = samplesOf(1f, 10f), durationMs = 3_000L)
+        // Quick-Confirm-Kontakt (>= 4s) – wird sofort confirmed
+        bank.enroll(globalId = 9, samples = samplesOf(2f, 10f), durationMs = 6_000L)
+
+        val confirmed = bank.confirmedVoiceprints()
+        assertEquals("nur der bestätigte Kontakt ist confirmed", setOf(9), confirmed.keys)
+        assertTrue("pending-ID (7) ist NICHT enthalten", !confirmed.containsKey(7))
+        // Vektor-Treue: Stimme B ([0,1,0])
+        assertEquals(0f, confirmed.getValue(9)[0], 0f)
+        assertEquals(1f, confirmed.getValue(9)[1], 0f)
+    }
 }
