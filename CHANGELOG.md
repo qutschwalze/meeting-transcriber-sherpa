@@ -2,6 +2,17 @@
 
 Alle Versionswechsel werden hier dokumentiert. Jeder Build erhöht `versionCode` + `versionName` (siehe `app/build.gradle.kts`).
 
+## 0.7.2 / 132 (2026-08-22)
+
+**Phase 7a – Namens-UI + Kontakt-Verwaltung**
+
+- `SpeakerProfile.name` (optional) + Store-Version 2 (alte Dateien laden ohne Bruch); `GlobalVoiceBank`-Namens-API (`rename`/`nameFor`/`displayLabel`).
+- **Zuweisung nach dem Stoppen:** Segment antippen → Sheet mit bekannten Profilen oder „Neuer Kontakt" (Name). ENROLL aus dem Chunk-Puffer (`readWindow`) – kein WAV-Speicher nötig.
+- **Namens-Overlay** in Live- und Detail-Ansicht (nur Anzeige, raw/assigned unangetastet); Export (`.md`/`.txt`) zeigt `## Anna` statt `## Sprecher 1`.
+- **Kontakt-Verwaltung** im Einstellungs-Screen: Profile umbenennen, zusammenführen (sample-gewichtet), löschen – zentrale `SpeakerProfiles`-Instanz (Live + Settings teilen denselben Stand).
+- Worker exponiert Session→Profil-Zuordnung; `VB_GLOBAL_ASSIGN`-Logs.
+- 90+ Unit-Tests grün.
+
 ## 0.7.1 / 131 (2026-08-22)
 
 **Bugfix (Phase 7):** Global-Resolve lernt die Stimme in die Session-Bank ein
