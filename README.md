@@ -4,7 +4,7 @@
 
 Live-Transkription auf dem Gerät inkl. **Speaker Diarization** + **persistenter Speaker-Datenbank** – keine Cloud, kein Netzwerk.
 
-## Features (Stand 0.9.2)
+## Features (Stand 0.9.3)
 
 - ✅ Live-ASR: Sherpa-ONNX OnlineRecognizer (Streaming), Kroko Zipformer-Transducer (Deutsch)
 - ✅ **Speaker Diarization**: ReVerb v1 (Segmentation) + ERes2Net (Embedding, seit 0.6.12 für 3+ Sprecher), offline auf dem Gerät
@@ -34,6 +34,7 @@ Live-Transkription auf dem Gerät inkl. **Speaker Diarization** + **persistenter
 - ✅ **Sprachnachrichten-Import** (Phase 9, 0.9.0): Audiodatei aus WhatsApp/Telegram & Co. teilen → App transkribiert automatisch (MediaCodec-Decoder für Opus/M4A/MP3/AMR, Limit 30 min) und läuft durch dieselbe Diarization+Speaker-DB-Pipeline wie Aufnahmen
 - ✅ **Sprecher nachträglich benennen** (Phase 9a, 0.9.1): Im Detail-Screen Sprecher-Label antippen → Name setzen – alle Segmente des Labels (Anzeige + Export); auch für alte/importierte Transkripte ohne Audio-Zugriff
 - ✅ **Import sichtbar** (Phase 9b, 0.9.2): Globales Banner über allen Tabs + System-Notification mit Fortschritt während des Transkribierens, Abschluss-Meldung „Transkript fertig"
+- ✅ **Import auf dem Live-Screen** (Phase 9c, 0.9.3): Importiertes Transkript erscheint direkt im Live-Tab; Abschluss-Banner mit **Benennen** (springt zu den Segmenten → akustisches ENROLL aus dem importierten Audio → Fingerprint) oder **Überspringen**
 
 ## Architektur
 
