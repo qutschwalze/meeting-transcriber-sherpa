@@ -136,10 +136,9 @@ fun AppNavigation() {
         // egal welche ViewModel-Instanz den Import ausführt.
         val importProgress by com.sherpa.transcript.ui.live.ImportUiBridge.progress.collectAsState()
         val importFileName by com.sherpa.transcript.ui.live.ImportUiBridge.fileName.collectAsState()
-        var bannerDismissed by remember { mutableStateOf(false) }
 
         Column(modifier = Modifier.padding(innerPadding)) {
-            if (importProgress >= 0 && !bannerDismissed) {
+            if (importProgress >= 0) {
                 val fertig = importProgress >= 100
                 Surface(
                     color = if (fertig) MaterialTheme.colorScheme.secondaryContainer
@@ -169,7 +168,7 @@ fun AppNavigation() {
                             // Phase 9c: „Benennen" springt zum Live-Tab, wo die
                             // Segment-Taps das akustische ENROLL aus dem Puffer machen
                             TextButton(onClick = {
-                                bannerDismissed = true
+                                com.sherpa.transcript.ui.live.ImportUiBridge.dismiss()
                                 navController.navigate(BottomNavItem.Live.route) {
                                     popUpTo(navController.graph.findStartDestination().id) { saveState = false }
                                     launchSingleTop = true
@@ -178,7 +177,6 @@ fun AppNavigation() {
                                 Text("Benennen")
                             }
                             TextButton(onClick = {
-                                bannerDismissed = true
                                 com.sherpa.transcript.ui.live.ImportUiBridge.dismiss()
                             }) {
                                 Text("Überspringen")

@@ -266,7 +266,7 @@ fun LiveScreen(
             }
         }
 
-        // Phase 8 (0.7.4): Post-Processing-Anzeige nach Stop (finaler Lauf + Save)
+        // Phase 8 (0.7.4): Nachbearbeitungs-Anzeige nach Stop (finaler Lauf + Save)
                     if (uiState.postProcessing) {
                         LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                         Text(
@@ -279,23 +279,11 @@ fun LiveScreen(
                         )
                     }
 
-                    // Phase 9 (0.9.0): Sprachnachricht-Import läuft
-                    if (uiState.importProgress in 0..99) {
-                        LinearProgressIndicator(
-                            progress = { uiState.importProgress / 100f },
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                        Text(
-                            text = "Transkribiere '${uiState.importFileName ?: "Audio"}' … ${uiState.importProgress}%",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier
-                                .align(Alignment.CenterHorizontally)
-                                .padding(bottom = 4.dp),
-                        )
-                    }
+            // Phase 9d: Das Import-Banner liegt GLOBAL in der AppNavigation
+            // (ImportUiBridge) – hier im LiveScreen bewusst KEIN zweites Banner,
+            // sonst erscheinen zwei Fortschrittsbalken beim Teilen.
 
-                    // ─── Untere Leiste: Status + Slider + Button + Version ─────
+            // ─── Untere Leiste: Status + Slider + Button + Version ─────
                     BottomBar(
             recordingState = uiState.recordingState,
             downloadProgress = uiState.downloadProgress,

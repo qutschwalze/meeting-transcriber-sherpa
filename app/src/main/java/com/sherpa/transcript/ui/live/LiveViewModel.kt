@@ -2060,9 +2060,12 @@ class LiveViewModel : ViewModel() {
 
                     val transcriptId = currentTranscriptId
                     if (segmentsToSave.isNotEmpty() && transcriptId != null) {
-                        // Phase 9b: "fertig"-Notification erst NACH dem Save-Job
+                        // Phase 9d: "fertig"-Anzeige + Notification erst NACH dem Save-Job
                         saveTranscript(transcriptId, segmentsToSave).invokeOnCompletion {
                             postImportDoneNotification(fileName)
+                            // Phase 9d: Bridge auf 100 setzen → globales Banner zeigt
+                            // "Benennen/Überspringen" (fehlte bisher → blau hängend)
+                            com.sherpa.transcript.ui.live.ImportUiBridge.set(100, fileName)
                         }
                     } else stopPostProcessingIndicator()
 
@@ -2072,14 +2075,14 @@ class LiveViewModel : ViewModel() {
                 }
             } catch (e: IllegalArgumentException) {
                 cancelImportNotification()
-                com.sherpa.transcript.ui.live.ImportUiBridge.set(-1, null)
+                com.sherpa.transcript.ui.live.ImportUiBridge.dismiss()
                 _uiState.update { it.copy(importProgress = -1, importFileName = null,
                     error = e.message ?: "Audiodatei ungültig") }
             } catch (t: Throwable) {
                 Log.e(TAG, "importAudio fehlgeschlagen", t)
                 TestLog.log("IMPORT FEHLER: ${t.message}")
                 cancelImportNotification()
-                com.sherpa.transcript.ui.live.ImportUiBridge.set(-1, null)
+                com.sherpa.transcript.ui.live.ImportUiBridge.dismiss()
                 _uiState.update { it.copy(importProgress = -1, importFileName = null,
                     error = "Import fehlgeschlagen: ${t.message}") }
             }

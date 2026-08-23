@@ -2,6 +2,14 @@
 
 Alle Versionswechsel werden hier dokumentiert. Jeder Build erhöht `versionCode` + `versionName` (siehe `app/build.gradle.kts`).
 
+## 0.9.4 / 141 (2026-08-23)
+
+**Phase 9d – Fix: doppelte Fortschrittsbalken beim Teilen**
+
+- Beim Teilen aus WhatsApp erschienen **zwei** Balken: das globale Banner (AppNavigation) + ein zweites lokales im LiveScreen – und der blaue globale blieb hängen, weil ihm der 100-%-Schritt fehlte.
+- **Fix:** Nur noch EIN Banner (das globale über allen Tabs); das lokale LiveScreen-Banner entfernt.
+- **Fix:** Die Bridge bekommt jetzt ihren 100-%-Schritt nach dem Save → „Benennen/Überspringen" erscheinen zuverlässig; Fehlerpfade räumen die Bridge auf.
+
 ## 0.9.3 / 140 (2026-08-23)
 
 **Phase 9c – Import läuft auf dem sichtbaren Live-Screen (Fix) + Benennen/Überspringen**
