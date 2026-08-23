@@ -4,7 +4,7 @@
 
 Live-Transkription auf dem Gerät inkl. **Speaker Diarization** + **persistenter Speaker-Datenbank** – keine Cloud, kein Netzwerk.
 
-## Features (Stand 0.7.2)
+## Features (Stand 0.7.5)
 
 - ✅ Live-ASR: Sherpa-ONNX OnlineRecognizer (Streaming), Kroko Zipformer-Transducer (Deutsch)
 - ✅ **Speaker Diarization**: ReVerb v1 (Segmentation) + ERes2Net (Embedding, seit 0.6.12 für 3+ Sprecher), offline auf dem Gerät
@@ -25,6 +25,12 @@ Live-Transkription auf dem Gerät inkl. **Speaker Diarization** + **persistenter
 - ✅ **Namens-UI** (Phase 7a, 0.7.2): Nach dem Stoppen Segment antippen → Profil zuweisen oder „Neuer Kontakt" benennen (ENROLL aus dem Chunk-Puffer, kein WAV-Speicher); Namen erscheinen live, in History und Export (`## Anna`)
 - ✅ **Kontakt-Verwaltung** (0.7.2): Einstellungen → Profile umbenennen, zusammenführen (sample-gewichtet), löschen – zentrale `SpeakerProfiles`-Instanz, sofort persistiert
 - ✅ Geräte-verifiziert: Politik-Podcast 3/3 Sprecher über Sessions wiedererkannt (0.7.1); Duo-Podcast mit sehr ähnlichen Stimmen ist dokumentierter Grenzfall (Inter-Sim > 0.62)
+- ✅ **Aufnahme-Benachrichtigung** (0.7.4): Persistente Notification während der Aufnahme mit Aktionen **Stop** und **scr** – Bedienung auch ohne App im Vordergrund
+- ✅ **Display-Wach-Toggle** (0.7.3): dezenter `scr`-Button im Live-Screen (`FLAG_KEEP_SCREEN_ON`) – kein Stromsparmodus während der Aufnahme
+- ✅ **Nachbearbeitungs-Anzeige** (0.7.4): Nach dem Stoppen sichtbar, ob/wie lange der finale Diarization-Lauf + Save noch dauert (+ `POSTPROCESS took`-Logzeile)
+- ✅ **Export-Namen aus der History** (0.7.4): `segments.speakerName` (Room-Migration v2) – auch der Share-Export zeigt `## Koschi`; alte Transkripte bleiben „Sprecher N"
+- ✅ **Stabile Sprecherfarben** (0.7.5): Farb-Key = Profil-UUID – dieselbe Person behält über alle Aufnahmen dieselbe Farbe
+- ✅ **Suche über Namen + Texte** (0.7.5): Verlaufs-Suche durchsucht Titel, Segmenttexte und Sprecher-Namen („Koschi" listet alle seine Aufnahmen)
 
 ## Architektur
 
@@ -48,6 +54,10 @@ Navigation      VoiceBank         Zipformer-Transducer
 | **Phase 6** | Einstellungen: Dark Mode (System/hell/dunkel), Schriftgröße persistent, Debug-Schalter, Modell-Info (0.6.8) – Modellwahl/Privacy offen | ✅ (0.6.8) |
 | **Phase 7** | **Persistente Speaker-DB**: `SpeakerProfileStore` (JSON, atomar), `GlobalVoiceBank` (0.62 confirmed-only, rolling average), Auto-Enroll beim Stoppen, Worker-Integration (`VB_GLOBAL_RESOLVE`/`VB_GLOBAL_LEARN`) | ✅ (0.7.0/0.7.1) |
 | **Phase 7a** | **Namens-UI + Kontakt-Verwaltung**: Zuweisung nach Stop (Sample-Fenster aus Chunk-Puffer), Namens-Overlay (Live/Detail), Export mit Namen, Umbenennen/Zusammenführen/Löschen | ✅ (0.7.2) |
+| **Phase 8** | **Komfort & Sichtbarkeit**: Aufnahme-Notification mit Stop/scr-Aktionen, Display-Wach-Toggle (`scr`), Nachbearbeitungs-Anzeige nach dem Stoppen (+`POSTPROCESS`-Log), Export-Namen aus der History (`speakerName`, Room v2) | ✅ (0.7.3–0.7.4) |
+| **Phase 8+** | **Konsistenz**: Stabile Sprecherfarben über Sessions (Profil-UUID als Farb-Key), Suche über Sprecher-Namen + Segmenttexte | ✅ (0.7.5) |
+
+**Downloads:** Aktuelle signierte APKs gibt es unter [Releases](https://github.com/qutschwalze/meeting-transcriber-sherpa/releases/latest) (`app-release.apk` für den normalen Betrieb, `app-debug.apk` mit Debug-Upload/TestLog für Diagnose).
 
 ## Voraussetzungen
 
