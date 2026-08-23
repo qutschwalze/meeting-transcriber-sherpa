@@ -55,4 +55,21 @@ class TranscriptDetailViewModel : ViewModel() {
             _uiState.update { it.copy(segments = segments) }
         }
     }
+
+    /**
+     * Phase 9a (0.9.1): Sprecher-Namen nachträglich zuweisen/ändern.
+     * Setzt speakerName für ALLE Segmente mit diesem Label in diesem Transkript
+     * → Anzeige UND Export nutzen den Namen sofort.
+     * Leerer Name = Zuweisung entfernen (zurück auf "Sprecher N").
+     * Hinweis: Ein akustisches ENROLL ist hier nicht mehr möglich (Audio-Puffer
+     * weg); das globale Profil benennt man über Live → Segment-Tap oder Kontakte.
+     */
+    fun assignSpeakerName(label: String, name: String) {
+        val transcriptId = _uiState.value.transcript?.transcriptId ?: return
+        viewModelScope.launch {
+            repository.assignSpeakerName(transcriptId, label, name.trim().ifBlank { null })
+            // Segmente neu laden (Anzeige + Export nutzen speakerName sofort)
+            _uiState.update { it.copy(segments = repository.getSegments(transcriptId)) }
+        }
+    }
 }

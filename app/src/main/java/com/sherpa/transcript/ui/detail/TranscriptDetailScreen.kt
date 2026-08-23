@@ -3,6 +3,7 @@ package com.sherpa.transcript.ui.detail
 import android.content.Context
 import android.content.Intent
 import android.util.Log
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -24,7 +25,9 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -57,6 +60,10 @@ fun TranscriptDetailScreen(
     viewModel: TranscriptDetailViewModel = viewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsState()
+
+    // Phase 9a (0.9.1): Sprecher-Umbenennen – Label antippen → Dialog
+    var renameLabel by remember { mutableStateOf<String?>(null) }
+    var renameInput by remember { mutableStateOf("") }
 
     LaunchedEffect(transcriptId) {
         viewModel.loadTranscript(transcriptId)
@@ -179,29 +186,78 @@ fun TranscriptDetailScreen(
                             items = displaySegments,
                             key = { it.segmentId },
                         ) { segment ->
-                            SegmentItem(segment)
+                            SegmentItem(
+                                segment = segment,
+                                onSpeakerLabelClick = { label ->
+                                    renameLabel = label
+                                    // Vorbelegen mit dem aktuellen Namen (falls vorhanden)
+                                    renameInput = displaySegments
+                                        .lastOrNull { it.speakerLabel == label }?.speakerName ?: ""
+                                },
+                            )
                         }
                     }
                 }
             }
         }
     }
+
+    // ── Phase 9a (0.9.1): Sprecher-Umbenennen-Dialog ──
+    renameLabel?.let { label ->
+        AlertDialog(
+            onDismissRequest = { renameLabel = null },
+            title = { Text("Sprecher umbenennen") },
+            text = {
+                Column {
+                    Text(
+                        text = "Alle Segmente von '$label' in diesem Transkript erhalten diesen Namen (Anzeige + Export).",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = renameInput,
+                        onValueChange = { renameInput = it },
+                        singleLine = true,
+                        label = { Text("Name (leer = zurück auf $label)") },
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.assignSpeakerName(label, renameInput)
+                    renameLabel = null
+                }) { Text("OK") }
+            },
+            dismissButton = {
+                TextButton(onClick = { renameLabel = null }) { Text("Abbrechen") }
+            },
+        )
+    }
 }
 
 @Composable
-private fun SegmentItem(segment: SegmentEntity) {
+private fun SegmentItem(
+    segment: SegmentEntity,
+    onSpeakerLabelClick: ((String) -> Unit)? = null,
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 6.dp),
     ) {
-        // Sprecherlabel + Timestamp
+        // Sprecherlabel + Timestamp (Phase 9a: Label antippen = umbenennen)
         Column(
-            modifier = Modifier.width(80.dp),
+            modifier = Modifier
+                .width(80.dp)
+                .then(
+                    if (segment.speakerLabel != null && onSpeakerLabelClick != null) {
+                        Modifier.clickable { onSpeakerLabelClick(segment.speakerLabel!!) }
+                    } else Modifier
+                ),
             horizontalAlignment = Alignment.End,
         ) {
             Text(
-                text = segment.speakerLabel ?: "",
+                text = segment.speakerName ?: segment.speakerLabel ?: "",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.primary,
             )

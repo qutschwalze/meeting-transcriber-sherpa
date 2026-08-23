@@ -56,6 +56,18 @@ interface TranscriptDao {
     @Query("SELECT * FROM segments WHERE transcriptId = :tid AND text LIKE '%' || :query || '%' ORDER BY startTimeMs ASC")
     suspend fun searchSegments(tid: String, query: String): List<SegmentEntity>
 
+    /**
+     * Phase 9a (0.9.1): Sprecher-Namen nachträglich zuweisen – alle Segmente
+     * eines Transkripts mit gleichem speakerLabel bekommen denselben Namen.
+     * (Akustisches ENROLL ist danach nicht mehr möglich – der Audio-Puffer
+     * ist weg – aber der Name steuert Anzeige + Export über speakerName.)
+     */
+    @Query(
+        "UPDATE segments SET speakerName = :name " +
+            "WHERE transcriptId = :tid AND speakerLabel = :label"
+    )
+    suspend fun assignSpeakerName(tid: String, label: String, name: String?): Int
+
     @Query("UPDATE transcripts SET title = :title WHERE transcriptId = :id")
     suspend fun updateTitle(id: String, title: String)
 

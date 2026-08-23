@@ -71,6 +71,10 @@ class TranscriptRepository {
         dao.searchSegments(transcriptId, query)
     }
 
+    /** Phase 9a (0.9.1): Alle Segmente mit [label] in [transcriptId] umbenennen. */
+    suspend fun assignSpeakerName(transcriptId: String, label: String, name: String?): Int =
+        withContext(Dispatchers.IO) { dao.assignSpeakerName(transcriptId, label, name) }
+
     suspend fun saveTranscriptWithSegments(
         transcript: TranscriptEntity,
         segments: List<SegmentEntity>,

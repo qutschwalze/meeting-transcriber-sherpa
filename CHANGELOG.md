@@ -2,6 +2,14 @@
 
 Alle Versionswechsel werden hier dokumentiert. Jeder Build erhöht `versionCode` + `versionName` (siehe `app/build.gradle.kts`).
 
+## 0.9.1 / 138 (2026-08-23)
+
+**Phase 9a – Sprecher im Detail-Screen nachträglich benennen**
+
+- Im Transkript-Detail das Sprecher-Label antippen (z. B. „Sprecher 2") → Dialog → Name eingeben: **alle Segmente dieses Labels** bekommen `speakerName` (Anzeige sofort, Export nutzt ihn automatisch). Leer = Zuweisung entfernen.
+- Schließt die Lücke für alte/importierte Transkripte, deren Audio-Puffer weg ist (akustisches ENROLL geht dort nicht mehr – aber der Name steuert Anzeige + Export).
+- DAO: `assignSpeakerName(tid, label, name)` (UPDATE über Label); DetailViewModel lädt Segmente nach dem Umbenennen neu.
+
 ## 0.9.0 / 137 (2026-08-23)
 
 **Phase 9 – Sprachnachrichten teilen → automatisch transkribieren**
