@@ -28,6 +28,11 @@
             android:exported="false"
             android:foregroundServiceType="microphone" />
 
+        <!-- Phase 8 (0.7.4): Aktionen der Aufnahme-Benachrichtigung (Stop / Screen wach) -->
+        <receiver
+            android:name=".ui.live.RecordingActionReceiver"
+            android:exported="false" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true"

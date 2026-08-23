@@ -2,6 +2,15 @@
 
 Alle Versionswechsel werden hier dokumentiert. Jeder Build erhöht `versionCode` + `versionName` (siehe `app/build.gradle.kts`).
 
+## 0.7.4 / 134 (2026-08-23)
+
+**Phase 8 komplett – Post-Processing-Sichtbarkeit, Export-Namen, Aufnahme-Benachrichtigung**
+
+- **Nachbearbeitungs-Anzeige:** Nach dem Stoppen zeigt der Live-Screen „Nachbearbeitung… Ns" (LinearProgressIndicator über der BottomBar) – sichtbar, ob und wie lange der finale Diarization-Lauf + Save dauern; `POSTPROCESS took=…ms` im Log.
+- **Export-Namen aus der History:** `segments.speakerName` (Room-Migration 1→2, zerstörungsfrei per ALTER). Beim Save werden die Profil-Namen mitgespeichert → Share/History-Export (.md/.txt) zeigt `## Anna` statt `## Sprecher 1`; alte Transkripte bleiben „Sprecher N".
+- **Aufnahme-Benachrichtigung:** Während der Aufnahme persistente Notification mit Aktions-Buttons **Stop** und **scr** (Screen wach) – funktioniert über `RecordingActionReceiver` + `RecordingBridge` (Singleton-Ref aufs aktive ViewModel). Verschwindet beim Stop.
+- WACH-Button im Live-Screen auf **„scr"** gekürzt (dezent, 36 dp).
+
 ## 0.7.3 / 133 (2026-08-23)
 
 **Phase 8 – Display-Wach-Toggle**

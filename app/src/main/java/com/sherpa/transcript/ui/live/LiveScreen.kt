@@ -197,7 +197,7 @@ fun LiveScreen(
                     contentPadding = PaddingValues(0.dp),
                 ) {
                     Text(
-                        text = "WACH",
+                        text = "scr",
                         style = MaterialTheme.typography.labelSmall,
                         color = if (uiState.keepScreenOn) MaterialTheme.colorScheme.primary
                         else MaterialTheme.colorScheme.onSurfaceVariant,
@@ -239,8 +239,21 @@ fun LiveScreen(
             }
         }
 
-        // ─── Untere Leiste: Status + Slider + Button + Version ─────
-        BottomBar(
+        // Phase 8 (0.7.4): Post-Processing-Anzeige nach Stop (finaler Lauf + Save)
+                    if (uiState.postProcessing) {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        Text(
+                            text = "Nachbearbeitung… ${uiState.postProcessingElapsedSec}s",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier
+                                .align(Alignment.CenterHorizontally)
+                                .padding(bottom = 4.dp),
+                        )
+                    }
+
+                    // ─── Untere Leiste: Status + Slider + Button + Version ─────
+                    BottomBar(
             recordingState = uiState.recordingState,
             downloadProgress = uiState.downloadProgress,
             isDownloading = uiState.isDownloading,

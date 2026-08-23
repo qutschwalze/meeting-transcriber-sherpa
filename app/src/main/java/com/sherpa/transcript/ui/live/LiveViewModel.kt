@@ -21,6 +21,14 @@ import com.sherpa.transcript.domain.audio.ChunkedAudioBuffer
 import com.sherpa.transcript.data.local.SpeakerProfileStore
 import com.sherpa.transcript.engine.GlobalVoiceBank
 import com.sherpa.transcript.engine.SpeakerProfiles
+import androidx.core.app.NotificationCompat
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.Context
+import android.content.Intent
+import android.app.Application
+import com.sherpa.transcript.R
 import com.sherpa.transcript.domain.audio.TestLog
 import com.sherpa.transcript.domain.model.RecordingState
 import com.sherpa.transcript.domain.model.TranscriptSegment
@@ -57,6 +65,8 @@ data class LiveUiState(
     val latestSegmentId: String? = null,
     val autoScrollEnabled: Boolean = true,
     val keepScreenOn: Boolean = false,   // Phase 8 (0.7.3): Display-Wake-Toggle
+    val postProcessing: Boolean = false,        // Phase 8 (0.7.4): Nachbearbeitung nach Stop läuft
+    val postProcessingElapsedSec: Int = 0,      // Ticker: Sekunden seit Stop
     val fontSize: Float = 16f,
     val isModelReady: Boolean = false,
     val isDownloading: Boolean = false,
@@ -105,6 +115,8 @@ class LiveViewModel : ViewModel() {
 
     companion object {
         private const val TAG = "LiveViewModel"
+        private const val NOTIFICATION_CHANNEL_ID = "recording"
+        private const val NOTIFICATION_ID = 0x5243
         private const val ASR_MODEL = "kroko-de"
         private const val DIARIZATION_INTERVAL_MS = 10_000L
         private const val MAX_AUDIO_FRAMES = 72_000
@@ -229,6 +241,8 @@ class LiveViewModel : ViewModel() {
 
     private var captureJob: Job? = null
     private var diarizationJob: Job? = null
+    private var postProcessTicker: Job? = null
+    private var postProcessStartMs = 0L
     private var currentTranscriptId: String? = null
     private var recordingStartedAt: Long = 0L
 
@@ -396,6 +410,7 @@ class LiveViewModel : ViewModel() {
     private var lastGoodDiarizationCandidate: List<TranscriptSegment>? = null
 
     init {
+        RecordingBridge.current = this   // Phase 8: Notification-Aktionen erreichen die aktive Instanz
         checkModels()
         // Phase 5 (0.6.8): Persistente Einstellungen – Schriftgröße + Debug-Mode
         // aus dem SettingsStore laden und live auf Änderungen reagieren
@@ -586,6 +601,48 @@ class LiveViewModel : ViewModel() {
                     }
                 }
             }
+
+            // Phase 8 (0.7.4): Aufnahme-Benachrichtigung mit Aktionen (Stop / scr)
+            postRecordingNotification()
+        }
+    }
+
+    // ── Phase 8 (0.7.4): Aufnahme-Benachrichtigung ──
+    private fun postRecordingNotification() {
+        try {
+            val app = SherpaTranscriptApp.instance
+            val nm = app.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.createNotificationChannel(
+                NotificationChannel(NOTIFICATION_CHANNEL_ID, "Aufnahme", NotificationManager.IMPORTANCE_LOW)
+            )
+            val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            val stopPi = PendingIntent.getBroadcast(
+                app, 1,
+                Intent(RecordingActionReceiver.ACTION_STOP).setPackage(app.packageName), flags,
+            )
+            val keepPi = PendingIntent.getBroadcast(
+                app, 2,
+                Intent(RecordingActionReceiver.ACTION_KEEP_SCREEN), flags,
+            )
+            val notif = NotificationCompat.Builder(app, NOTIFICATION_CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_launcher_foreground)
+                .setContentTitle("Transkription läuft")
+                .setContentText("Aufnahme aktiv – Tap auf Aktion, um zu stoppen oder Display wach zu halten")
+                .setOngoing(true)
+                .addAction(0, "Stop", stopPi)
+                .addAction(0, "scr", keepPi)
+                .build()
+            nm.notify(NOTIFICATION_ID, notif)
+        } catch (t: Throwable) {
+            Log.w(TAG, "recording notification fehlgeschlagen: ${t.message}")
+        }
+    }
+
+    private fun cancelRecordingNotification() {
+        try {
+            val nm = SherpaTranscriptApp.instance.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.cancel(NOTIFICATION_ID)
+        } catch (_: Throwable) {
         }
     }
 
@@ -1659,8 +1716,31 @@ class LiveViewModel : ViewModel() {
         Log.d(TAG, "SAVE_DBG_DELTA $stageFrom→$stageTo: gone=${gone.size} added=${added.size}")
     }
 
+    // Phase 8 (0.7.4): Post-Processing-Indikator (finaler Lauf + Save + Export)
+    private fun startPostProcessingIndicator() {
+        postProcessStartMs = System.currentTimeMillis()
+        _uiState.update { it.copy(postProcessing = true, postProcessingElapsedSec = 0) }
+        postProcessTicker?.cancel()
+        postProcessTicker = viewModelScope.launch {
+            while (isActive) {
+                delay(1000)
+                _uiState.update { it.copy(postProcessingElapsedSec = it.postProcessingElapsedSec + 1) }
+            }
+        }
+    }
+
+    private fun stopPostProcessingIndicator() {
+        postProcessTicker?.cancel()
+        postProcessTicker = null
+        val durationMs = System.currentTimeMillis() - postProcessStartMs
+        _uiState.update { it.copy(postProcessing = false, postProcessingElapsedSec = 0) }
+        Log.i(TAG, "POSTPROCESS took=${durationMs}ms")
+        TestLog.log("POSTPROCESS took=${durationMs}ms")
+    }
+
     fun stopRecording() {
         isStopping = true
+        cancelRecordingNotification()   // Phase 8: Benachrichtigung entfernen
         _uiState.update { it.copy(recordingState = RecordingState.Idle) }
         audioCapture.stopCapture(); engine.stopSession()
         // 0.6.23: EN-Engine ebenfalls beenden
@@ -1679,6 +1759,9 @@ class LiveViewModel : ViewModel() {
             diarizationJob?.cancel()
             diarizationJob?.join()
             diarizationJob = null
+
+            // Phase 8 (0.7.4): Nachbearbeitung sichtbar machen (finaler Lauf + Save)
+            startPostProcessingIndicator()
 
             // Finaler Lauf: forceFinal=true passiert den Guard, weil !isSavingFinalResult
             Log.d(TAG, "stopRecording: final diarization")
@@ -1752,6 +1835,8 @@ class LiveViewModel : ViewModel() {
                     Log.d(TAG, "LIVE_DBG_SAVE raw=$sourceCount labeled=$labeledCount speakers=$speakerCount persisted=${segmentsToSave.size}")
                 }
                 saveTranscript(transcriptId, segmentsToSave)
+            } else {
+                stopPostProcessingIndicator()   // nichts zu speichern → sofort fertig
             }
             currentTranscriptId = null; currentUtteranceStartMs = null; lastPartialText = ""; lastForcedFlushTime = 0L; lastForcedFlushText = ""
 
@@ -1760,8 +1845,8 @@ class LiveViewModel : ViewModel() {
         }
     }
 
-    private fun saveTranscript(transcriptId: String, segments: List<TranscriptSegment>) {
-        viewModelScope.launch { withContext(Dispatchers.IO) {
+    private fun saveTranscript(transcriptId: String, segments: List<TranscriptSegment>): Job {
+        return viewModelScope.launch { withContext(Dispatchers.IO) {
             val now = System.currentTimeMillis()
             val durationMs = if (recordingStartedAt > 0) now - recordingStartedAt else 0L
             val firstText = segments.firstOrNull()?.text?.take(60)?.trim() ?: "Transkript"
@@ -1770,7 +1855,8 @@ class LiveViewModel : ViewModel() {
             val labeledCount = segments.count { !it.speakerId.isNullOrBlank() }
             val totalDurationMs = if (recordingStartedAt > 0) now - recordingStartedAt else segments.lastOrNull()?.endTimeMs ?: 0L
             val transcript = TranscriptEntity(transcriptId = transcriptId, title = title, durationMs = durationMs, speakerCount = speakerCount, createdAt = recordingStartedAt, updatedAt = now)
-            val segEntities = segments.mapIndexed { i, s -> SegmentEntity(segmentId = s.segmentId, transcriptId = transcriptId, startTimeMs = s.startTimeMs, endTimeMs = s.endTimeMs, text = s.text, speakerId = s.speakerId, speakerLabel = if (s.speakerId != null) (s.speakerLabel ?: "Sprecher 1") else null, isFinal = true, sequenceIndex = i, createdAt = s.timestamp) }
+            val speakerNames = buildExportProfileNames()
+            val segEntities = segments.mapIndexed { i, s -> SegmentEntity(segmentId = s.segmentId, transcriptId = transcriptId, startTimeMs = s.startTimeMs, endTimeMs = s.endTimeMs, text = s.text, speakerId = s.speakerId, speakerLabel = if (s.speakerId != null) (s.speakerLabel ?: "Sprecher 1") else null, speakerName = s.speakerLabel?.let { speakerNames[it] }, isFinal = true, sequenceIndex = i, createdAt = s.timestamp) }
             val entitySpeakerIds = segEntities.mapNotNull { it.speakerId }.distinct().map { it.removePrefix("speaker_") }.sorted()
             Log.i(TAG, "saveStage beforeEntityInsert: entities=${segEntities.size} labeled=${segEntities.count { it.speakerId != null }} speakers=${entitySpeakerIds.size} ids=[${entitySpeakerIds.joinToString(",")}]")
             repository.saveTranscriptWithSegments(transcript, segEntities)
@@ -1779,7 +1865,7 @@ class LiveViewModel : ViewModel() {
             // für den direkten Upload bereit – kein Share/Umweg mehr nötig
             if (_uiState.value.debugMode) {
                 try {
-                    val md = TranscriptExporter.formatMarkdown(transcript, segEntities, profileNames = buildExportProfileNames())
+                    val md = TranscriptExporter.formatMarkdown(transcript, segEntities)
                     val base = SherpaTranscriptApp.instance.getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS)
                     if (base != null) {
                         val dir = java.io.File(base, "testaufnahmen")
@@ -1802,6 +1888,7 @@ class LiveViewModel : ViewModel() {
                 }
             }
             Log.i(TAG, "Saved '$title' — ${segEntities.size} Segmente, ${labeledCount}/$speakerCount labeled, $speakerCount Sprecher, ${totalDurationMs / 1000}s Aufnahme")
+            stopPostProcessingIndicator()   // Phase 8 (0.7.4): Save fertig → Anzeige aus
         }}
     }
 
@@ -2021,6 +2108,8 @@ class LiveViewModel : ViewModel() {
 
     override fun onCleared() {
         super.onCleared()
+        cancelRecordingNotification()
+        RecordingBridge.current = null
         captureJob?.cancel(); diarizationJob?.cancel()
         audioCapture.stopCapture(); engine.release(); speakerEngine.release()
         // 0.6.23: EN-Engine ebenfalls freigeben (Auto-Detection)

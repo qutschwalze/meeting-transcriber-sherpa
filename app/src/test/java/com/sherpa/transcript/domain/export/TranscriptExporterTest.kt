@@ -149,4 +149,15 @@ class TranscriptExporterTest {
         assertTrue("Name statt Sprecher 2", txt.contains("Bernd 00:01:02"))
         assertTrue("unbenanntes Profil bleibt", txt.contains("Sprecher 1 00:00:08"))
     }
+
+    @Test
+    fun `formatMarkdown zeigt speakerName aus den Segmenten (History-Export)`() {
+        val named = listOf(
+            SegmentEntity("s1", "t1", 8_000, 12_000, "Hallo.", "speaker_0", "Sprecher 1", speakerName = "Anna"),
+            SegmentEntity("s2", "t1", 62_000, 68_000, "Ja.", "speaker_1", "Sprecher 2"),
+        )
+        val md = TranscriptExporter.formatMarkdown(transcript, named)
+        assertTrue("gespeicherter Name ohne profileNames-Map", md.contains("## Anna · "))
+        assertTrue("Segment ohne speakerName bleibt Sprecher N", md.contains("## Sprecher 2 · "))
+    }
 }

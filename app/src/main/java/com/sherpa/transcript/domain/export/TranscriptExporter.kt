@@ -15,6 +15,8 @@ object TranscriptExporter {
     /** Ein Sprecher-Block: aufeinanderfolgende Segmente mit gleichem Label. */
     data class Block(
         val label: String?,
+        /** Phase 8 (0.7.4): Profil-Name des Blocks (aus SegmentEntity.speakerName). */
+        val name: String?,
         val startMs: Long,
         val texts: MutableList<String> = mutableListOf(),
     )
@@ -35,7 +37,7 @@ object TranscriptExporter {
             if (last != null && last.label == label) {
                 last.texts += clean
             } else {
-                blocks += Block(label = label, startMs = seg.startTimeMs).apply { texts += clean }
+                blocks += Block(label = label, name = seg.speakerName, startMs = seg.startTimeMs).apply { texts += clean }
             }
         }
         return blocks
@@ -76,7 +78,7 @@ object TranscriptExporter {
         sb.append(" · Sprecher: ").append(transcript.speakerCount).append('\n')
         for (block in groupBySpeaker(segments)) {
             sb.append('\n')
-            val label = block.label?.let { profileNames[it] ?: it }
+            val label = block.name ?: block.label?.let { profileNames[it] ?: it }
             if (label != null) {
                 sb.append(label).append(' ').append(formatTimestampHms(block.startMs)).append('\n')
             } else {
@@ -103,7 +105,7 @@ object TranscriptExporter {
         sb.append("**Dauer:** ").append(formatDuration(transcript.durationMs))
         sb.append(" · **Sprecher:** ").append(transcript.speakerCount).append('\n')
         for (block in groupBySpeaker(segments)) {
-            val label = block.label?.let { profileNames[it] ?: it }
+            val label = block.name ?: block.label?.let { profileNames[it] ?: it }
             sb.append("\n## ").append(label ?: "Unbekannt")
             sb.append(" · ").append(formatTimestampHms(block.startMs)).append('\n')
             // 0.6.3: Sätze eines Blocks als Fließtext verbinden.

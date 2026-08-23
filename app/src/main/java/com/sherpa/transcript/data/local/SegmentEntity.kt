@@ -17,6 +17,8 @@ data class SegmentEntity(
     val text: String,
     val speakerId: String? = null,
     val speakerLabel: String? = null,
+    /** Phase 8 (0.7.4): Profil-Name beim Save mitgespeichert (Export aus der History). */
+    val speakerName: String? = null,
     val speakerConfidence: Float = 0f,
     val asrConfidence: Float = 0f,
     val isFinal: Boolean = true,
