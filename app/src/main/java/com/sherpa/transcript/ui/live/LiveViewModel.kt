@@ -1926,6 +1926,9 @@ class LiveViewModel : ViewModel() {
         val p = _uiState.value.importProgress
         if (p in 0..99) return
         _uiState.update { it.copy(importProgress = 0, importFileName = fileName) }
+        // Phase 9c: Globales Banner (AppNavigation) hängt an der Activity-Instanz –
+        // damit es den Fortschritt sieht, spiegeln wir ihn über die Bridge.
+        com.sherpa.transcript.ui.live.ImportUiBridge.set(0, fileName)
         postImportNotification(fileName, -1)   // Phase 9b: sofort sichtbar
         viewModelScope.launch {
             try {
@@ -2002,6 +2005,7 @@ class LiveViewModel : ViewModel() {
                     if (f % 10 == 0) {   // alle ~1 s Audio
                         val pct = (f * 100 / maxOf(totalFrames, 1)).coerceIn(0, 99)
                         _uiState.update { st -> st.copy(importProgress = pct) }
+                        com.sherpa.transcript.ui.live.ImportUiBridge.set(pct, fileName)
                         postImportNotification(fileName, pct)   // Phase 9b: System-Notification
                         delay(50)   // leichte Drossel (ASR läuft sonst der Diarization davon)
                     }
@@ -2068,12 +2072,14 @@ class LiveViewModel : ViewModel() {
                 }
             } catch (e: IllegalArgumentException) {
                 cancelImportNotification()
+                com.sherpa.transcript.ui.live.ImportUiBridge.set(-1, null)
                 _uiState.update { it.copy(importProgress = -1, importFileName = null,
                     error = e.message ?: "Audiodatei ungültig") }
             } catch (t: Throwable) {
                 Log.e(TAG, "importAudio fehlgeschlagen", t)
                 TestLog.log("IMPORT FEHLER: ${t.message}")
                 cancelImportNotification()
+                com.sherpa.transcript.ui.live.ImportUiBridge.set(-1, null)
                 _uiState.update { it.copy(importProgress = -1, importFileName = null,
                     error = "Import fehlgeschlagen: ${t.message}") }
             }

@@ -17,6 +17,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.navigation.NavDestination.Companion.hierarchy
@@ -128,14 +131,16 @@ fun AppNavigation() {
             }
         },
     ) { innerPadding ->
-        // Phase 9b (0.9.2): Globales Import-Banner – in ALLEN Tabs sichtbar,
-        // damit ein geteiltes Audio nicht lautlos verarbeitet wird.
-        val liveVm: com.sherpa.transcript.ui.live.LiveViewModel = viewModel()
-        val liveState by liveVm.uiState.collectAsState()
+        // Phase 9c (0.9.3): Globales Import-Banner über ALLEN Tabs – hängt an der
+        // ImportUiBridge (Prozess-Singleton), damit es den Fortschritt sieht,
+        // egal welche ViewModel-Instanz den Import ausführt.
+        val importProgress by com.sherpa.transcript.ui.live.ImportUiBridge.progress.collectAsState()
+        val importFileName by com.sherpa.transcript.ui.live.ImportUiBridge.fileName.collectAsState()
+        var bannerDismissed by remember { mutableStateOf(false) }
 
         Column(modifier = Modifier.padding(innerPadding)) {
-            if (liveState.importProgress >= 0) {
-                val fertig = liveState.importProgress >= 100
+            if (importProgress >= 0 && !bannerDismissed) {
+                val fertig = importProgress >= 100
                 Surface(
                     color = if (fertig) MaterialTheme.colorScheme.secondaryContainer
                             else MaterialTheme.colorScheme.primaryContainer,
@@ -147,22 +152,36 @@ fun AppNavigation() {
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         CircularProgressIndicator(
-                            progress = { (liveState.importProgress.coerceAtMost(99)) / 100f },
+                            progress = { (importProgress.coerceAtMost(99)) / 100f },
                             modifier = Modifier.size(22.dp),
                             strokeWidth = 3.dp,
                         )
                         Spacer(modifier = Modifier.width(12.dp))
                         Text(
                             text = if (fertig)
-                                "Import abgeschlossen – Transkript liegt im Verlauf"
+                                "Import abgeschlossen – Segmente unten zuweisen oder überspringen"
                             else
-                                "Transkribiere '${liveState.importFileName ?: "Audio"}' … ${liveState.importProgress}%",
+                                "Transkribiere '${importFileName ?: "Audio"}' … ${importProgress}%",
                             style = MaterialTheme.typography.bodySmall,
                             modifier = Modifier.weight(1f),
                         )
                         if (fertig) {
-                            TextButton(onClick = { liveVm.dismissImportBanner() }) {
-                                Text("OK")
+                            // Phase 9c: „Benennen" springt zum Live-Tab, wo die
+                            // Segment-Taps das akustische ENROLL aus dem Puffer machen
+                            TextButton(onClick = {
+                                bannerDismissed = true
+                                navController.navigate(BottomNavItem.Live.route) {
+                                    popUpTo(navController.graph.findStartDestination().id) { saveState = false }
+                                    launchSingleTop = true
+                                }
+                            }) {
+                                Text("Benennen")
+                            }
+                            TextButton(onClick = {
+                                bannerDismissed = true
+                                com.sherpa.transcript.ui.live.ImportUiBridge.dismiss()
+                            }) {
+                                Text("Überspringen")
                             }
                         }
                     }

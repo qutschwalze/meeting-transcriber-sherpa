@@ -74,6 +74,14 @@ fun LiveScreen(
     // Phase 7a: Segment, das der Nutzer nach dem Stoppen zuweisen will (null = kein Sheet)
     var assignTarget by remember { mutableStateOf<TranscriptSegment?>(null) }
 
+    // Phase 9c: Geteilte Sprachnachricht aus dem Share-Intent konsumieren und
+    // den Import HIER starten (auf der sichtbaren Instanz – Fix für leeren Screen)
+    LaunchedEffect(Unit) {
+        com.sherpa.transcript.ui.live.PendingImport.consume()?.let { (uri, name) ->
+            viewModel.importAudio(uri, name)
+        }
+    }
+
     // Phase 8: Display-Wach-Toggle → Window-Flag an/aus (kein Stromsparmodus)
     val context = LocalContext.current
     LaunchedEffect(uiState.keepScreenOn) {

@@ -66,9 +66,13 @@ class MainActivity : ComponentActivity() {
                         if (!permissionGranted) {
                             permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                         }
-                        // Phase 9: Geteilte Sprachnachricht automatisch transkribieren
+                        // Phase 9c: Share-Intent über PendingImport-Bridge an den
+                        // Live-Screen weiterreichen (dort läuft der Import auf der
+                        // sichtbaren nav-scoped Instanz – Fix für leeren Live-Screen).
                         if (sharedUri != null) {
-                            liveViewModel.importAudio(sharedUri, extractSharedAudioName(intent))
+                            com.sherpa.transcript.ui.live.PendingImport.put(
+                                sharedUri, extractSharedAudioName(intent)
+                            )
                         }
                     }
 

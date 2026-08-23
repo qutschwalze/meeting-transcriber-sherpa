@@ -2,6 +2,14 @@
 
 Alle Versionswechsel werden hier dokumentiert. Jeder Build erhöht `versionCode` + `versionName` (siehe `app/build.gradle.kts`).
 
+## 0.9.3 / 140 (2026-08-23)
+
+**Phase 9c – Import läuft auf dem sichtbaren Live-Screen (Fix) + Benennen/Überspringen**
+
+- **Bugfix (leerer Live-Screen nach Teilen):** Der Import lief bisher auf einer ANDEREN LiveViewModel-Instanz als der angezeigte Live-Screen (Activity-scoped vs. Nav-scoped ViewModelStore) – die Segmente erschienen deshalb nie. Neu: MainActivity legt den Share-Intent in `PendingImport` ab, der **LiveScreen konsumiert ihn** und startet den Import auf seiner eigenen (sichtbaren) Instanz → importiertes Transkript erscheint direkt im Live-Tab.
+- **Abschluss-Banner mit Aktion:** „Benennen" springt direkt in den Live-Tab (Segment-Tap → akustisches ENROLL aus dem importierten Audio → Fingerprint), „Überspringen" schließt das Banner.
+- Import-Fortschritt wandert über `ImportUiBridge` (Prozess-Singleton), damit Banner + Notification immer unabhängig von der Instanz funktionieren.
+
 ## 0.9.2 / 139 (2026-08-23)
 
 **Phase 9b – Import sichtbar machen (Banner + System-Notification)**
