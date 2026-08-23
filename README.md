@@ -4,7 +4,7 @@
 
 Live-Transkription auf dem Gerät inkl. **Speaker Diarization** + **persistenter Speaker-Datenbank** – keine Cloud, kein Netzwerk.
 
-## Features (Stand 0.9.1)
+## Features (Stand 0.9.2)
 
 - ✅ Live-ASR: Sherpa-ONNX OnlineRecognizer (Streaming), Kroko Zipformer-Transducer (Deutsch)
 - ✅ **Speaker Diarization**: ReVerb v1 (Segmentation) + ERes2Net (Embedding, seit 0.6.12 für 3+ Sprecher), offline auf dem Gerät
@@ -33,6 +33,7 @@ Live-Transkription auf dem Gerät inkl. **Speaker Diarization** + **persistenter
 - ✅ **Suche über Namen + Texte** (0.7.5): Verlaufs-Suche durchsucht Titel, Segmenttexte und Sprecher-Namen („Koschi" listet alle seine Aufnahmen)
 - ✅ **Sprachnachrichten-Import** (Phase 9, 0.9.0): Audiodatei aus WhatsApp/Telegram & Co. teilen → App transkribiert automatisch (MediaCodec-Decoder für Opus/M4A/MP3/AMR, Limit 30 min) und läuft durch dieselbe Diarization+Speaker-DB-Pipeline wie Aufnahmen
 - ✅ **Sprecher nachträglich benennen** (Phase 9a, 0.9.1): Im Detail-Screen Sprecher-Label antippen → Name setzen – alle Segmente des Labels (Anzeige + Export); auch für alte/importierte Transkripte ohne Audio-Zugriff
+- ✅ **Import sichtbar** (Phase 9b, 0.9.2): Globales Banner über allen Tabs + System-Notification mit Fortschritt während des Transkribierens, Abschluss-Meldung „Transkript fertig"
 
 ## Architektur
 
@@ -60,6 +61,7 @@ Navigation      VoiceBank         Zipformer-Transducer
 | **Phase 8+** | **Konsistenz**: Stabile Sprecherfarben über Sessions (Profil-UUID als Farb-Key), Suche über Sprecher-Namen + Segmenttexte | ✅ (0.8.0) |
 | **Phase 9** | **Sprachnachricht teilen → transkribieren**: Share-Intent (`audio/*`), MediaExtractor/MediaCodec-Decoder → 16 kHz mono, Offline-Feed durch die normale Pipeline, Fortschritts-Anzeige | ✅ (0.9.0) |
 | **Phase 9a** | **Nachträgliche Sprecher-Benennung**: Label-Tap im Detail-Screen → Name für alle Segmente des Labels (Anzeige + Export), auch für alte/importierte Transkripte | ✅ (0.9.1) |
+| **Phase 9b** | **Import sichtbar machen**: Globales Banner über allen Tabs + System-Notification mit Fortschritt + Abschluss-Meldung | ✅ (0.9.2) |
 
 **Downloads:** Aktuelle signierte APKs gibt es unter [Releases](https://github.com/qutschwalze/meeting-transcriber-sherpa/releases/latest) (`app-release.apk` für den normalen Betrieb, `app-debug.apk` mit Debug-Upload/TestLog für Diagnose).
 
