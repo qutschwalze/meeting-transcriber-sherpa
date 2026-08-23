@@ -140,6 +140,16 @@ class DiarizationChunkWorker(
     fun globalProfileBySessionId(): Map<Int, String> = globalProfileBySessionId.toMap()
 
     /**
+     * Phase 9d (0.9.5): Session-GID manuell einem Profil zuordnen – aufgerufen
+     * vom ViewModel nach `assignSpeakerToSegment` (manueller ENROLL), damit die
+     * Namens-Auflösung (Anzeige + Export) den neuen Fingerprint SOFORT kennt
+     * und nicht erst beim nächsten automatischen Global-Match.
+     */
+    fun registerProfileMapping(sessionId: Int, profileId: String) {
+        globalProfileBySessionId[sessionId] = profileId
+    }
+
+    /**
      * Verarbeitet den nächsten Chunk, falls genügend neues Audio vorliegt.
      *
      * @return null wenn noch kein neuer Chunk verfügbar ist; sonst das Worker-Ergebnis.

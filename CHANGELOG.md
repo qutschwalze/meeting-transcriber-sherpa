@@ -2,6 +2,13 @@
 
 Alle Versionswechsel werden hier dokumentiert. Jeder Build erhöht `versionCode` + `versionName` (siehe `app/build.gradle.kts`).
 
+## 0.9.5 / 142 (2026-08-23)
+
+**Phase 9e – Fix: Fingerprint-Zuweisung ändert Namen sofort**
+
+- **Geräte-Befund:** Nach dem Setzen eines Fingerprints im Live-Screen blieben Anzeige UND Verlauf bei „Sprecher x" – erst die nächste Aufnahme zeigte den neuen Namen. Ursache: Das manuelle ENROLL registrierte keinen Eintrag in der Session→Profil-Mapping-Tabelle (`global=0/0` im Log), aus der Anzeige/Export die Brücke „Sprecher x → Profil" lesen.
+- **Fix:** `assignSpeakerToSegment` ruft jetzt `registerProfileMapping(sessionId, profil)` auf dem Worker auf → der Name erscheint **sofort** in Live-Anzeige und folgendem Export; die nächste Aufnahme erkennt die Stimme weiterhin automatisch.
+
 ## 0.9.4 / 141 (2026-08-23)
 
 **Phase 9d – Fix: doppelte Fortschrittsbalken beim Teilen**

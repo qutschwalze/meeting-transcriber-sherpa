@@ -2313,6 +2313,11 @@ class LiveViewModel : ViewModel() {
         }
         if (globalVoiceBank.enrollFromSamples(targetId, samples)) {
             if (newName != null) globalVoiceBank.rename(targetId, newName)
+            // Phase 9d (0.9.5): Session-GID des Segments SOFORT dem Profil zuordnen –
+            // ohne diesen Eintrag kennt die Namens-Auflösung (Anzeige + Export) den
+            // neuen Fingerprint erst beim nächsten automatischen Global-Match.
+            val gid = seg.speakerId?.removePrefix("speaker_")?.toIntOrNull()
+            if (gid != null) diarizationChunkWorker.registerProfileMapping(gid, targetId)
             SpeakerProfiles.save()
             refreshSpeakerProfiles()
             deriveUiSegments()
