@@ -38,6 +38,21 @@ interface TranscriptDao {
     @Query("SELECT * FROM transcripts WHERE title LIKE '%' || :query || '%' ORDER BY createdAt DESC")
     suspend fun searchTranscripts(query: String): List<TranscriptEntity>
 
+    /**
+     * Phase 8 (0.7.5): Volltextsuche über Titel, Segmenttext UND Sprecher-Namen.
+     * Ein Transkript matcht, wenn Titel ODER irgendein Segment (Text oder
+     * speakerName) die Query enthält – so findet "Koschi" alle Aufnahmen mit
+     * seinem Namen, auch wenn der Name nur im Sprecher-Label steckt.
+     */
+    @Query(
+        "SELECT DISTINCT t.* FROM transcripts t WHERE " +
+            "t.title LIKE '%' || :query || '%' " +
+            "OR EXISTS (SELECT 1 FROM segments s WHERE s.transcriptId = t.transcriptId " +
+            "AND (s.text LIKE '%' || :query || '%' OR s.speakerName LIKE '%' || :query || '%')) " +
+            "ORDER BY t.createdAt DESC"
+    )
+    suspend fun searchTranscriptsFull(query: String): List<TranscriptEntity>
+
     @Query("SELECT * FROM segments WHERE transcriptId = :tid AND text LIKE '%' || :query || '%' ORDER BY startTimeMs ASC")
     suspend fun searchSegments(tid: String, query: String): List<SegmentEntity>
 

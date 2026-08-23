@@ -80,6 +80,8 @@ data class LiveUiState(
     val displayCount: Int = 0,
     /** Phase 7a (0.7.2): bekannte Profile für Namens-Overlay + Kontakte-Screen. */
     val speakerProfiles: List<SpeakerProfileUi> = emptyList(),
+    /** Phase 8 (0.7.5): Session-GID → Profil-UUID (stabile Farben über Sessions). */
+    val sessionProfileMap: Map<Int, String> = emptyMap(),
 )
 
 /** Phase 7a: Anzeige-Pendant eines persistierten Speaker-Profils (kein Embedding nötig). */
@@ -2036,7 +2038,12 @@ class LiveViewModel : ViewModel() {
      */
     private fun refreshSpeakerProfiles() {
         val profiles = globalVoiceBank.snapshot().map { SpeakerProfileUi(it.id, it.name, it.sampleCount) }
-        _uiState.update { it.copy(speakerProfiles = profiles) }
+        _uiState.update {
+            it.copy(
+                speakerProfiles = profiles,
+                sessionProfileMap = diarizationChunkWorker.globalProfileBySessionId(),
+            )
+        }
     }
 
     /**

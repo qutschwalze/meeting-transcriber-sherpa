@@ -121,6 +121,19 @@ fun LiveScreen(
         }
     }
 
+    // Phase 8 (0.7.5): Scroll-Repro-Diagnose für den Zuweisungs-Sprung-Bug.
+    // Loggt jede Auto-Scroll-Aktivierung + Position; im TestLog landet die Zeile
+    // neben der WAV (Host-Analyse). Aktiv nur im Debug-Modus.
+    LaunchedEffect(uiState.autoScrollEnabled, uiState.segments.size, assignTarget) {
+        if (!uiState.debugMode || !uiState.autoScrollEnabled) return@LaunchedEffect
+        val info = listState.layoutInfo
+        val first = info.visibleItemsInfo.firstOrNull()?.index ?: -1
+        android.util.Log.d("SCROLL_REPRO", "auto=on first=$first total=${info.totalItemsCount} segs=${uiState.segments.size} sheet=${assignTarget != null}")
+        com.sherpa.transcript.domain.audio.TestLog.log(
+            "SCROLL_REPRO auto=on first=$first total=${info.totalItemsCount} segs=${uiState.segments.size} sheet=${assignTarget != null}"
+        )
+    }
+
     Column(modifier = Modifier.fillMaxSize()) {
         // ─── Transkript-Anzeige (füllt den verfügbaren Platz) ──────
         Box(modifier = Modifier.weight(1f)) {
@@ -153,6 +166,11 @@ fun LiveScreen(
                         }
                         val isRemapped = segment.segmentId in uiState.remappedSegmentIds
                         // Phase 7a: Tap auf Segment (nach Stop) öffnet das Zuweisungs-Sheet
+                        // Phase 8 (0.7.5): stabiler Farb-Key = Profil-UUID (Fallback Session-ID)
+                        val spkNum = segment.speakerId?.removePrefix("speaker_")?.toIntOrNull()
+                        val colorKey = if (spkNum != null) {
+                            uiState.sessionProfileMap[spkNum] ?: segment.speakerId
+                        } else segment.speakerId
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -166,6 +184,7 @@ fun LiveScreen(
                                 isLatest = isLatest,
                                 debugMode = uiState.debugMode,
                                 isRemapped = isRemapped,
+                                colorKey = colorKey,
                             )
                         }
                     }
@@ -460,6 +479,8 @@ private fun TranscriptSegmentItem(
     modifier: Modifier = Modifier,
     debugMode: Boolean = false,
     isRemapped: Boolean = false,
+    /** Phase 8 (0.7.5): stabiler Farb-Key (Profil-UUID oder Session-ID). */
+    colorKey: String? = null,
 ) {
     val backgroundColor = when {
         isRemapped -> MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.35f)
@@ -475,9 +496,9 @@ private fun TranscriptSegmentItem(
 
     val fontStyle = if (!segment.isFinal) FontStyle.Italic else FontStyle.Normal
 
-    // Sprecherfarbe
-    val speakerColor = segment.speakerId?.let { speakerId ->
-        SpeakerColors[speakerId.hashCode().mod(SpeakerColors.size).absoluteValue]
+    // Sprecherfarbe – Phase 8 (0.7.5): Farb-Key kommt vom Aufrufer (Profil-UUID bevorzugt).
+    val speakerColor = colorKey?.let { key ->
+        SpeakerColors[key.hashCode().mod(SpeakerColors.size).absoluteValue]
     }
 
     Row(

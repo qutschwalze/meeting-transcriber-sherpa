@@ -62,7 +62,8 @@ class TranscriptRepository {
 
     suspend fun searchTranscripts(query: String): List<TranscriptEntity> = withContext(Dispatchers.IO) {
         migrateJsonIfNeeded()
-        dao.searchTranscripts(query)
+        // Phase 8 (0.7.5): Titel + Segmenttext + Sprecher-Namen
+        dao.searchTranscriptsFull(query)
     }
 
     suspend fun searchSegments(transcriptId: String, query: String): List<SegmentEntity> = withContext(Dispatchers.IO) {

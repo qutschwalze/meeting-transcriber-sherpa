@@ -2,6 +2,14 @@
 
 Alle Versionswechsel werden hier dokumentiert. Jeder Build erhöht `versionCode` + `versionName` (siehe `app/build.gradle.kts`).
 
+## 0.7.5 / 135 (2026-08-23)
+
+**Phase 8 – Stabile Sprecherfarben, Namenssuche, Scroll-Diagnose**
+
+- **Stabile Sprecherfarben:** Farb-Key ist jetzt die Profil-UUID statt der Session-ID – dieselbe Person behält über alle Aufnahmen dieselbe Farbe (Fallback Session-ID bei unzugeordneten Speakern).
+- **Suche findet Namen und Text:** Die Verlaufs-Suche durchsucht jetzt zusätzlich Segmenttexte und Sprecher-Namen (`searchTranscriptsFull`, DISTINCT-Query mit EXISTS-Subquery) – „Koschi" listet damit alle Aufnahmen, in denen sein Name vorkommt.
+- **Scroll-Repro-Log** (`SCROLL_REPRO …` im TestLog, nur Debug-Modus): protokolliert Auto-Scroll-Aktivierung + Listenposition + Sheet-Zustand zur Diagnose des Zuweisungs-Sprung-Bugs.
+
 ## 0.7.4 / 134 (2026-08-23)
 
 **Phase 8 komplett – Post-Processing-Sichtbarkeit, Export-Namen, Aufnahme-Benachrichtigung**
