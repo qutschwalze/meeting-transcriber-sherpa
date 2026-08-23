@@ -41,6 +41,12 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- Phase 9 (0.9.0): Geteilte Sprachnachrichten empfangen (WhatsApp/Telegram/…) -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="audio/*" />
+            </intent-filter>
         </activity>
 
         <!-- Phase 4 (0.6.2): Export-Dateien teilen (ShareSheet) -->

@@ -17,6 +17,7 @@ import com.sherpa.transcript.data.local.TranscriptEntity
 import com.sherpa.transcript.domain.export.TranscriptExporter
 import com.sherpa.transcript.data.repository.TranscriptRepository
 import com.sherpa.transcript.domain.audio.AudioCaptureManager
+import com.sherpa.transcript.domain.audio.AudioImportDecoder
 import com.sherpa.transcript.domain.audio.ChunkedAudioBuffer
 import com.sherpa.transcript.data.local.SpeakerProfileStore
 import com.sherpa.transcript.engine.GlobalVoiceBank
@@ -67,6 +68,9 @@ data class LiveUiState(
     val keepScreenOn: Boolean = false,   // Phase 8 (0.7.3): Display-Wake-Toggle
     val postProcessing: Boolean = false,        // Phase 8 (0.7.4): Nachbearbeitung nach Stop läuft
     val postProcessingElapsedSec: Int = 0,      // Ticker: Sekunden seit Stop
+    /** Phase 9 (0.9.0): Import läuft – Fortschritt 0..100, -1 = inaktiv. */
+    val importProgress: Int = -1,
+    val importFileName: String? = null,
     val fontSize: Float = 16f,
     val isModelReady: Boolean = false,
     val isDownloading: Boolean = false,
@@ -1844,6 +1848,168 @@ class LiveViewModel : ViewModel() {
 
             // 0.6.16: Debug-Upload – alle Dateien zum Server senden (nach Save)
             if (_uiState.value.debugMode) triggerDebugUpload()
+        }
+    }
+
+    /**
+     * Phase 9 (0.9.0): Sprachnachricht/Audiodatei importieren und automatisch
+     * transkribieren + diarizieren. Aufgerufen aus dem Share-Intent
+     * (MainActivity → LiveViewModel).
+     *
+     * Zeitbasis: Die Engine/der Pipeline rechnet mit sessionRelativeMs()
+     * (= wall-clock seit recordingStartedAt). Für den Offline-Feed führen wir
+     * eine virtuelle Uhr: pro 100-ms-Frame wird recordingStartedAt so
+     * nachgeführt, dass sessionRelativeMs() exakt die Audiodauer abbildet –
+     * dadurch funktionieren handleResult/dedupe/diarization unverändert.
+     */
+    fun importAudio(uri: android.net.Uri, fileName: String) {
+        if (_uiState.value.importProgress >= 0) return   // kein Doppel-Import
+        _uiState.update { it.copy(importProgress = 0, importFileName = fileName) }
+        viewModelScope.launch {
+            try {
+                // 1. Dekodieren (IO)
+                val samples = withContext(Dispatchers.IO) {
+                    AudioImportDecoder.decodeTo16kMono(SherpaTranscriptApp.instance, uri)
+                }
+                if (samples == null || samples.isEmpty()) {
+                    _uiState.update { it.copy(importProgress = -1, importFileName = null,
+                        error = "Audioformat konnte nicht dekodiert werden") }
+                    return@launch
+                }
+
+                // 2. Modelle sicherstellen (gleicher Pfad wie startRecording)
+                _uiState.update { it.copy(recordingState = RecordingState.Initializing) }
+                if (!engine.isInitialized) {
+                    downloadWithProgress("ASR", "Lade Spracherkennungsmodell…") {
+                        val ctx = SherpaTranscriptApp.instance
+                        if (!ModelDownloadManager.isModelDownloaded(ctx, ASR_MODEL)) ModelDownloadManager.downloadModel(ctx, ASR_MODEL) { done, total -> _uiState.update { it.copy(downloadProgress = if (total > 0) done.toFloat() / total else 0f) } }
+                        else true
+                    }
+                    engine.initialize(ASR_MODEL); _uiState.update { it.copy(isModelReady = true) }
+                }
+                if (!speakerEngine.isInitialized) {
+                    downloadWithProgress("Speaker", "Lade Sprechererkennung…") {
+                        if (!SpeakerModelDownloadManager.areModelsDownloaded()) SpeakerModelDownloadManager.downloadModels { _, done, total -> _uiState.update { it.copy(downloadProgress = if (total > 0) done.toFloat() / total else 0f) } }
+                        else true
+                    }
+                    speakerEngine.initialize(clusteringMode)
+                }
+
+                // 3. Session zurücksetzen (wie startRecording, ohne Mikrofon)
+                engine.startSession()
+                _uiState.update { it.copy(segments = emptyList(), latestSegmentId = null, recordingState = RecordingState.Listening) }
+                currentTranscriptId = java.util.UUID.randomUUID().toString()
+                recordingStartedAt = System.currentTimeMillis()
+                currentLanguage = null; deHasFinalText = false; enHasFinalText = false
+                rawFinalSegments.clear(); assignedFinalSegments = emptyList()
+                bestAssignmentQuality = AssignmentQuality(0, 0, 0)
+                livePartial = null; currentUtteranceStartMs = null
+                lastPartialText = ""; lastForcedFlushTime = 0L; lastForcedFlushText = ""
+                isStopping = false; isSavingFinalResult = false
+                lastDiarizationSegments = emptyList(); lastGoodDiarizationCandidate = null
+                lastShownSpeakerIds.clear(); firstTwoSpeakerLogged = false
+                speakerEngine.resetZeroSegmentCounters()
+                synchronized(audioLock) { audioAccumulator.clear(); audioBaseTimeMs = 0L }
+                chunkedAudioBuffer.clear(); diarizationChunkWorker.reset(); sessionVoiceBank.reset()
+                pushedSampleCountMs = 0L
+
+                // 4. Offline-Feed: Frames à 100 ms in Echtzeit-Geschwindigkeit füttern.
+                //    Virtuelle Uhr: recordingStartedAt wird pro Frame zurückgesetzt, damit
+                //    sessionRelativeMs() == Audiozeit. ASR ist offline schneller als
+                //    Echtzeit → wir drosseln auf ~1×, damit Timestamps konsistent bleiben.
+                val frameSize = 1_600   // 100 ms @16 kHz
+                val totalFrames = samples.size / frameSize
+                TestLog.log("IMPORT start file=$fileName samples=${samples.size} frames=$totalFrames")
+                for (f in 0 until totalFrames) {
+                    val frame = samples.copyOfRange(f * frameSize, (f + 1) * frameSize)
+
+                    // Virtuelle Uhr auf Frame-Start setzen
+                    recordingStartedAt = System.currentTimeMillis() - (f * 100L)
+
+                    val result = engine.processFrame(frame)
+                    if (result != null && result.text.isNotBlank()) handleResult(result.text, result.isFinal)
+
+                    synchronized(audioLock) {
+                        audioAccumulator.addLast(frame)
+                        if (audioAccumulator.isEmpty()) audioBaseTimeMs = 0L
+                        if (audioAccumulator.size > MAX_AUDIO_FRAMES) { audioAccumulator.removeFirst(); /* base bleibt: virtuelle Uhr deckt das ab */ }
+                        chunkedAudioBuffer.push(frame, pushedSampleCountMs)
+                        pushedSampleCountMs += frame.size * 1000L / 16_000L
+                    }
+
+                    if (f % 10 == 0) {   // alle ~1 s Audio
+                        _uiState.update { st ->
+                            st.copy(importProgress = (f * 100 / maxOf(totalFrames, 1)).coerceIn(0, 100))
+                        }
+                        delay(50)   // leichte Drossel (ASR läuft sonst der Diarization davon)
+                    }
+                }
+                // Rest-Samples (< 100 ms) verwerfen – vernachlässigbar
+
+                // 5. Finalisieren = derselbe Pfad wie stopRecording (Diarization final,
+                //    Auto-Enroll, Save). Wir rufen stopRecording NICHT auf (kein Capture),
+                //    sondern replizieren nur den Finalisierungs-Kern:
+                isStopping = true
+                cancelRecordingNotification()
+                _uiState.update { it.copy(recordingState = RecordingState.Idle) }
+                engine.stopSession()
+
+                viewModelScope.launch {
+                    startPostProcessingIndicator()
+                    runChunkedDiarization(forceFinal = true)
+                    deriveUiSegments()
+
+                    if (ENABLE_GLOBAL_VOICE_BANK) {
+                        val confirmed = sessionVoiceBank.confirmedVoiceprints()
+                        if (confirmed.isNotEmpty()) {
+                            val res = globalVoiceBank.autoEnrollFrom(confirmed)
+                            withContext(Dispatchers.IO) { SpeakerProfiles.save() }
+                            refreshSpeakerProfiles()
+                            Log.i(TAG, "VB_GLOBAL(import): autoEnroll merged=${res.mergedIds.size} new=${res.newIds.size}")
+                            TestLog.log("VB_GLOBAL autoEnroll merged=${res.mergedIds.size} new=${res.newIds.size} total=${globalVoiceBank.size}")
+                        }
+                    }
+
+                    livePartial?.let { partial ->
+                        if (partial.text.isNotBlank()) {
+                            val flushed = partial.copy(isFinal = true, isNew = true)
+                            if (!dedupeOrMergeIntoLastSegment(flushed.text, flushed.startTimeMs, flushed.endTimeMs)) {
+                                rawFinalSegments.add(flushed)
+                            }
+                            livePartial = null
+                        }
+                    }
+                    deriveUiSegments()
+
+                    isSavingFinalResult = true
+                    val overlay = correctOverlayByVoiceBank(
+                        resolveListByNearestConfirmed(buildAssignedOverlayForAllRawSegments())
+                    )
+                    val splitOverlay = if (lastDiarizationSegments.isNotEmpty()) {
+                        TimelineComposer.splitLongSpeakerSegments(overlay, lastDiarizationSegments)
+                    } else overlay
+                    val segmentsToSave = if (splitOverlay.size >= 3) {
+                        FinalTranscriptComposer.enrichAssignmentForSave(splitOverlay)
+                    } else splitOverlay
+
+                    val transcriptId = currentTranscriptId
+                    if (segmentsToSave.isNotEmpty() && transcriptId != null) {
+                        saveTranscript(transcriptId, segmentsToSave)
+                    } else stopPostProcessingIndicator()
+
+                    currentTranscriptId = null
+                    _uiState.update { it.copy(importProgress = 100) }
+                    TestLog.log("IMPORT fertig file=$fileName segs=${segmentsToSave.size}")
+                }
+            } catch (e: IllegalArgumentException) {
+                _uiState.update { it.copy(importProgress = -1, importFileName = null,
+                    error = e.message ?: "Audiodatei ungültig") }
+            } catch (t: Throwable) {
+                Log.e(TAG, "importAudio fehlgeschlagen", t)
+                TestLog.log("IMPORT FEHLER: ${t.message}")
+                _uiState.update { it.copy(importProgress = -1, importFileName = null,
+                    error = "Import fehlgeschlagen: ${t.message}") }
+            }
         }
     }
 

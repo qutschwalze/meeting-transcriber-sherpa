@@ -2,6 +2,16 @@
 
 Alle Versionswechsel werden hier dokumentiert. Jeder Build erhöht `versionCode` + `versionName` (siehe `app/build.gradle.kts`).
 
+## 0.9.0 / 137 (2026-08-23)
+
+**Phase 9 – Sprachnachrichten teilen → automatisch transkribieren**
+
+- **Share-Intent:** Die App erscheint im Teilen-Sheet von WhatsApp/Telegram/etc. für Audiodateien (`audio/*`) – Sprachnachricht antippen → teilen → Sherpa Transcript wählt sich die Datei automatisch transkribiert + diariziert in den Verlauf.
+- **Audio-Import-Decoder:** `MediaExtractor` + `MediaCodec` → PCM16 → Mono-Downmix → linearer Resampler auf 16 kHz (`AudioResampler`, JVM-getestet). Deckt Opus/OGG (WhatsApp), M4A/AAC, MP3, AMR ab – alles, was MediaCodec dekodiert.
+- **Offline-Feed mit virtueller Uhr:** Frames à 100 ms werden mit nachgeführter Zeitbasis durch die normale ASR-Pipeline gefüttert; danach läuft derselbe Finalisierungs-Pfad wie bei Aufnahmen (Diarization forceFinal, Auto-Enroll in die Speaker-DB, Save) – importierte Nachrichten profitieren also auch von der Wiedererkennung.
+- **Fortschritts-Anzeige:** „Transkribiere ‚Datei' … N %" über der BottomBar während des Imports; Limit 30 min pro Datei (Schutz vor Speicher-Explosion).
+- Titel = Dateiname bzw. „Sprachnachricht"; keine Storage-Permission nötig (URI-Zugriff kommt vom Share-Intent).
+
 ## 0.8.0 / 136 (2026-08-23)
 
 **Re-Versionierung: Phase 8 komplett → 0.8.x** (Konsistenz zur Phasen-Nummerierung; identischer Code zu 0.7.5/135). Erste 0.8er-Release mit signierten APKs.

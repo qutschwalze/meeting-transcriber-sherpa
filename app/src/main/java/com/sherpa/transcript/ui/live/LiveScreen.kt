@@ -271,6 +271,22 @@ fun LiveScreen(
                         )
                     }
 
+                    // Phase 9 (0.9.0): Sprachnachricht-Import läuft
+                    if (uiState.importProgress in 0..99) {
+                        LinearProgressIndicator(
+                            progress = { uiState.importProgress / 100f },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Text(
+                            text = "Transkribiere '${uiState.importFileName ?: "Audio"}' … ${uiState.importProgress}%",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier
+                                .align(Alignment.CenterHorizontally)
+                                .padding(bottom = 4.dp),
+                        )
+                    }
+
                     // ─── Untere Leiste: Status + Slider + Button + Version ─────
                     BottomBar(
             recordingState = uiState.recordingState,
