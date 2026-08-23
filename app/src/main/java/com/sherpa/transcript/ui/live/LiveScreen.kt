@@ -50,6 +50,9 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.sherpa.transcript.ui.live.components.AssignSpeakerSheet
+import androidx.compose.ui.platform.LocalContext
+import android.app.Activity
+import android.view.WindowManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -70,6 +73,17 @@ fun LiveScreen(
 
     // Phase 7a: Segment, das der Nutzer nach dem Stoppen zuweisen will (null = kein Sheet)
     var assignTarget by remember { mutableStateOf<TranscriptSegment?>(null) }
+
+    // Phase 8: Display-Wach-Toggle → Window-Flag an/aus (kein Stromsparmodus)
+    val context = LocalContext.current
+    LaunchedEffect(uiState.keepScreenOn) {
+        val activity = context as? Activity ?: return@LaunchedEffect
+        if (uiState.keepScreenOn) {
+            activity.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+            activity.window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
 
     // Scroll-Trigger: reagiert auf neue Segmente UND Textänderungen im letzten Segment
     val scrollTrigger by remember {
@@ -169,22 +183,40 @@ fun LiveScreen(
                         .padding(top = 8.dp, start = 12.dp),
                 )
             }
-            // Debug-Toggle (oben rechts, über der Liste)
-            FilledTonalButton(
-                onClick = viewModel::toggleDebugMode,
+            // Phase 8: Display-Wach-Toggle (dezenter Mini-Button neben DBG)
+            Row(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
-                    .padding(8.dp)
-                    .size(36.dp),
-                shape = CircleShape,
-                contentPadding = PaddingValues(0.dp),
+                    .padding(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                Text(
-                    text = "DBG",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (uiState.debugMode) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                FilledTonalButton(
+                    onClick = viewModel::toggleKeepScreenOn,
+                    modifier = Modifier.size(36.dp),
+                    shape = CircleShape,
+                    contentPadding = PaddingValues(0.dp),
+                ) {
+                    Text(
+                        text = "WACH",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (uiState.keepScreenOn) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                // Debug-Toggle (oben rechts, über der Liste)
+                FilledTonalButton(
+                    onClick = viewModel::toggleDebugMode,
+                    modifier = Modifier.size(36.dp),
+                    shape = CircleShape,
+                    contentPadding = PaddingValues(0.dp),
+                ) {
+                    Text(
+                        text = "DBG",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (uiState.debugMode) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         }
 

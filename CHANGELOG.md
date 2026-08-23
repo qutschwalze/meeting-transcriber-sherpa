@@ -2,6 +2,12 @@
 
 Alle Versionswechsel werden hier dokumentiert. Jeder Build erhöht `versionCode` + `versionName` (siehe `app/build.gradle.kts`).
 
+## 0.7.3 / 133 (2026-08-23)
+
+**Phase 8 – Display-Wach-Toggle**
+
+- Dezenter WACH-Button im Live-Screen (36-dp-Kreis, neben dem DBG-Toggle): hält das Display während der Aufnahme wach (`FLAG_KEEP_SCREEN_ON`), kein Stromsparmodus. Aktiv = Primärfarbe; Flag wird bei Deaktivierung entfernt. State im UiState, Flag setzt die UI per `LaunchedEffect` (kein Activity-Zugriff im ViewModel nötig).
+
 ## 0.7.2 / 132 (2026-08-22)
 
 **Phase 7a – Namens-UI + Kontakt-Verwaltung**

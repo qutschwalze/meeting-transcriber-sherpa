@@ -56,6 +56,7 @@ data class LiveUiState(
     val segments: List<TranscriptSegment> = emptyList(),
     val latestSegmentId: String? = null,
     val autoScrollEnabled: Boolean = true,
+    val keepScreenOn: Boolean = false,   // Phase 8 (0.7.3): Display-Wake-Toggle
     val fontSize: Float = 16f,
     val isModelReady: Boolean = false,
     val isDownloading: Boolean = false,
@@ -2003,6 +2004,15 @@ class LiveViewModel : ViewModel() {
     private fun sessionRelativeMs(): Long = System.currentTimeMillis() - recordingStartedAt
     fun onUserScroll() { _uiState.update { it.copy(autoScrollEnabled = false) } }
     fun onScrollToLatest() { _uiState.update { it.copy(autoScrollEnabled = true) } }
+
+    /**
+     * Phase 8 (0.7.3): Display-Wach-Toggle (kein Stromsparmodus während der
+     * Aufnahme). Nur STATE – das Window-Flag setzt die UI (LaunchedEffect),
+     * weil das ViewModel keinen Activity-Zugriff hat.
+     */
+    fun toggleKeepScreenOn() {
+        _uiState.update { it.copy(keepScreenOn = !it.keepScreenOn) }
+    }
     fun onFontSizeChanged(newSize: Float) {
         _uiState.update { it.copy(fontSize = newSize) }
         // Phase 5 (0.6.8): persistent speichern (Flow aktualisiert andere Screens)
