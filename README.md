@@ -4,7 +4,7 @@
 
 Live-Transkription auf dem Gerät inkl. **Speaker Diarization** + **persistenter Speaker-Datenbank** – keine Cloud, kein Netzwerk.
 
-## Features (Stand 0.9.0)
+## Features (Stand 0.9.1)
 
 - ✅ Live-ASR: Sherpa-ONNX OnlineRecognizer (Streaming), Kroko Zipformer-Transducer (Deutsch)
 - ✅ **Speaker Diarization**: ReVerb v1 (Segmentation) + ERes2Net (Embedding, seit 0.6.12 für 3+ Sprecher), offline auf dem Gerät
@@ -32,6 +32,7 @@ Live-Transkription auf dem Gerät inkl. **Speaker Diarization** + **persistenter
 - ✅ **Stabile Sprecherfarben** (0.7.5): Farb-Key = Profil-UUID – dieselbe Person behält über alle Aufnahmen dieselbe Farbe
 - ✅ **Suche über Namen + Texte** (0.7.5): Verlaufs-Suche durchsucht Titel, Segmenttexte und Sprecher-Namen („Koschi" listet alle seine Aufnahmen)
 - ✅ **Sprachnachrichten-Import** (Phase 9, 0.9.0): Audiodatei aus WhatsApp/Telegram & Co. teilen → App transkribiert automatisch (MediaCodec-Decoder für Opus/M4A/MP3/AMR, Limit 30 min) und läuft durch dieselbe Diarization+Speaker-DB-Pipeline wie Aufnahmen
+- ✅ **Sprecher nachträglich benennen** (Phase 9a, 0.9.1): Im Detail-Screen Sprecher-Label antippen → Name setzen – alle Segmente des Labels (Anzeige + Export); auch für alte/importierte Transkripte ohne Audio-Zugriff
 
 ## Architektur
 
@@ -58,6 +59,7 @@ Navigation      VoiceBank         Zipformer-Transducer
 | **Phase 8** | **Komfort & Sichtbarkeit**: Aufnahme-Notification mit Stop/scr-Aktionen, Display-Wach-Toggle (`scr`), Nachbearbeitungs-Anzeige nach dem Stoppen (+`POSTPROCESS`-Log), Export-Namen aus der History (`speakerName`, Room v2) | ✅ (0.8.0) |
 | **Phase 8+** | **Konsistenz**: Stabile Sprecherfarben über Sessions (Profil-UUID als Farb-Key), Suche über Sprecher-Namen + Segmenttexte | ✅ (0.8.0) |
 | **Phase 9** | **Sprachnachricht teilen → transkribieren**: Share-Intent (`audio/*`), MediaExtractor/MediaCodec-Decoder → 16 kHz mono, Offline-Feed durch die normale Pipeline, Fortschritts-Anzeige | ✅ (0.9.0) |
+| **Phase 9a** | **Nachträgliche Sprecher-Benennung**: Label-Tap im Detail-Screen → Name für alle Segmente des Labels (Anzeige + Export), auch für alte/importierte Transkripte | ✅ (0.9.1) |
 
 **Downloads:** Aktuelle signierte APKs gibt es unter [Releases](https://github.com/qutschwalze/meeting-transcriber-sherpa/releases/latest) (`app-release.apk` für den normalen Betrieb, `app-debug.apk` mit Debug-Upload/TestLog für Diagnose).
 
