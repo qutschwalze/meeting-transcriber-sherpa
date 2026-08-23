@@ -2,6 +2,18 @@
 
 Alle Versionswechsel werden hier dokumentiert. Jeder Build erhöht `versionCode` + `versionName` (siehe `app/build.gradle.kts`).
 
+## 0.8.0 / 136 (2026-08-23)
+
+**Re-Versionierung: Phase 8 komplett → 0.8.x** (Konsistenz zur Phasen-Nummerierung; identischer Code zu 0.7.5/135). Erste 0.8er-Release mit signierten APKs.
+
+*Enthält die Phase-8-Features aus den Builds 0.7.3–0.7.5:*
+
+- Aufnahme-Notification mit Stop/scr-Aktionen, Display-Wach-Toggle (`scr`)
+- Nachbearbeitungs-Anzeige nach dem Stoppen (+ `POSTPROCESS took`-Log)
+- Export-Namen aus der History (`segments.speakerName`, Room-Migration v2)
+- Stabile Sprecherfarben über Sessions (Profil-UUID als Farb-Key)
+- Suche über Sprecher-Namen und Segmenttexte (`searchTranscriptsFull`)
+
 ## 0.7.5 / 135 (2026-08-23)
 
 **Phase 8 – Stabile Sprecherfarben, Namenssuche, Scroll-Diagnose**
