@@ -2,6 +2,14 @@
 
 Alle Versionswechsel werden hier dokumentiert. Jeder Build erhöht `versionCode` + `versionName` (siehe `app/build.gradle.kts`).
 
+## 0.9.2 / 139 (2026-08-23)
+
+**Phase 9b – Import sichtbar machen (Banner + System-Notification)**
+
+- **Globales Import-Banner** über allen Tabs (Live/Verlauf/Einstellungen): „Transkribiere ‚Datei' … N %" mit Fortschrittsring; nach Abschluss „Import abgeschlossen – Transkript liegt im Verlauf" mit OK-Button (statt lautlosem Verschwinden).
+- **System-Notification mit Fortschritt:** Während des Imports persistente Notification (Prozent + Balken) – auch sichtbar außerhalb der App / bei gesperrtem Display. Abschluss-Notification „Transkript fertig – liegt im Verlauf".
+- **Bugfix:** Nach dem ersten Import blockierte `importProgress=100` weitere Importe – jetzt nur noch laufende Importe (0–99) als Guard.
+
 ## 0.9.1 / 138 (2026-08-23)
 
 **Phase 9a – Sprecher im Detail-Screen nachträglich benennen**

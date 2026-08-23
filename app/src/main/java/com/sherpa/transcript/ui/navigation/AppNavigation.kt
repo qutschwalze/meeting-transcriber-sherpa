@@ -15,6 +15,7 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -30,6 +31,18 @@ import com.sherpa.transcript.ui.detail.TranscriptDetailScreen
 import com.sherpa.transcript.ui.history.HistoryScreen
 import com.sherpa.transcript.ui.live.LiveScreen
 import com.sherpa.transcript.ui.settings.SettingsScreen
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Surface
+import androidx.compose.material3.TextButton
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.unit.dp
 
 private sealed class BottomNavItem(
     val route: String,
@@ -115,11 +128,51 @@ fun AppNavigation() {
             }
         },
     ) { innerPadding ->
-        NavHost(
-            navController = navController,
-            startDestination = BottomNavItem.Live.route,
-            modifier = Modifier.padding(innerPadding),
-        ) {
+        // Phase 9b (0.9.2): Globales Import-Banner – in ALLEN Tabs sichtbar,
+        // damit ein geteiltes Audio nicht lautlos verarbeitet wird.
+        val liveVm: com.sherpa.transcript.ui.live.LiveViewModel = viewModel()
+        val liveState by liveVm.uiState.collectAsState()
+
+        Column(modifier = Modifier.padding(innerPadding)) {
+            if (liveState.importProgress >= 0) {
+                val fertig = liveState.importProgress >= 100
+                Surface(
+                    color = if (fertig) MaterialTheme.colorScheme.secondaryContainer
+                            else MaterialTheme.colorScheme.primaryContainer,
+                    tonalElevation = 4.dp,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        CircularProgressIndicator(
+                            progress = { (liveState.importProgress.coerceAtMost(99)) / 100f },
+                            modifier = Modifier.size(22.dp),
+                            strokeWidth = 3.dp,
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(
+                            text = if (fertig)
+                                "Import abgeschlossen – Transkript liegt im Verlauf"
+                            else
+                                "Transkribiere '${liveState.importFileName ?: "Audio"}' … ${liveState.importProgress}%",
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.weight(1f),
+                        )
+                        if (fertig) {
+                            TextButton(onClick = { liveVm.dismissImportBanner() }) {
+                                Text("OK")
+                            }
+                        }
+                    }
+                }
+            }
+
+            NavHost(
+                navController = navController,
+                startDestination = BottomNavItem.Live.route,
+            ) {
             composable(BottomNavItem.Live.route) {
                 LiveScreen()
             }
@@ -147,6 +200,7 @@ fun AppNavigation() {
                     onBack = { navController.popBackStack() },
                 )
             }
+        }
         }
     }
 }

@@ -123,6 +123,7 @@ class LiveViewModel : ViewModel() {
         private const val TAG = "LiveViewModel"
         private const val NOTIFICATION_CHANNEL_ID = "recording"
         private const val NOTIFICATION_ID = 0x5243
+        private const val NOTIFICATION_IMPORT_ID = 0x5244
         private const val ASR_MODEL = "kroko-de"
         private const val DIARIZATION_INTERVAL_MS = 10_000L
         private const val MAX_AUDIO_FRAMES = 72_000
@@ -648,6 +649,63 @@ class LiveViewModel : ViewModel() {
         try {
             val nm = SherpaTranscriptApp.instance.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             nm.cancel(NOTIFICATION_ID)
+        } catch (_: Throwable) {
+        }
+    }
+
+    // ── Phase 9b (0.9.2): Import-Fortschritt als System-Notification ──
+    // Sichtbar auch außerhalb der App (der In-App-Banner reicht nicht, wenn der
+    // Nutzer z. B. direkt in den Verlauf wechselt oder den Screen sperrt).
+    private fun postImportNotification(fileName: String, progressPct: Int) {
+        try {
+            val app = SherpaTranscriptApp.instance
+            val nm = app.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.createNotificationChannel(
+                NotificationChannel(NOTIFICATION_CHANNEL_ID, "Aufnahme", NotificationManager.IMPORTANCE_LOW)
+            )
+            val builder = NotificationCompat.Builder(app, NOTIFICATION_CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_launcher_foreground)
+                .setContentTitle("Transkribiere '$fileName' …")
+                .setOngoing(true)
+                .setOnlyAlertOnce(true)
+            if (progressPct in 0..99) {
+                builder.setContentText("$progressPct %")
+                builder.setProgress(100, progressPct, false)
+            } else {
+                builder.setContentText("Verarbeite Audio…")
+                builder.setProgress(0, 0, true)   // indeterminate
+            }
+            nm.notify(NOTIFICATION_IMPORT_ID, builder.build())
+        } catch (t: Throwable) {
+            Log.w(TAG, "import notification fehlgeschlagen: ${t.message}")
+        }
+    }
+
+    /** Phase 9b: Abschluss-Notification (nicht ongoing, bleibt bis Wegwischen). */
+    private fun postImportDoneNotification(fileName: String) {
+        try {
+            val app = SherpaTranscriptApp.instance
+            val nm = app.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.createNotificationChannel(
+                NotificationChannel(NOTIFICATION_CHANNEL_ID, "Aufnahme", NotificationManager.IMPORTANCE_LOW)
+            )
+            val notif = NotificationCompat.Builder(app, NOTIFICATION_CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_launcher_foreground)
+                .setContentTitle("Transkript fertig")
+                .setContentText("'$fileName' liegt jetzt im Verlauf")
+                .setOngoing(false)
+                .setAutoCancel(true)
+                .build()
+            nm.notify(NOTIFICATION_IMPORT_ID, notif)
+        } catch (t: Throwable) {
+            Log.w(TAG, "import-done notification fehlgeschlagen: ${t.message}")
+        }
+    }
+
+    private fun cancelImportNotification() {
+        try {
+            val nm = SherpaTranscriptApp.instance.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.cancel(NOTIFICATION_IMPORT_ID)
         } catch (_: Throwable) {
         }
     }
@@ -1863,8 +1921,12 @@ class LiveViewModel : ViewModel() {
      * dadurch funktionieren handleResult/dedupe/diarization unverändert.
      */
     fun importAudio(uri: android.net.Uri, fileName: String) {
-        if (_uiState.value.importProgress >= 0) return   // kein Doppel-Import
+        // Phase 9b: Nur blockieren, wenn wirklich noch ein Import LÄUFT (0..99).
+        // 100 = abgeschlossen (Banner wartet auf OK) → neuer Import erlaubt.
+        val p = _uiState.value.importProgress
+        if (p in 0..99) return
         _uiState.update { it.copy(importProgress = 0, importFileName = fileName) }
+        postImportNotification(fileName, -1)   // Phase 9b: sofort sichtbar
         viewModelScope.launch {
             try {
                 // 1. Dekodieren (IO)
@@ -1938,9 +2000,9 @@ class LiveViewModel : ViewModel() {
                     }
 
                     if (f % 10 == 0) {   // alle ~1 s Audio
-                        _uiState.update { st ->
-                            st.copy(importProgress = (f * 100 / maxOf(totalFrames, 1)).coerceIn(0, 100))
-                        }
+                        val pct = (f * 100 / maxOf(totalFrames, 1)).coerceIn(0, 99)
+                        _uiState.update { st -> st.copy(importProgress = pct) }
+                        postImportNotification(fileName, pct)   // Phase 9b: System-Notification
                         delay(50)   // leichte Drossel (ASR läuft sonst der Diarization davon)
                     }
                 }
@@ -1994,7 +2056,10 @@ class LiveViewModel : ViewModel() {
 
                     val transcriptId = currentTranscriptId
                     if (segmentsToSave.isNotEmpty() && transcriptId != null) {
-                        saveTranscript(transcriptId, segmentsToSave)
+                        // Phase 9b: "fertig"-Notification erst NACH dem Save-Job
+                        saveTranscript(transcriptId, segmentsToSave).invokeOnCompletion {
+                            postImportDoneNotification(fileName)
+                        }
                     } else stopPostProcessingIndicator()
 
                     currentTranscriptId = null
@@ -2002,11 +2067,13 @@ class LiveViewModel : ViewModel() {
                     TestLog.log("IMPORT fertig file=$fileName segs=${segmentsToSave.size}")
                 }
             } catch (e: IllegalArgumentException) {
+                cancelImportNotification()
                 _uiState.update { it.copy(importProgress = -1, importFileName = null,
                     error = e.message ?: "Audiodatei ungültig") }
             } catch (t: Throwable) {
                 Log.e(TAG, "importAudio fehlgeschlagen", t)
                 TestLog.log("IMPORT FEHLER: ${t.message}")
+                cancelImportNotification()
                 _uiState.update { it.copy(importProgress = -1, importFileName = null,
                     error = "Import fehlgeschlagen: ${t.message}") }
             }
@@ -2272,6 +2339,11 @@ class LiveViewModel : ViewModel() {
      */
     fun toggleKeepScreenOn() {
         _uiState.update { it.copy(keepScreenOn = !it.keepScreenOn) }
+    }
+
+    /** Phase 9b (0.9.2): "Import abgeschlossen"-Banner schließen. */
+    fun dismissImportBanner() {
+        _uiState.update { it.copy(importProgress = -1, importFileName = null) }
     }
     fun onFontSizeChanged(newSize: Float) {
         _uiState.update { it.copy(fontSize = newSize) }
