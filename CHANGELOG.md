@@ -2,6 +2,15 @@
 
 Alle Versionswechsel werden hier dokumentiert. Jeder Build erhöht `versionCode` + `versionName` (siehe `app/build.gradle.kts`).
 
+## 0.9.8 / 145 (2026-08-24)
+
+**Phase 10 – Drift-Fixes nach Host-Reproduktion (37-min-Standup, 2 Personen → 8 IDs)**
+
+- **Host-Befund** (`scripts/host-test/standup_drift_test.py`): Bei langen Monolog-Blöcken driftet das Embedding massiv (95/144 Blöcke < 0.62 gegen die Referenz, mean 0.479) – die App *musste* neue IDs spawnen. Der VORGÄNGER ist dagegen stabil (mean 0.819).
+- **Fix 1 – Sprechkontinuität:** Ein Block ohne Bank-Match, der zeitlich direkt an einen gemappten Block anschließt (< 2 s Lücke), erbt dessen ID (`VB … KONTINUITÄT global=N`). Deckt ~88 % der Drift-Splits ab, ohne die 0.62-Regel anzufassen.
+- **Fix 2 – Enroll-Schutz:** Frisch gespawnte IDs (Fehlzuordnung-Zweig) werden nicht mehr per Quick-Confirm sofort bestätigt (`allowQuickConfirm=false`, `NEUE ID … PENDING`) – Bestätigung erst beim 2. unabhängigen Kontakt. Verhindert die Müll-Profile (+7 pro Meeting).
+- **Kontakte:** Neue Aktion „Alle unbenannten löschen (N)" mit Bestätigungsdialog – räumt Auto-Enroll-Reste auf einmal weg.
+
 ## 0.9.7 / 144 (2026-08-24)
 
 **Phase 9g – Zuweisungs-Sheet bei vielen Profilen bedienbar**

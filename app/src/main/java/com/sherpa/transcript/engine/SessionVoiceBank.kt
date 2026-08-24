@@ -325,7 +325,14 @@ class SessionVoiceBank(
      *
      * @return true wenn eingeschrieben/bestätigt, false wenn pending/skip/Fehler.
      */
-    fun enroll(globalId: Int, samples: FloatArray, durationMs: Long): Boolean {
+    fun enroll(
+        globalId: Int,
+        samples: FloatArray,
+        durationMs: Long,
+        /** Phase 10 (Fix 2): false = kein Quick-Confirm beim 1. Kontakt (Enroll-Schutz
+         * für frisch gespawnte IDs – verhindert Müll-Profile bei Embedding-Drift). */
+        allowQuickConfirm: Boolean = true,
+    ): Boolean {
         if (durationMs < (minEnrollmentSec * 1000f).toLong()) {
             Log.d(TAG, "enroll skip: global=$globalId nur ${durationMs}ms (< ${minEnrollmentSec}s)")
             return false
@@ -365,9 +372,10 @@ class SessionVoiceBank(
             return false
         }
 
-        // 1. Kontakt: pending anlegen; Quick-Confirm (Phase 6) bei langer Redezeit
+        // 1. Kontakt: pending anlegen; Quick-Confirm (Phase 6) bei langer Redezeit –
+        // Phase 10 (Fix 2): abschaltbar für frisch gespawnte IDs (Drift-Schutz)
         pendingEnrollments[globalId] = PendingEnrollment(embedding)
-        if (durationMs >= (quickConfirmSec * 1000f).toLong()) {
+        if (allowQuickConfirm && durationMs >= (quickConfirmSec * 1000f).toLong()) {
             confirmPending(globalId, embedding)
             Log.d(TAG, "enroll QUICK-CONFIRMED: global=$globalId ($durationMs ms >= ${quickConfirmSec}s, 1. Kontakt) – Bank hat ${voiceprints.size} Sprecher")
             TestLog.log("VB local=$globalId dur=${durationMs}ms → QUICK-CONFIRMED (1. Kontakt >= ${quickConfirmSec}s) – Bank hat ${voiceprints.size} Sprecher")

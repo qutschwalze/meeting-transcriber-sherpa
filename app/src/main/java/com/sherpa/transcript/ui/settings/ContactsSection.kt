@@ -45,10 +45,14 @@ fun ContactsSection() {
     var deleteTarget by remember { mutableStateOf<SpeakerProfile?>(null) }
     var mergeSource by remember { mutableStateOf<SpeakerProfile?>(null) }
     var renameInput by remember { mutableStateOf("") }
+    // Phase 10 (0.9.8): Bulk-Löschen aller unbenannten Profile
+    var confirmBulkDelete by remember { mutableStateOf(false) }
 
     fun refresh() {
         profiles = SpeakerProfiles.ensureBank().snapshot()
     }
+
+    val unnamedCount = profiles.count { it.name.isNullOrBlank() }
 
     Column(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
         Spacer(modifier = Modifier.height(16.dp))
@@ -101,6 +105,40 @@ fun ContactsSection() {
                 }
             }
         }
+
+        // Phase 10 (0.9.8): Bulk-Löschen aller unbenannten Profile
+        if (unnamedCount > 0) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "$unnamedCount unbenannte Profile (Auto-Enroll ohne Zuweisung).",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            TextButton(onClick = { confirmBulkDelete = true }) {
+                Text("Alle unbenannten löschen ($unnamedCount)")
+            }
+        }
+    }
+
+    // ── Bulk-Lösch-Bestätigung ──
+    if (confirmBulkDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmBulkDelete = false },
+            title = { Text("$unnamedCount Profile löschen?") },
+            text = { Text("Alle unbenannten Profile werden dauerhaft entfernt (benannte Kontakte bleiben). Sie wurden automatisch angelegt, ohne dass du sie zugewiesen hast.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    val bank = SpeakerProfiles.ensureBank()
+                    profiles.filter { it.name.isNullOrBlank() }.forEach { bank.deleteProfile(it.id) }
+                    SpeakerProfiles.save()
+                    confirmBulkDelete = false
+                    refresh()
+                }) { Text("Alle löschen") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmBulkDelete = false }) { Text("Abbrechen") }
+            },
+        )
     }
 
     // ── Umbenennen-Dialog ──

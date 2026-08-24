@@ -108,6 +108,12 @@ class DiarizationChunkWorker(
          */
         private const val maxBoostFactor = 10f
 
+        /** Phase 10 (Fix 1): Max. Lücke (Sekunden) für den Kontinuitätserbe –
+         * ein Block ohne Bank-Match erbt die ID des Vorgängers, wenn er direkt
+         * anschließt. Host-Befund: Vorgänger-Sim mean 0.819 (vs. 0.479 zur
+         * Referenz) → 2 s ist konservativ und deckt Monolog-Blöcke ab. */
+        private const val CONTINUITY_GAP_SEC = 2f
+
         /**
          * Chunk-Retry (0.5.54): Mehrere Versätze für den 2. Engine-Versuch.
          * Log-Befund 0.5.53: Chunk [55,75] liefert reproduzierbar 0 Segmente –
@@ -285,6 +291,11 @@ class DiarizationChunkWorker(
         var enrolledCount = 0
         var skippedCount = 0
         var globalResolvedCount = 0
+        // Phase 10 (Fix 1): Kontext des letzten zeitlich gemappten Blocks (Kontinuitätserbe)
+        var lastMappedEndSec = -Float.MAX_VALUE
+        var lastMappedGlobalId: Int? = null
+        var lastMappedLocalId = Int.MIN_VALUE
+        var continuityInheritedCount = 0
         val bankSize = voiceBank?.speakerCount ?: 0
         var freshGlobalId = (globalSegments.maxOfOrNull { it.speakerId } ?: -1) + 1
         if (voiceBank != null) {
@@ -307,9 +318,35 @@ class DiarizationChunkWorker(
                     finalMapping = finalMapping + (localId to matchedGlobalId)
                     finalNewSpeakerIds = finalNewSpeakerIds - localId
                     driftResolvedCount++
+                    // Phase 10: Kontinuitäts-Kontext nachführen
+                    lastMappedEndSec = best.endSec
+                    lastMappedGlobalId = matchedGlobalId
+                    lastMappedLocalId = localId
                     Log.d(TAG, "VOICE_BANK resolve: local=$localId → global=$matchedGlobalId " +
                             "(dur=${durationMs}ms, statt neue ID ${result.mapping[localId]})")
                     TestLog.log("VB local=$localId dur=${durationMs}ms → RESOLVE auf global=$matchedGlobalId (statt neue ID ${result.mapping[localId]})")
+                    continue
+                }
+
+                // ── Phase 10 (Fix 1): Sprechkontinuität (Kontinuitätserbe) ──
+                // Host-Befund (standup_drift_test.py, 37-min-Standup): 95/144
+                // Monolog-Blöcke fielen <0.62 gegen die Referenz → neue IDs.
+                // Der VORGÄNGER ist dagegen stabil (mean sim 0.819, 88% >=0.62).
+                // Ein Block ohne Bank-Match, der zeitlich DIREKT an einen bereits
+                // gemappten Block anschließt (<2s Lücke), erbt dessen globale ID –
+                // BEVOR eine neue ID gespawnt wird. Die 0.62-Regel bleibt unangetastet.
+                if (best.startSec - lastMappedEndSec < CONTINUITY_GAP_SEC &&
+                    lastMappedEndSec >= best.startSec - CONTINUITY_GAP_SEC &&
+                    lastMappedGlobalId != null && lastMappedLocalId != localId
+                ) {
+                    finalMapping = finalMapping + (localId to lastMappedGlobalId)
+                    finalNewSpeakerIds = finalNewSpeakerIds - localId
+                    continuityInheritedCount++
+                    // Phase 10: Kontext weiterschreiben (der Erbe wird selbst Anker)
+                    lastMappedEndSec = best.endSec
+                    lastMappedLocalId = localId
+                    TestLog.log("VB local=$localId dur=${durationMs}ms → KONTINUITÄT global=$lastMappedGlobalId " +
+                            "(gap=${(best.startSec - lastMappedEndSec).toInt()}ms, statt neue ID ${result.mapping[localId]})")
                     continue
                 }
 
@@ -349,6 +386,10 @@ class DiarizationChunkWorker(
                         finalNewSpeakerIds = finalNewSpeakerIds - localId
                         globalResolvedCount++
                         globalResolved = true
+                        // Phase 10: Kontinuitäts-Kontext nachführen (Global-Match ist Anker)
+                        lastMappedEndSec = best.endSec
+                        lastMappedGlobalId = sessionId
+                        lastMappedLocalId = localId
                         Log.d(TAG, "VB_GLOBAL resolve: local=$localId → profil=${profileId.takeLast(8)} " +
                                 "(session=$sessionId, dur=${durationMs}ms, statt neue ID ${result.mapping[localId]})")
                         TestLog.log("VB_GLOBAL_RESOLVE local=$localId → profil=${profileId.takeLast(8)} (session=$sessionId)")
@@ -382,16 +423,24 @@ class DiarizationChunkWorker(
                         }
                     } else {
                         // b) Fehlzuordnung auf echte Bank-ID (Zone-Vote) → frische ID
+                        // Phase 10 (Fix 2): Enroll-Schutz – eine frisch gespawnte ID
+                        // wird NICHT mehr sofort bestätigt/enrolled (Quick-Confirm
+                        // >4s hat bei Standup-Drift 7 Müll-Profile pro Meeting
+                        // erzeugt). Stattdessen pending mit 2-Kontakt-Härtung:
+                        // enroll() bestätigt erst beim ZWEITEN unabhängigen Kontakt.
                         finalMapping = finalMapping + (localId to freshGlobalId)
-                        val enrolled = voiceBank.enroll(freshGlobalId, samples, durationMs)
-                        freshGlobalId++
-                        if (enrolled) {
-                            enrolledCount++
-                            TestLog.log("VB local=$localId dur=${durationMs}ms → ENROLL-Fehlzuordnung neue ID=${freshGlobalId - 1} OK (Ziel ${targetGlobalId} war in Bank, aber kein Match)")
-                        } else {
+                        val enrolled = voiceBank.enroll(freshGlobalId, samples, durationMs,
+                            allowQuickConfirm = false)
+                        if (!enrolled) {
+                            // Pending angelegt (kein Confirm) → zählt als skipped
                             skippedCount++
-                            TestLog.log("VB local=$localId dur=${durationMs}ms → ENROLL-Fehlzuordnung neue ID=${freshGlobalId - 1} SKIP")
+                            TestLog.log("VB local=$localId dur=${durationMs}ms → NEUE ID=${freshGlobalId} PENDING " +
+                                    "(Fix2: kein Quick-Confirm, Ziel ${targetGlobalId} war in Bank, aber kein Match)")
+                        } else {
+                            TestLog.log("VB local=$localId dur=${durationMs}ms → NEUE ID=${freshGlobalId} CONFIRMED " +
+                                    "(2. Kontakt, Ziel ${targetGlobalId} war in Bank, aber kein Match)")
                         }
+                        freshGlobalId++
                     }
                 }
             }
