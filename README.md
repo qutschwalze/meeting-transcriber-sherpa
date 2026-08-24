@@ -120,7 +120,7 @@ All processing happens on the device. Voice profiles are biometric data and stay
 
 Live-Transkription auf dem Gerät inkl. **Speaker Diarization** und **persistenter Speaker-Datenbank** – keine Cloud, kein Netzwerk.
 
-### Features (Stand 0.9.8)
+### Features (Stand 0.9.9)
 
 - Live-ASR: Sherpa-ONNX OnlineRecognizer (Streaming), Kroko-Zipformer-Transducer (Deutsch)
 - Speaker Diarization: ReVerb v1 (Segmentation) + ERes2Net (Embedding, seit 0.6.12 für 3+ Sprecher), komplett offline
