@@ -2,6 +2,14 @@
 
 Alle Versionswechsel werden hier dokumentiert. Jeder Build erhöht `versionCode` + `versionName` (siehe `app/build.gradle.kts`).
 
+## 0.9.7 / 144 (2026-08-24)
+
+**Phase 9g – Zuweisungs-Sheet bei vielen Profilen bedienbar**
+
+- **Geräte-Befund:** Bei 25+ Profilen war das Zuweisungs-Sheet nicht mehr scrollbar – „Neuer Kontakt" und Abbrechen lagen außerhalb des Bildschirms.
+- **Fix:** Profil-Liste ist jetzt eine scrollbare LazyColumn (max. ~40 % der Höhe), ab 7 Profilen gibt es ein **Suchfeld** zum Filtern; „Neuer Kontakt"-Feld + Buttons bleiben immer sichtbar unten.
+- Nebeneffekt der Bank-Größe: Profile ohne Namen (nur „Profil xxxxxxxx") lassen sich über das Suchfeld nicht finden – Empfehlung, unbekannte Profile in den Kontakte-Einstellungen zu benennen oder zu löschen.
+
 ## 0.9.6 / 143 (2026-08-23)
 
 **Phase 9f – Korrektur: 0.9.5-Fix war wirkungslos (falsche Datenquelle)**

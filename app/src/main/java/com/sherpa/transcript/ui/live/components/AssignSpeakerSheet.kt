@@ -5,9 +5,11 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
-import androidx.compose.material3.Divider
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -26,6 +28,10 @@ import com.sherpa.transcript.ui.live.SpeakerProfileUi
  * Phase 7a (0.7.2): Zuweisungs-Sheet nach dem Stoppen einer Aufnahme.
  * - Bekannte Profile: Tap = Stimme dem Profil zuordnen (rolling Enroll)
  * - "Neuer Kontakt": Name eingeben → neues Profil anlegen + benennen
+ *
+ * Phase 9g (0.9.7): Bei vielen Profilen scrollt die Liste (max. 40 % der
+ * Höhe) und ist per Suchfeld filterbar – "Neuer Kontakt" bleibt immer
+ * sichtbar unten (Fix: Sheet war bei 25+ Profilen nicht mehr bedienbar).
  */
 @Composable
 fun AssignSpeakerSheet(
@@ -35,6 +41,11 @@ fun AssignSpeakerSheet(
     onDismiss: () -> Unit,
 ) {
     var newName by remember { mutableStateOf("") }
+    var filter by remember { mutableStateOf("") }
+
+    val filtered = if (filter.isBlank()) profiles else profiles.filter {
+        (it.name ?: "Profil ${it.id.takeLast(8)}").contains(filter.trim(), ignoreCase = true)
+    }
 
     Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
         Text(
@@ -48,31 +59,49 @@ fun AssignSpeakerSheet(
             modifier = Modifier.padding(top = 4.dp),
         )
 
+        // Suchfeld nur ab mehreren Profilen zeigen
+        if (profiles.size > 6) {
+            OutlinedTextField(
+                value = filter,
+                onValueChange = { filter = it },
+                label = { Text("Profil suchen") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+            )
+        }
+
         if (profiles.isNotEmpty()) {
             Text(
-                text = "Bekannte Profile",
+                text = if (filter.isBlank()) "Bekannte Profile"
+                       else "Gefiltert (${filtered.size}/${profiles.size})",
                 style = MaterialTheme.typography.labelLarge,
                 modifier = Modifier.padding(top = 12.dp, bottom = 4.dp),
             )
-            profiles.forEach { profile ->
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable {
-                            onAssign(segment.segmentId, profile.id, null)
-                        }
-                        .padding(vertical = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                    Text(
-                        text = profile.name ?: "Profil ${profile.id.takeLast(8)}",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                    Text(
-                        text = "(${profile.sampleCount})",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 280.dp),
+            ) {
+                items(filtered, key = { it.id }) { profile ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                onAssign(segment.segmentId, profile.id, null)
+                            }
+                            .padding(vertical = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text(
+                            text = profile.name ?: "Profil ${profile.id.takeLast(8)}",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        Text(
+                            text = "(${profile.sampleCount})",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
         }
