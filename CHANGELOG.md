@@ -2,6 +2,15 @@
 
 Alle Versionswechsel werden hier dokumentiert. Jeder Build erhöht `versionCode` + `versionName` (siehe `app/build.gradle.kts`).
 
+## 0.9.9 / 146 (2026-08-24)
+
+**Phase 10b – Root Cause gefunden: Anzeige-IDs ↔ Bank-IDs Desync im Save-Pfad**
+
+- **Geräte-Befund (2× 0.9.8-Meetings):** Die Phase-10-Fixes arbeiten korrekt (KONTINUITÄT 18×/14×, PENDING statt Quick-Confirm, Live-Bank stabil bei 2) – ABER Meeting 1 kollabierte im Save (`persisted=3 speakers=1`, ein 31-min-Block), Meeting 2 hatte Drift-Reste (Sprecher 3+4, 5× Unbekannt).
+- **Root Cause:** `renumberLiveSpeakerIds()` nummeriert die Anzeige-IDs um (Bank-ID 8 → `speaker_1`), aber der Save-Pfad verglich diese Anzeige-IDs gegen **BANK**-confirmed-IDs `{0,8}` → jedes bestätigte Segment galt plötzlich als „unbestätigt" und fiel dem Nachbar-Resolve zum Opfer. Auch `correctOverlayByVoiceBank` schrieb Bank-Nummern in Anzeige-Segmente.
+- **Fix:** Neue Brücke `originalGidToDisplayId()` (Worker: Original-GID nach erster Auftrittszeit ↔ Renumber-Reihenfolge). Alle drei Stellen (Nearest-Confirmed-Resolve, Leading-Resolve, Overlay-Korrektur) übersetzen jetzt zwischen Bank- und Anzeige-Nummerierung.
+- **Diagnose:** `SAVE_STAGE`-/`SAVE_STAGE_DELTA`-Zeilen wandern ins TestLog (vorher nur logcat) – künftige Save-Kollapse sind damit direkt aus den Uploads lesbar.
+
 ## 0.9.8 / 145 (2026-08-24)
 
 **Phase 10 – Drift-Fixes nach Host-Reproduktion (37-min-Standup, 2 Personen → 8 IDs)**

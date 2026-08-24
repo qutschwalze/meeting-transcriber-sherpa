@@ -156,6 +156,24 @@ class DiarizationChunkWorker(
     }
 
     /**
+     * Phase 10 (0.9.9): Originale Session-GID → Anzeige-ID (nach VM-Renumber).
+     *
+     * Problem: renumberLiveSpeakerIds() im ViewModel nummeriert die IDs der
+     * ANZEIGE um (Bank-8 → speaker_1), aber die Bank/der Save-Pfad vergleichen
+     * gegen BANK-Nummern. Diese Brücke liefert pro Anzeige-ID die ursprüngliche
+     * GID aus dem globalen Bestand: Die Reihenfolge des Bestands (erste
+     * Auftrittszeit je ID) entspricht exakt der Renumber-Ordnung des ViewModels.
+     */
+    fun originalGidToDisplayId(): Map<Int, Int> {
+        val orderedGids = globalSegments
+            .groupBy { it.speakerId }
+            .map { (gid, segs) -> gid to (segs.minOfOrNull { it.startSec } ?: Float.MAX_VALUE) }
+            .sortedBy { it.second }
+            .mapIndexed { idx, (gid, _) -> gid to idx }
+        return orderedGids.toMap()
+    }
+
+    /**
      * Verarbeitet den nächsten Chunk, falls genügend neues Audio vorliegt.
      *
      * @return null wenn noch kein neuer Chunk verfügbar ist; sonst das Worker-Ergebnis.

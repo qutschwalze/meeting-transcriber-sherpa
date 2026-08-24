@@ -944,7 +944,15 @@ class LiveViewModel : ViewModel() {
      * (forceFinal) – Rolling-Zustände bleiben unverändert.
      */
     private fun resolveLeadingUnconfirmedSpeakerLabels() {
-        val confirmedIds = sessionVoiceBank.enrolledSpeakerIds
+        // Phase 10 (0.9.9): Anzeige-IDs ↔ Bank-IDs Brücke (siehe resolveListByNearestConfirmed)
+        val bankConfirmedRaw = sessionVoiceBank.enrolledSpeakerIds
+        val mapping = diarizationChunkWorker.originalGidToDisplayId()
+        val confirmedIds = buildSet {
+            addAll(bankConfirmedRaw)
+            for ((displayNum, origGid) in mapping) {
+                if (origGid in bankConfirmedRaw) add(displayNum)
+            }
+        }
         if (confirmedIds.isEmpty()) return
         // Erstes bestätigtes Segment im BESTAND: ID + Label daraus übernehmen
         val firstConfirmed = assignedFinalSegments
@@ -1019,7 +1027,19 @@ class LiveViewModel : ViewModel() {
      * Geräte-Befund 0.6.6: "## Unbekannt · 00:01:34").
      */
     private fun resolveListByNearestConfirmed(segments: List<TranscriptSegment>): List<TranscriptSegment> {
-        val confirmedIds = sessionVoiceBank.enrolledSpeakerIds
+        // Phase 10 (0.9.9): confirmedIds sind BANK-Nummern. Nach renumberLiveSpeakerIds()
+        // tragen die Overlay-Segmente aber ANZEIGE-IDs (Bank-8 → Anzeige-1). Ohne die
+        // Mapping-Brücke galt jedes bestätigte Segment als "unbestätigt" und kollabierte
+        // auf den Nachbarn (Geräte-Befund 0.9.8: 2 Sprecher live → speakers=1 im Save).
+        val bankConfirmedRaw = sessionVoiceBank.enrolledSpeakerIds
+        val mapping = diarizationChunkWorker.originalGidToDisplayId()
+        val confirmedIds = buildSet {
+            addAll(bankConfirmedRaw)
+            // Anzeige-IDs, deren ORIGINALE Session-GID in der Bank bestätigt ist:
+            for ((displayNum, origGid) in mapping) {
+                if (origGid in bankConfirmedRaw) add(displayNum)
+            }
+        }
         if (confirmedIds.isEmpty()) return segments
         val confirmed = segments.filter { seg ->
             seg.speakerId?.removePrefix("speaker_")?.toIntOrNull() in confirmedIds
@@ -1084,13 +1104,19 @@ class LiveViewModel : ViewModel() {
         if (!wavFile.exists()) return overlay
         var corrected = 0
         var resolved = 0
+        // Phase 10 (0.9.9): identify() liefert BANK-Nummern – die müssen vor dem
+        // Schreiben in die Anzeige-Segmente auf Anzeige-IDs gemappt werden (renumber!).
+        val bankToDisplay = diarizationChunkWorker.originalGidToDisplayId()
+            .entries.associate { (display, orig) -> orig to display }
         val result = overlay.map { seg ->
             val speakerNum = seg.speakerId?.removePrefix("speaker_")?.toIntOrNull()
             val durationMs = seg.endTimeMs - seg.startTimeMs
             if (durationMs < 2000) return@map seg
             val samples = readWavSamples(wavFile, seg.startTimeMs, seg.endTimeMs)
             if (samples == null || samples.isEmpty()) return@map seg
-            val matched = sessionVoiceBank.identify(samples, confirmedOnly = true)
+            val matchedBank = sessionVoiceBank.identify(samples, confirmedOnly = true)
+            // Bank-Nr → Anzeige-Nr (Fallback: Bank-Nr selbst, wenn nicht gemappt)
+            val matched = matchedBank?.let { bankToDisplay[it] ?: it }
             if (speakerNum == null) {
                 // 0.6.23: Unlabeled Segment akustisch auflösen
                 if (matched != null) {
@@ -1746,9 +1772,13 @@ class LiveViewModel : ViewModel() {
             .mapNotNull { it.speakerId?.takeIf { s -> s.isNotBlank() } }
             .distinct().map { it.removePrefix("speaker_") }.sorted()
         Log.i(TAG, "saveStage $stage: segments=${segments.size} labeled=$labeled labeledDur=${labeledDurMs}ms speakers=${ids.size} ids=[${ids.joinToString(",")}]")
+        // Phase 10 (0.9.9): Stage-Statistik ins TestLog (vorher nur logcat –
+        // deshalb fehlten uns die Save-Stufen in den Debug-Uploads!)
+        TestLog.log("SAVE_STAGE $stage: segs=${segments.size} labeled=$labeled speakers=${ids.size} ids=[${ids.joinToString(",")}]")
         // DBG: Segment-Dump pro Stage – zeigt, welche IDs/Grenzen die Pipeline verändert
         if (_uiState.value.debugMode) {
             for (seg in segments) {
+                TestLog.log("SAVE_DBG_${stage.replace(" ", "_")} id=${seg.segmentId.take(8)} t=${seg.startTimeMs}-${seg.endTimeMs} spk=${seg.speakerId ?: "-"} text=\"${seg.text.take(30)}\"")
                 Log.d(TAG, "SAVE_DBG_${stage.replace(" ", "_")} id=${seg.segmentId.take(8)} t=${seg.startTimeMs}-${seg.endTimeMs} spk=${seg.speakerId ?: "-"} text=\"${seg.text.take(30)}\"")
             }
         }
@@ -1762,22 +1792,31 @@ class LiveViewModel : ViewModel() {
         val gone = from.filter { it.segmentId !in toIds }
         val added = to.filter { it.segmentId !in fromIds }
         for (g in gone) {
+            TestLog.log("SAVE_DBG_DELTA $stageFrom→$stageTo GONE id=${g.segmentId.take(8)} t=${g.startTimeMs}-${g.endTimeMs} spk=${g.speakerId ?: "-"}")
             Log.d(TAG, "SAVE_DBG_DELTA $stageFrom→$stageTo GONE id=${g.segmentId.take(8)} t=${g.startTimeMs}-${g.endTimeMs} spk=${g.speakerId ?: "-"} text=\"${g.text.take(30)}\"")
         }
         for (a in added) {
+            TestLog.log("SAVE_DBG_DELTA $stageFrom→$stageTo NEW id=${a.segmentId.take(8)} t=${a.startTimeMs}-${a.endTimeMs} spk=${a.speakerId ?: "-"}")
             Log.d(TAG, "SAVE_DBG_DELTA $stageFrom→$stageTo NEW id=${a.segmentId.take(8)} t=${a.startTimeMs}-${a.endTimeMs} spk=${a.speakerId ?: "-"} text=\"${a.text.take(30)}\"")
         }
         // Auch geänderte Speaker-Zuordnung bei gleicher ID anzeigen
         val toById = to.associateBy { it.segmentId }
+        var spkChanges = 0
         for (f in from) {
             val t2 = toById[f.segmentId] ?: continue
             val fs = f.speakerId?.takeIf { it.isNotBlank() }
             val ts = t2.speakerId?.takeIf { it.isNotBlank() }
             if (fs != ts) {
+                spkChanges++
+                if (spkChanges <= 40) {
+                    TestLog.log("SAVE_DBG_DELTA $stageFrom→$stageTo SPK_CHANGE id=${f.segmentId.take(8)} from=${fs ?: "none"} to=${ts ?: "none"}")
+                }
                 Log.d(TAG, "SAVE_DBG_DELTA $stageFrom→$stageTo SPK_CHANGE id=${f.segmentId.take(8)} from=${fs ?: "none"} to=${ts ?: "none"} text=\"${f.text.take(30)}\"")
             }
         }
-        Log.d(TAG, "SAVE_DBG_DELTA $stageFrom→$stageTo: gone=${gone.size} added=${added.size}")
+        val summary = "SAVE_STAGE_DELTA $stageFrom→$stageTo: gone=${gone.size} added=${added.size} spkChanges=$spkChanges"
+        TestLog.log(summary)
+        Log.d(TAG, summary)
     }
 
     // Phase 8 (0.7.4): Post-Processing-Indikator (finaler Lauf + Save + Export)
