@@ -2,6 +2,14 @@
 
 Alle Versionswechsel werden hier dokumentiert. Jeder Build erhöht `versionCode` + `versionName` (siehe `app/build.gradle.kts`).
 
+## 0.9.6 / 143 (2026-08-23)
+
+**Phase 9f – Korrektur: 0.9.5-Fix war wirkungslos (falsche Datenquelle)**
+
+- **Ehrlicher Befund:** Der 0.9.5-Fix las die Session-GID aus dem **raw-Segment** – das hat nach der 3-Schichten-Architektur gar keine `speakerId` (die steckt nur im Assigned-Overlay). Folge: `gid=null`, Mapping nie registriert, Verhalten unverändert.
+- **Korrektur:** Die GID kommt jetzt aus dem Assigned-Overlay (Fallback raw) → `registerProfileMapping` greift wirklich; neue Diagnose-Logs (`VB_GLOBAL_MAPPING session=… profil=…` bzw. Warnung, wenn keine GID ermittelbar).
+- Kette verifiziert: Mapping → `resolveDisplayLabel` (Live-Anzeige) → `buildExportProfileNames` (Export) nutzen dieselbe Tabelle; `deriveUiSegments` läuft nach der Zuweisung.
+
 ## 0.9.5 / 142 (2026-08-23)
 
 **Phase 9e – Fix: Fingerprint-Zuweisung ändert Namen sofort**

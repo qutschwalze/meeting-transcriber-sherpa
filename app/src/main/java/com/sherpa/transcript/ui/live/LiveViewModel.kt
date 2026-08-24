@@ -2313,11 +2313,20 @@ class LiveViewModel : ViewModel() {
         }
         if (globalVoiceBank.enrollFromSamples(targetId, samples)) {
             if (newName != null) globalVoiceBank.rename(targetId, newName)
-            // Phase 9d (0.9.5): Session-GID des Segments SOFORT dem Profil zuordnen –
-            // ohne diesen Eintrag kennt die Namens-Auflösung (Anzeige + Export) den
-            // neuen Fingerprint erst beim nächsten automatischen Global-Match.
-            val gid = seg.speakerId?.removePrefix("speaker_")?.toIntOrNull()
-            if (gid != null) diarizationChunkWorker.registerProfileMapping(gid, targetId)
+            // Phase 9e-fix2 (0.9.6): Session-GID SOFORT dem Profil zuordnen.
+            // WICHTIG: Die GID steht im ASSIGNED-Overlay, nicht im raw-Segment
+            // (raw hat keine speakerId – 3-Schichten-Architektur!). Der Fix aus
+            // 0.9.5 las raw lesen → gid=null → wirkungslos.
+            val gid = (assignedFinalSegments.firstOrNull { it.segmentId == segmentId }?.speakerId
+                ?: seg.speakerId)
+                ?.removePrefix("speaker_")?.toIntOrNull()
+            if (gid != null) {
+                diarizationChunkWorker.registerProfileMapping(gid, targetId)
+                Log.i(TAG, "VB_GLOBAL_ASSIGN mapping session=$gid → profil=${targetId.takeLast(8)}")
+                TestLog.log("VB_GLOBAL_MAPPING session=$gid profil=${targetId.takeLast(8)}")
+            } else {
+                Log.w(TAG, "VB_GLOBAL_ASSIGN: keine Session-GID für ${segmentId.take(8)} ermittelbar")
+            }
             SpeakerProfiles.save()
             refreshSpeakerProfiles()
             deriveUiSegments()
