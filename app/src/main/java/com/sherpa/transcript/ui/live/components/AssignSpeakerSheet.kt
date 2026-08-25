@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -47,7 +48,7 @@ fun AssignSpeakerSheet(
         (it.name ?: "Profil ${it.id.takeLast(8)}").contains(filter.trim(), ignoreCase = true)
     }
 
-    Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+    Column(modifier = Modifier.fillMaxWidth().padding(16.dp).imePadding()) {
         Text(
             text = "Sprecher zuweisen",
             style = MaterialTheme.typography.titleMedium,
