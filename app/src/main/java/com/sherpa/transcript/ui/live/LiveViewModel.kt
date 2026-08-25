@@ -2105,6 +2105,10 @@ class LiveViewModel : ViewModel() {
                             // Phase 9d: Bridge auf 100 setzen → globales Banner zeigt
                             // "Benennen/Überspringen" (fehlte bisher → blau hängend)
                             com.sherpa.transcript.ui.live.ImportUiBridge.set(100, fileName)
+                            // Phase 10c (0.10.0): Debug-Upload auch für Imports (vorher
+                            // fehlte triggerDebugUpload → importierte Dateien landeten nie
+                            // im Upload-Server)
+                            if (_uiState.value.debugMode) triggerDebugUpload()
                         }
                     } else stopPostProcessingIndicator()
 

@@ -2,6 +2,14 @@
 
 Alle Versionswechsel werden hier dokumentiert. Jeder Build erhöht `versionCode` + `versionName` (siehe `app/build.gradle.kts`).
 
+## 0.10.0 / 147 (2026-08-25)
+
+**Phase 10c – Debug-Upload auch für Sprachnachrichten-Importe**
+
+- **Geräte-Befund:** Geteilte Sprachnachrichten wurden korrekt transkribiert und im Verlauf gespeichert, aber die Debug-Dateien (WAV/Log/MD) landeten **nie im Upload-Server** – `triggerDebugUpload()` wurde nur im `stopRecording`-Pfad aufgerufen, nicht im `importAudio`-Pfad.
+- **Fix:** `triggerDebugUpload()` wird jetzt auch im Import-Pfad aufgerufen (nach dem Save-Job in `invokeOnCompletion`).
+- **Nebenbei:** SAVE_STAGE-Diagnose (0.9.9) ins TestLog – künftige Save-Pfade sind aus den Uploads vollständig nachvollziehbar.
+
 ## 0.9.9 / 146 (2026-08-24)
 
 **Phase 10b – Root Cause gefunden: Anzeige-IDs ↔ Bank-IDs Desync im Save-Pfad**
