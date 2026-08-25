@@ -1,4 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <style name="Theme.SherpaTranscript" parent="android:Theme.Material.Light.NoActionBar" />
+    
+    <!-- Splash: switched from main theme in onCreate, shows during cold start -->
+    <style name="Theme.SherpaTranscript.Splash" parent="Theme.SherpaTranscript">
+        <item name="android:windowBackground">@android:color/white</item>
+    </style>
 </resources>

@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import com.sherpa.transcript.R
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -26,6 +27,7 @@ import com.sherpa.transcript.ui.theme.SherpaTranscriptTheme
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
+        setTheme(R.style.Theme_SherpaTranscript) // Switch from splash theme
         super.onCreate(savedInstanceState)
 
         // Phase 9 (0.9.0): Geteilte Audiodatei? → an das LiveViewModel weiterreichen.
