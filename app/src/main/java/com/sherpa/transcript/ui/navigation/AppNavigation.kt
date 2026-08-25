@@ -2,6 +2,10 @@ package com.sherpa.transcript.ui.navigation
 
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.TopAppBar
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Settings
@@ -34,6 +38,7 @@ import com.sherpa.transcript.ui.detail.TranscriptDetailScreen
 import com.sherpa.transcript.ui.history.HistoryScreen
 import com.sherpa.transcript.ui.live.LiveScreen
 import com.sherpa.transcript.ui.settings.SettingsScreen
+import com.sherpa.transcript.ui.settings.ContactsSection
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -81,6 +86,7 @@ private val bottomNavItems = listOf(
 
 /** Routes with arguments */
 private const val ROUTE_DETAIL = "detail/{transcriptId}"
+private const val ROUTE_CONTACTS = "contacts"
 
 @Composable
 fun AppNavigation() {
@@ -201,7 +207,9 @@ fun AppNavigation() {
                 )
             }
             composable(BottomNavItem.Settings.route) {
-                SettingsScreen()
+                SettingsScreen(
+                    onNavigateToContacts = { navController.navigate(ROUTE_CONTACTS) },
+                )
             }
 
             // Detail-Screen (ohne Bottom-Nav)
@@ -216,6 +224,27 @@ fun AppNavigation() {
                     transcriptId = transcriptId,
                     onBack = { navController.popBackStack() },
                 )
+            }
+
+            // Contacts-Screen (Einstellungen → Kontakte)
+            @OptIn(ExperimentalMaterial3Api::class)
+            composable(ROUTE_CONTACTS) {
+                Scaffold(
+                    topBar = {
+                        TopAppBar(
+                            title = { Text("Kontakte") },
+                            navigationIcon = {
+                                IconButton(onClick = { navController.popBackStack() }) {
+                                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "Zurück")
+                                }
+                            },
+                        )
+                    },
+                ) { padding ->
+                    Column(modifier = Modifier.padding(padding).padding(16.dp)) {
+                        ContactsSection()
+                    }
+                }
             }
         }
         }

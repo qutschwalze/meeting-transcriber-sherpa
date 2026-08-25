@@ -39,9 +39,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.sherpa.transcript.BuildConfig
+import com.sherpa.transcript.R
 import com.sherpa.transcript.data.debug.DebugUploadClient
 import com.sherpa.transcript.data.local.AsrLanguageMode
 import com.sherpa.transcript.data.local.SettingsStore
@@ -61,7 +63,7 @@ import java.io.File
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(settingsStore: SettingsStore = SettingsStore.current) {
+fun SettingsScreen(settingsStore: SettingsStore = SettingsStore.current, onNavigateToContacts: () -> Unit = {}) {
     val themeMode by settingsStore.themeMode.collectAsState()
     val fontSize by settingsStore.fontSize.collectAsState()
     val debugMode by settingsStore.debugMode.collectAsState()
@@ -369,10 +371,10 @@ fun SettingsScreen(settingsStore: SettingsStore = SettingsStore.current) {
                 }
             }
 
-            // ── Über / Modell-Info ─────────────────────────────────────
+            // ── Über / Modelle ─────────────────────────────────────
             item {
                 Spacer(modifier = Modifier.height(16.dp))
-                SectionTitle("Über / Modelle")
+                SectionTitle(stringResource(R.string.settings_title).let { "Über / Modelle" })
             }
 
             item {
@@ -382,9 +384,8 @@ fun SettingsScreen(settingsStore: SettingsStore = SettingsStore.current) {
                 InfoRow("Segmentation (Diarization)", assetSize(ctx, "segmentation.onnx"))
                 InfoRow("Embedding (Diarization)", assetSize(ctx, "embedding.onnx"))
                 Spacer(modifier = Modifier.height(8.dp))
-                // GitHub-Release-Link (für schnellen Download / Testanleitung)
                 Text(
-                    text = "GitHub: qutschwalze/meeting-transcriber-sherpa/releases",
+                    text = stringResource(R.string.about_github),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.clickable {
@@ -404,10 +405,23 @@ fun SettingsScreen(settingsStore: SettingsStore = SettingsStore.current) {
                 )
             }
 
-            item { Spacer(modifier = Modifier.height(24.dp)) }
+            // ── Kontakte (navigierbar) ─────────────────────────────────────
+            item {
+                Spacer(modifier = Modifier.height(16.dp))
+                SectionTitle(stringResource(R.string.contacts_title))
+            }
 
-            // ── Phase 7a (0.7.2): Kontakte (Speaker-Profile) ──────────
-            item { ContactsSection() }
+            item {
+                val scope = rememberCoroutineScope()
+                Text(
+                    text = "Sprecher-Profile verwalten (umbenennen, zusammenführen, löschen)",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.clickable {
+                        scope.launch { onNavigateToContacts() }
+                    },
+                )
+            }
 
             item { Spacer(modifier = Modifier.height(24.dp)) }
         }
