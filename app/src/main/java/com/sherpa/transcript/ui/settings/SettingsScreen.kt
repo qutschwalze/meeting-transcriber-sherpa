@@ -4,6 +4,7 @@ import android.os.Environment
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -380,6 +381,20 @@ fun SettingsScreen(settingsStore: SettingsStore = SettingsStore.current) {
                 val ctx = LocalContext.current
                 InfoRow("Segmentation (Diarization)", assetSize(ctx, "segmentation.onnx"))
                 InfoRow("Embedding (Diarization)", assetSize(ctx, "embedding.onnx"))
+                Spacer(modifier = Modifier.height(8.dp))
+                // GitHub-Release-Link (für schnellen Download / Testanleitung)
+                Text(
+                    text = "GitHub: qutschwalze/meeting-transcriber-sherpa/releases",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.clickable {
+                        val intent = android.content.Intent(
+                            android.content.Intent.ACTION_VIEW,
+                            android.net.Uri.parse("https://github.com/qutschwalze/meeting-transcriber-sherpa/releases/latest")
+                        )
+                        ctx.startActivity(intent)
+                    },
+                )
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
                     text = "100% offline – keine Cloud, kein Netzwerk für Transkription und Diarization.",
