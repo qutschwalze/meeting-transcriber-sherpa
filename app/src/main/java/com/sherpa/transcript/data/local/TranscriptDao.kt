@@ -41,8 +41,8 @@ interface TranscriptDao {
     /**
      * Phase 8 (0.7.5): Volltextsuche über Titel, Segmenttext UND Sprecher-Namen.
      * Ein Transkript matcht, wenn Titel ODER irgendein Segment (Text oder
-     * speakerName) die Query enthält – so findet "Koschi" alle Aufnahmen mit
-     * seinem Namen, auch wenn der Name nur im Sprecher-Label steckt.
+     * speakerName) die Query enthält – so findet ein gesuchter Kontaktname
+     * alle Aufnahmen zu diesem Namen, auch wenn er nur im Sprecher-Label steckt.
      */
     @Query(
         "SELECT DISTINCT t.* FROM transcripts t WHERE " +

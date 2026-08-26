@@ -31,3 +31,6 @@ scripts/host-test/asr_out_*.json
 scripts/host-test/pipeline_out.json
 __pycache__/
 .worktrees/
+
+# Hermes-Agent-Artefakte (interne Pläne) nicht committen
+.hermes/
