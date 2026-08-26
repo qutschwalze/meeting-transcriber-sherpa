@@ -844,9 +844,18 @@ class LiveViewModel : ViewModel() {
             val candLabel = cand?.takeIf { !it.speakerId.isNullOrBlank() }
             val bestLabel = best?.takeIf { !it.speakerId.isNullOrBlank() }
 
-            // Schutz: cand hat Label mit neuer ID (nicht in best) → verwerfen
+            // Schutz: cand hat Label mit neuer ID (nicht in best) → verwerfen.
+            // 0.10.3: AUSNAHME – Labels, deren ID in der Session-Bank bestätigt ist
+            // (confirmedBankIds), werden NIE gestrippt. Diese Ausnahme war seit
+            // 0.5.55 DOKUMENTIERT, fehlte aber im per-Segment-Check (sie existierte
+            // nur im Trigger candHasNewIds). Geräte-Befund 0.10.2 (testaufnahme_
+            // 101317, 10-min Meeting): Nach dem ersten Guard-Trigger wurden auch
+            // bank-bestätigte Sprecher verworfen (gid 5: 12 saubere RESOLVEs,
+            // Host-Matrix Intra ≥ 0,617 / Inter ≤ 0,600) → der ganze Mittelteil
+            // kollabierte im Save auf einen Sprecherblock (01:38–06:25).
             val effectiveCandLabel = if (shouldStripNewIds && candLabel != null &&
-                candLabel.speakerId !in bestSpeakerIds
+                candLabel.speakerId !in bestSpeakerIds &&
+                candLabel.speakerId !in confirmedBankIds
             ) {
                 strippedCount++
                 null
@@ -1601,6 +1610,11 @@ class LiveViewModel : ViewModel() {
                             "best=(labeled=${previousBest.labeledSegments} speakers=${previousBest.distinctSpeakers} " +
                             "dur=${previousBest.totalLabeledDurationMs}) " +
                             "diff=(new=${diff.newlyLabeledSegments} changed=${diff.changedSpeakerAssignments} lost=${diff.lostLabels})")
+                    // 0.10.3: Zuweisungs-Entscheidungen ins TestLog (liefen vorher nur
+                    // in logcat – für die A/B-Analyse müssen sie in den Debug-Upload).
+                    TestLog.log("ASSIGN ${logPrefix}NO_CHANGE epoch=$epoch " +
+                            "cand=(spk=${candQuality.distinctSpeakers} labeled=${mergedQuality.labeledSegments}/${merged.size}) " +
+                            "best=(spk=${previousBest.distinctSpeakers} labeled=${previousBest.labeledSegments})")
                 } else if (shouldAcceptAssignment(merged)) {
                     if (forceFinal && previousBest.distinctSpeakers >= 2 &&
                         mergedQuality.distinctSpeakers < previousBest.distinctSpeakers
@@ -1608,6 +1622,9 @@ class LiveViewModel : ViewModel() {
                         Log.w(TAG, "ChunkedDiarization FINAL_SKIP_COLLAPSE: epoch=$epoch " +
                                 "${previousBest.distinctSpeakers}→${mergedQuality.distinctSpeakers} speakers " +
                                 "— keeping pre-stop best")
+                        // 0.10.3: auch ins TestLog
+                        TestLog.log("ASSIGN ${logPrefix}SKIP_COLLAPSE epoch=$epoch " +
+                                "best=${previousBest.distinctSpeakers}spk cand=${mergedQuality.distinctSpeakers}spk – keeping pre-stop best")
                     } else {
                         assignedFinalSegments = merged
                         bestAssignmentQuality = mergedQuality
@@ -1654,6 +1671,9 @@ class LiveViewModel : ViewModel() {
                                 "best=(labeled=${previousBest.labeledSegments} speakers=${previousBest.distinctSpeakers} " +
                                 "dur=${previousBest.totalLabeledDurationMs} ids=[$prevSpeakerIds]) " +
                                 "diff=(new=${diff.newlyLabeledSegments} changed=${diff.changedSpeakerAssignments} lost=${diff.lostLabels})")
+                        // 0.10.3: auch ins TestLog (A/B-Nachweis: welche IDs kommen an?)
+                        TestLog.log("ASSIGN ${logPrefix}ACCEPTED_IMPROVED epoch=$epoch " +
+                                "merged=(spk=${mergedQuality.distinctSpeakers} ids=[$mergedSpeakerIds] labeled=${mergedQuality.labeledSegments}/${merged.size})")
                     }
                 } else {
                     Log.w(TAG, "ChunkedDiarization ${logPrefix}REJECTED: epoch=$epoch raw=${rawFinalSegments.size} " +
@@ -1664,6 +1684,11 @@ class LiveViewModel : ViewModel() {
                             "best=(labeled=${previousBest.labeledSegments} speakers=${previousBest.distinctSpeakers} " +
                             "dur=${previousBest.totalLabeledDurationMs}) " +
                             "diff=(new=${diff.newlyLabeledSegments} changed=${diff.changedSpeakerAssignments} lost=${diff.lostLabels})")
+                    // 0.10.3: auch ins TestLog – REJECTED-Entscheidungen waren bisher
+                    // unsichtbar, obwohl sie die Save-Zusammensetzung direkt bestimmen.
+                    TestLog.log("ASSIGN ${logPrefix}REJECTED epoch=$epoch " +
+                            "cand=(spk=${candQuality.distinctSpeakers} labeled=${mergedQuality.labeledSegments}/${merged.size}) " +
+                            "best=(spk=${previousBest.distinctSpeakers} labeled=${previousBest.labeledSegments})")
                 }
             }
         }

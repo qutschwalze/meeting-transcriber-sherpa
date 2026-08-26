@@ -458,6 +458,17 @@ class DiarizationChunkWorker(
                         // >4s hat bei Standup-Drift 7 Müll-Profile pro Meeting
                         // erzeugt). Stattdessen pending mit 2-Kontakt-Härtung:
                         // enroll() bestätigt erst beim ZWEITEN unabhängigen Kontakt.
+                        // 0.10.3 Kollisions-Guard: freshGlobalId stammt aus dem
+                        // Bestands-Maximum, kennt aber Bank-Pendings NICHT. Geräte-
+                        // Befund 0.10.2 (testaufnahme_101317): Die Bestand-Allokation
+                        // vergab gid 17 als Pending, eine Sekunde später kollidierte
+                        // die Fehlzuordnungs-Allokation mit derselben 17 → enroll()
+                        // sah das FREMDE Pending und bestätigte sofort ("NEUE ID=17
+                        // CONFIRMED") – Phantom-Profil aus zwei verschiedenen Stimmen.
+                        while (voiceBank.hasVoiceprintFor(freshGlobalId)) {
+                            TestLog.log("VB ID_KOLLISION fresh=$freshGlobalId existiert bereits (Bestands-/Pending-Doppelallokation) → übersprungen")
+                            freshGlobalId++
+                        }
                         finalMapping = finalMapping + (localId to freshGlobalId)
                         val enrolled = voiceBank.enroll(freshGlobalId, samples, durationMs,
                             allowQuickConfirm = false)

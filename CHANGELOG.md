@@ -2,6 +2,16 @@
 
 Alle Versionswechsel werden hier dokumentiert. Jeder Build erhöht `versionCode` + `versionName` (siehe `app/build.gradle.kts`).
 
+## 0.10.3 / 150 (2026-08-26)
+
+**Phase 10d – Strip-Guard-Lücke geschlossen (Save-Kollaps trotz korrekter Rolling-Trennung) + ID-Kollisions-Guard**
+
+- **Geräte-Befund (10-min Meeting, testaufnahme_20260826_101317):** Die Rolling-Diarization trennte die Stimmen korrekt – gid 0 und gid 5 lösten sich abwechselnd auf (12 saubere gid5-RESOLVEs, Sims 0,67–0,81; Host-Matrix mit dem App-Embedding-Modell auf der App-eigenen WAV: Intra ≥ 0,617, Inter ≤ 0,600). Der gespeicherte Export kollabierte trotzdem: Mittelteil 01:38–06:25 als EIN Sprecherblock + 10 „Unbekannt"-Blöcke.
+- **Root Cause:** Der Strip-Guard in `mergeCandidateIntoBest` (Schutz vor unbestätigten Fehlcluster-IDs) warf auch Labels **bank-bestätigter** Sprecher weg. Die Ausnahme „bestätigte Voice-Bank-Sprecher werden nie gestrippt" war seit 0.5.55 dokumentiert, existierte aber nur im Guard-Trigger (`candHasNewIds`) – nicht im per-Segment-Check. Nach dem ersten Trigger blieb nur gid 0 übrig; der Save-Pfad füllte die Restlücken per Nearest-Confirmed-Resolve → Kollaps auf einen Block.
+- **Fix 1:** Per-Segment-Ausnahme ergänzt (`candLabel.speakerId !in confirmedBankIds`) – bank-bestätigte Sprecher überleben den Guard jetzt.
+- **Fix 2 – ID-Kollisions-Guard (Worker):** `freshGlobalId` stammt aus dem Bestands-Maximum und kennt Bank-Pendings nicht. Im Testlauf kollidierte die Bestands-Allokation (gid 17 als Pending) mit der Fehlzuordnungs-Allokation derselben 17 → `enroll()` sah das fremde Pending und bestätigte sofort ein Phantom-Profil aus zwei verschiedenen Stimmen („NEUE ID=17 CONFIRMED"). Vor der Allokation prüft jetzt eine Schleife `hasVoiceprintFor()` (Diagnose-Zeile `VB ID_KOLLISION`).
+- **Diagnose:** Zuweisungs-Entscheidungen wandern ins TestLog (`ASSIGN ACCEPTED_IMPROVED / REJECTED / NO_CHANGE / SKIP_COLLAPSE`) – sie liefen vorher nur in logcat und machten Save-Kollapse aus den Uploads unerklärlich.
+
 ## 0.10.2 / 149 (2026-08-25)
 
 **CONTINUITY_GAP_SEC 2→12s + Bank-Aware Guard**
