@@ -28,8 +28,8 @@ android {
         applicationId = "com.sherpa.transcript"
         minSdk = 26
         targetSdk = 35
-        versionCode = 150
-        versionName = "0.10.3"
+        versionCode = 151
+        versionName = "0.10.4"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -81,7 +81,7 @@ android {
 
 dependencies {
     // Sherpa-ONNX (AAR from libs/)
-    implementation(files("libs/sherpa-onnx-1.13.4.aar"))
+    implementation(files("libs/sherpa-onnx-1.13.6.aar"))
 
     // Compose BOM (manages all Compose artifact versions)
     val composeBom = platform("androidx.compose:compose-bom:2026.06.01")

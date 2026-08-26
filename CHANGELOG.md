@@ -2,6 +2,15 @@
 
 Alle Versionswechsel werden hier dokumentiert. Jeder Build erhöht `versionCode` + `versionName` (siehe `app/build.gradle.kts`).
 
+## 0.10.4 / 151 (2026-08-26)
+
+**Phase 10e – Runtime-Update: sherpa-onnx 1.13.4 → 1.13.6**
+
+- **Anlass:** Wartungscheck der sherpa-onnx-Komponenten (Runtime-AAR + Modelle). Ergebnis: Kroko-ASR-Modelle (de/en 2025-08-06) sind die neuesten; `segmentation.onnx` (ReVerb v1) und `embedding.onnx` (ERes2Net 3dspeaker) sind upstream unverändert → nur die Runtime wurde nachgezogen.
+- **AAR-Tausch:** `sherpa-onnx-1.13.6.aar` (49,1 MB, Release v1.13.6 vom 18.08.) ersetzt 1.13.4 (vom 07.07.). ONNX-Runtime-Basis aktualisiert sich damit mit.
+- **Relevante Upstream-Änderungen:** Pyannote-Segmentation-Fensterverschiebung jetzt konfigurierbar (`window shift`, neu in C-API/Bindings), Per-Stage-Timing für Offline-Diarization im Debug-Modus (nützlich für künftige POSTPROCESS-Analysen), diverse Fixes (Nemo-Streaming-Decoding, UB-Fix, TTS — für uns ohne Auswirkung).
+- **Kein Verhaltensrisiko erwartet:** Diarization-Pipeline (Segmentation+Embedding+Clustering) unverändert, App-Konfiguration (minDurationOn/Off, AUTO 0.35) bleibt identisch. Erste Geräte-Aufnahme mit der neuen Runtime sollte die üblichen Diagnosezeilen (VB_IDENTIFY-Sims, ASSIGN) im gewohnten Muster zeigen.
+
 ## 0.10.3 / 150 (2026-08-26)
 
 **Phase 10d – Strip-Guard-Lücke geschlossen (Save-Kollaps trotz korrekter Rolling-Trennung) + ID-Kollisions-Guard**
