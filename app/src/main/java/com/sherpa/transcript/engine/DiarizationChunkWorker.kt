@@ -111,8 +111,12 @@ class DiarizationChunkWorker(
         /** Phase 10 (Fix 1): Max. Lücke (Sekunden) für den Kontinuitätserbe –
          * ein Block ohne Bank-Match erbt die ID des Vorgängers, wenn er direkt
          * anschließt. Host-Befund: Vorgänger-Sim mean 0.819 (vs. 0.479 zur
-         * Referenz) → 2 s ist konservativ und deckt Monolog-Blöcke ab. */
-        private const val CONTINUITY_GAP_SEC = 2f
+         * Referenz).
+         *
+         * 0.10.2: Gap von 2→12s (Chunk-Abstand 8-15s). Bank-Aware Guard:
+         * Nur erben wenn Vorgänger NICHT via Global-Bank gemappt wurde
+         * (sonst könnte es ein anderer Sprecher sein). Mindestdauer 1s. */
+        private const val CONTINUITY_GAP_SEC = 12f
 
         /**
          * Chunk-Retry (0.5.54): Mehrere Versätze für den 2. Engine-Versuch.
@@ -313,6 +317,7 @@ class DiarizationChunkWorker(
         var lastMappedEndSec = -Float.MAX_VALUE
         var lastMappedGlobalId: Int? = null
         var lastMappedLocalId = Int.MIN_VALUE
+        var lastMappedWasGlobalResolved = false
         var continuityInheritedCount = 0
         val bankSize = voiceBank?.speakerCount ?: 0
         var freshGlobalId = (globalSegments.maxOfOrNull { it.speakerId } ?: -1) + 1
@@ -340,6 +345,7 @@ class DiarizationChunkWorker(
                     lastMappedEndSec = best.endSec
                     lastMappedGlobalId = matchedGlobalId
                     lastMappedLocalId = localId
+                    lastMappedWasGlobalResolved = false // session bank match
                     Log.d(TAG, "VOICE_BANK resolve: local=$localId → global=$matchedGlobalId " +
                             "(dur=${durationMs}ms, statt neue ID ${result.mapping[localId]})")
                     TestLog.log("VB local=$localId dur=${durationMs}ms → RESOLVE auf global=$matchedGlobalId (statt neue ID ${result.mapping[localId]})")
@@ -351,12 +357,17 @@ class DiarizationChunkWorker(
                 // Monolog-Blöcke fielen <0.62 gegen die Referenz → neue IDs.
                 // Der VORGÄNGER ist dagegen stabil (mean sim 0.819, 88% >=0.62).
                 // Ein Block ohne Bank-Match, der zeitlich DIREKT an einen bereits
-                // gemappten Block anschließt (<2s Lücke), erbt dessen globale ID –
+                // gemappten Block anschließt (<12s Lücke), erbt dessen globale ID –
                 // BEVOR eine neue ID gespawnt wird. Die 0.62-Regel bleibt unangetastet.
-                if (best.startSec - lastMappedEndSec < CONTINUITY_GAP_SEC &&
-                    lastMappedEndSec >= best.startSec - CONTINUITY_GAP_SEC &&
-                    lastMappedGlobalId != null && lastMappedLocalId != localId
-                ) {
+                //
+                // 0.10.2: Bank-Aware Guard – NICHT erben wenn Vorgänger via Global-Bank
+                // gemappt wurde (sonst könnte es ein anderer Sprecher sein).
+                // Mindestdauer 1s für den aktuellen Block (Kurzfragmente nicht erben).
+                val gap = best.startSec - lastMappedEndSec
+                val isWithinGap = gap in 0f..CONTINUITY_GAP_SEC && gap >= 0f
+                val predecessorWasNotGlobal = lastMappedGlobalId != null && lastMappedLocalId != localId && !lastMappedWasGlobalResolved
+                val currentBlockLongEnough = durationMs >= 1000L
+                if (isWithinGap && predecessorWasNotGlobal && currentBlockLongEnough) {
                     finalMapping = finalMapping + (localId to lastMappedGlobalId)
                     finalNewSpeakerIds = finalNewSpeakerIds - localId
                     continuityInheritedCount++
@@ -364,7 +375,7 @@ class DiarizationChunkWorker(
                     lastMappedEndSec = best.endSec
                     lastMappedLocalId = localId
                     TestLog.log("VB local=$localId dur=${durationMs}ms → KONTINUITÄT global=$lastMappedGlobalId " +
-                            "(gap=${(best.startSec - lastMappedEndSec).toInt()}ms, statt neue ID ${result.mapping[localId]})")
+                            "(gap=${gap.toInt()}s, statt neue ID ${result.mapping[localId]})")
                     continue
                 }
 
@@ -408,6 +419,7 @@ class DiarizationChunkWorker(
                         lastMappedEndSec = best.endSec
                         lastMappedGlobalId = sessionId
                         lastMappedLocalId = localId
+                        lastMappedWasGlobalResolved = true
                         Log.d(TAG, "VB_GLOBAL resolve: local=$localId → profil=${profileId.takeLast(8)} " +
                                 "(session=$sessionId, dur=${durationMs}ms, statt neue ID ${result.mapping[localId]})")
                         TestLog.log("VB_GLOBAL_RESOLVE local=$localId → profil=${profileId.takeLast(8)} (session=$sessionId)")
