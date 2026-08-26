@@ -27,7 +27,6 @@ import com.sherpa.transcript.ui.theme.SherpaTranscriptTheme
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
-        setTheme(R.style.Theme_SherpaTranscript) // Switch from splash theme
         super.onCreate(savedInstanceState)
 
         // Phase 9 (0.9.0): Geteilte Audiodatei? → an das LiveViewModel weiterreichen.

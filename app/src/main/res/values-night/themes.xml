@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.SherpaTranscript" parent="android:Theme.Material.Light.NoActionBar" />
+    <style name="Theme.SherpaTranscript" parent="android:Theme.Material.NoActionBar" />
     
-    <!-- Splash: dunkler Hintergrund passend zum Dark-Theme (Gray10=#1C1C1E) -->
+    <!-- Splash Dark Mode: gleicher Hintergrund wie Compose Dark Theme -->
     <style name="Theme.SherpaTranscript.Splash" parent="Theme.SherpaTranscript">
         <item name="android:windowBackground">#1C1C1E</item>
     </style>

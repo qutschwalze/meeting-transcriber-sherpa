@@ -60,10 +60,41 @@ def upload():
         file_type = {".wav": "audio", ".mp3": "audio", ".json": "json",
                      ".txt": "log", ".log": "log", ".md": "markdown",
                      ".png": "image", ".jpg": "image"}.get(ext, "other")
+    fname = Path(f.filename).name
+
+    # 0.6.24: Dedup – gleicher Dateiname + gleiche Größe existiert bereits
+    # (Doppel-Upload durch mehrfachen Klick / Auto+manuell). Das Blob wird
+    # trotzdem konsumiert, damit der Client keinen halben Upload sieht.
+    # Blob-Größe robust aus dem Stream (SpooledTemporaryFile) – NICHT
+    # f.content_length (das ist die Multipart-REQUEST-Größe).
+    try:
+        if hasattr(f.stream, "seek"):
+            f.stream.seek(0, 2)
+            blob_len = f.stream.tell()
+            f.stream.seek(0)
+        else:
+            blob_len = None
+    except OSError:
+        blob_len = None
+    existing = None
+    for p in UPLOAD_DIR.rglob("*"):
+        if p.is_file() and not p.name.endswith(".meta.json") and p.name == fname:
+            try:
+                if blob_len is not None and p.stat().st_size == blob_len:
+                    existing = p
+                    break
+            except OSError:
+                pass
+    if existing is not None:
+        f.stream.read()  # Blob restlos konsumieren
+        rel = str(existing.relative_to(UPLOAD_DIR))
+        return jsonify({"ok": True, "dedup": True, "path": rel,
+                        "size": existing.stat().st_size, "existing": True}), 200
+
     today = datetime.now().strftime("%Y-%m-%d")
     dest = UPLOAD_DIR / today / file_type
     dest.mkdir(parents=True, exist_ok=True)
-    out = dest / Path(f.filename).name
+    out = dest / fname
     f.save(str(out))
     _save_meta(out, device, session_id, file_type, app_version)
     return jsonify({"ok": True, "path": str(out.relative_to(UPLOAD_DIR)), "size": out.stat().st_size}), 201
