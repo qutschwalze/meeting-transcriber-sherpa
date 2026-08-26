@@ -2,6 +2,15 @@
 
 Alle Versionswechsel werden hier dokumentiert. Jeder Build erhöht `versionCode` + `versionName` (siehe `app/build.gradle.kts`).
 
+## 0.10.2 / 149 (2026-08-25)
+
+**CONTINUITY_GAP_SEC 2→12s + Bank-Aware Guard**
+
+- **Host-Befund (62-min Meeting):** `CONTINUITY_GAP_SEC=2` greift nur auf sub-chunk-Ebene (Chunks 8-15s auseinander). KONTINUITÄT feuerte nur 16× bei 242 Chunks.
+- **Fix 1 – Gap erhöht:** 2→12s (passend zum typischen Chunk-Intervall)
+- **Fix 2 – Bank-Aware Guard:** Nur erben wenn Vorgänger NICHT via Global-Bank gemappt wurde (sonst könnte es ein anderer Sprecher sein). Mindestdauer 1s für aktuelle Blöcke.
+- **Erwartung:** Weniger Sprecher-Fragmentierung in langen Meetings (10+ Personen).
+
 ## 0.10.0 / 147 (2026-08-25)
 
 **Phase 10c – Debug-Upload auch für Sprachnachrichten-Importe**
