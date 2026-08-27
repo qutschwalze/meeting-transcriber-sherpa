@@ -17,6 +17,7 @@ local.properties
 *.keystore
 keystore.properties
 /.local
+/debug-server/.venv
 
 # Test-WAVs (nicht mehr benötigt)
 *.wav

@@ -3,6 +3,16 @@
 All version changes are documented here. Every build bumps `versionCode` + `versionName` (see `app/build.gradle.kts`).
 **Policy (since 0.10.6):** entries are written in English and are deliberately free of device-, person- or meeting-specific details (no recording filenames, participant counts, durations, names) — the repository is public.
 
+## 0.10.7 / 154 (2026-08-27)
+
+**Diarization – duplicate voice-bank profiles of the same speaker no longer split the export**
+
+- **Device finding:** an exported transcript contained more speakers than the actual number of participants. The session worker reuses a session ID only *within* one bank profile — but a known voice can exist as **duplicate profiles** in the persistent voice bank (enrolled in earlier sessions while drifting below the 0.62 identify threshold). Each duplicate match then creates its own session ID, and all of them survive the save.
+- **Host truth:** embedding matrix on the app's own WAV for the exported IDs: the "extra" speakers measure 0.58–0.70 similarity against a stable voice of the same session (cross-pair mean 0.33) — acoustically the same voice, split across IDs. Log cross-check: the session's gid→profile map contains several profiles of the same voice; the session voice bank itself holds only a few quick-confirmed contacts, so the save-time correction (which matched confirmed session-bank entries only) found nothing to merge.
+- **Fix 1 – global-bank correction (`VB_CORRECT_GLOBAL` / `VB_RESOLVE_GLOBAL`, debug path):** the overlay correction now falls back to the *global* bank when the session bank has no match. Conservative: only profile-less IDs (pending collector IDs) or unlabeled segments are remapped, and only when the voice 0.62-clearly belongs to a profile-mapped session ID.
+- **Fix 2 – duplicate-profile merge (`VB_DUP_MERGE`, always on):** at save time, session IDs whose bank profiles are near-duplicates (profile similarity ≥ 0.60) are merged transitively (union-find); the ID with the most speech time in the overlay becomes the label anchor. Profile-less IDs stay untouched. Tuning variable: `SpeakerOverlayMerger.DUP_MERGE_THRESHOLD`.
+- Unit tests: merge of duplicate-mapped IDs, threshold respect, transitivity, profile-less and missing-profile cases.
+
 ## 0.10.6 / 153 (2026-08-27)
 
 **Robustness – CPU wake lock for screen-off recordings + thermal guard for long meetings**

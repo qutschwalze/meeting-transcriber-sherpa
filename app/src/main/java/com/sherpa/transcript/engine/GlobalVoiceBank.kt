@@ -168,6 +168,19 @@ class GlobalVoiceBank(
         counts[profileId] = sampleCount
     }
 
+    /**
+     * 0.10.7: Cosine-Sim zwischen zwei Profil-Voiceprints – für die
+     * Duplikat-Erkennung im Save (SpeakerOverlayMerger): Zwei Profile, die
+     * dieselbe Person repräsentieren (z. B. durch Drift als "neue" Profile
+     * eingelernt), tragen dann nicht mehr als getrennte Speaker in den Export.
+     * @return Similarity oder null, wenn eines der Profile fehlt.
+     */
+    fun profileSimilarity(profileA: String, profileB: String): Float? {
+        val a = profiles[profileA] ?: return null
+        val b = profiles[profileB] ?: return null
+        return SessionVoiceBank.cosineSimilarity(a, b)
+    }
+
     fun profileCount(profileId: String): Int = counts.getOrDefault(profileId, 0)
 
     fun contains(profileId: String): Boolean = profiles.containsKey(profileId)

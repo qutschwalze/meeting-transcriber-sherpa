@@ -44,6 +44,7 @@ import com.sherpa.transcript.engine.SherpaEmbeddingComputer
 import com.sherpa.transcript.engine.SessionVoiceBank
 import com.sherpa.transcript.engine.SpeakerDiarizationEngine
 import com.sherpa.transcript.engine.SpeakerModelDownloadManager
+import com.sherpa.transcript.engine.SpeakerOverlayMerger
 import com.sherpa.transcript.engine.ThermalGuard
 import com.sherpa.transcript.engine.TimelineComposer
 import kotlinx.coroutines.CancellationException
@@ -1127,6 +1128,8 @@ class LiveViewModel : ViewModel() {
         // Schreiben in die Anzeige-Segmente auf Anzeige-IDs gemappt werden (renumber!).
         val bankToDisplay = diarizationChunkWorker.originalGidToDisplayId()
             .entries.associate { (display, orig) -> orig to display }
+        // 0.10.7: Session-GID → Global-Profil für den Global-Bank-Fallback.
+        val profileByGid = diarizationChunkWorker.globalProfileBySessionId()
         val result = overlay.map { seg ->
             val speakerNum = seg.speakerId?.removePrefix("speaker_")?.toIntOrNull()
             val durationMs = seg.endTimeMs - seg.startTimeMs
@@ -1134,6 +1137,18 @@ class LiveViewModel : ViewModel() {
             val samples = readWavSamples(wavFile, seg.startTimeMs, seg.endTimeMs)
             if (samples == null || samples.isEmpty()) return@map seg
             val matchedBank = sessionVoiceBank.identify(samples, confirmedOnly = true)
+            // 0.10.7: Global-Bank-Fallback – die Session-Bank enthält oft nur
+            // wenige QUICK-CONFIRMED-Kontakte; die GLOBALE Bank kennt alle Profile.
+            // Konservativ: greift nur bei profil-LOSEN GIDs (Pending-Sammel-GIDs)
+            // oder unlabeled Segmenten, wenn die Stimme 0.62-klar auf einen
+            // Profil-gemappten Session-GID fällt (Geräte-Befund 27.08.: voice-B-
+            // Fragmente in einem Sammel-GID blieben sonst unkorrigiert).
+            val matchedGlobalGid = if (matchedBank == null) {
+                globalVoiceBank.identifySamples(samples)?.let { profileId ->
+                    // Rückrichtung: Profil → Session-GID (Map ist GID→Profil)
+                    profileByGid.entries.firstOrNull { it.value == profileId }?.key
+                }
+            } else null
             // Bank-Nr → Anzeige-Nr (Fallback: Bank-Nr selbst, wenn nicht gemappt)
             val matched = matchedBank?.let { bankToDisplay[it] ?: it }
             if (speakerNum == null) {
@@ -1144,6 +1159,13 @@ class LiveViewModel : ViewModel() {
                     Log.d(TAG, "VB_RESOLVE_UNLABELED: Segment ${seg.segmentId} (${seg.startTimeMs}-${seg.endTimeMs}ms) unlabeled → akustisch speaker_$matched (Wechselgrenze, 0.62-Match)")
                     TestLog.log("VB_RESOLVE_UNLABELED: Segment ${seg.startTimeMs}-${seg.endTimeMs}ms unlabeled → akustisch speaker_$matched")
                     seg.copy(speakerId = "speaker_$matched", speakerLabel = label)
+                } else if (matchedGlobalGid != null) {
+                    resolved++
+                    val displayNum = bankToDisplay[matchedGlobalGid] ?: matchedGlobalGid
+                    val label = "Sprecher ${displayNum + 1}"
+                    Log.d(TAG, "VB_RESOLVE_GLOBAL: Segment ${seg.segmentId} (${seg.startTimeMs}-${seg.endTimeMs}ms) unlabeled → akustisch speaker_$matchedGlobalGid (Global-Bank, 0.62-Match)")
+                    TestLog.log("VB_RESOLVE_GLOBAL: Segment ${seg.startTimeMs}-${seg.endTimeMs}ms unlabeled → akustisch speaker_$matchedGlobalGid")
+                    seg.copy(speakerId = "speaker_$matchedGlobalGid", speakerLabel = label)
                 } else seg
             } else if (matched != null && matched != speakerNum) {
                 corrected++
@@ -1151,6 +1173,15 @@ class LiveViewModel : ViewModel() {
                 Log.d(TAG, "VB_CORRECT: Segment ${seg.segmentId} (${seg.startTimeMs}-${seg.endTimeMs}ms) zeitlich ${seg.speakerId} → akustisch speaker_$matched (Backchannel-Korrektur)")
                 TestLog.log("VB_CORRECT: Segment ${seg.startTimeMs}-${seg.endTimeMs}ms zeitlich ${seg.speakerId} → akustisch speaker_$matched")
                 seg.copy(speakerId = "speaker_$matched", speakerLabel = label)
+            } else if (speakerNum !in profileByGid && matchedGlobalGid != null && matchedGlobalGid != speakerNum) {
+                // 0.10.7: Profil-loser GID, dessen Stimme klar einem Profil-gemappten
+                // GID gehört → Fragmente wandern zum echten Speaker (anti-Fragmentierung)
+                corrected++
+                val displayNum = bankToDisplay[matchedGlobalGid] ?: matchedGlobalGid
+                val label = "Sprecher ${displayNum + 1}"
+                Log.d(TAG, "VB_CORRECT_GLOBAL: Segment ${seg.segmentId} (${seg.startTimeMs}-${seg.endTimeMs}ms) zeitlich speaker_$speakerNum → akustisch speaker_$matchedGlobalGid (Global-Bank, profil-loser GID)")
+                TestLog.log("VB_CORRECT_GLOBAL: Segment ${seg.startTimeMs}-${seg.endTimeMs}ms zeitlich speaker_$speakerNum → akustisch speaker_$matchedGlobalGid")
+                seg.copy(speakerId = "speaker_$matchedGlobalGid", speakerLabel = label)
             } else seg
         }
         if (corrected > 0 || resolved > 0) {
@@ -1945,11 +1976,19 @@ class LiveViewModel : ViewModel() {
             val overlay = correctOverlayByVoiceBank(
                 resolveListByNearestConfirmed(buildAssignedOverlayForAllRawSegments())
             )
-            logSaveSpeakerStage("beforeSave overlay", overlay)
+            // 0.10.7: Duplikat-Profile derselben Stimme → GIDs im Save zusammenführen
+            // (Geräte-Befund: Export mit 9 Speakern, davon 2–3 dieselbe Stimme über
+            // Drift-Duplikat-Profile; Diagnosezeile VB_DUP_MERGE)
+            val dedupOverlay = SpeakerOverlayMerger.mergeDuplicateProfileGids(
+                overlay,
+                diarizationChunkWorker.globalProfileBySessionId(),
+                globalVoiceBank::profileSimilarity,
+            )
+            logSaveSpeakerStage("beforeSave overlay", dedupOverlay)
             // Segment-Splitting: lange ASR-Segmente an Diarization-Grenzen aufteilen
             val splitOverlay = if (lastDiarizationSegments.isNotEmpty()) {
-                TimelineComposer.splitLongSpeakerSegments(overlay, lastDiarizationSegments)
-            } else overlay
+                TimelineComposer.splitLongSpeakerSegments(dedupOverlay, lastDiarizationSegments)
+            } else dedupOverlay
             logSaveSpeakerStage("afterSplit", splitOverlay)
             // Finale Konsolidierung (Post-Processing) für History
             val segmentsToSave = if (splitOverlay.size >= 3) {
@@ -1959,7 +1998,7 @@ class LiveViewModel : ViewModel() {
             }
             logSaveSpeakerStage("afterEnrich", segmentsToSave)
             // DBG: Delta-Analyse – welche Segmente/Speaker verändert die Save-Pipeline?
-            logSaveStageDelta("beforeSave", overlay, "afterSplit", splitOverlay)
+            logSaveStageDelta("beforeSave", dedupOverlay, "afterSplit", splitOverlay)
             logSaveStageDelta("afterSplit", splitOverlay, "afterEnrich", segmentsToSave)
             val transcriptId = currentTranscriptId
             if (segmentsToSave.isNotEmpty() && transcriptId != null) {
