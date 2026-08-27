@@ -44,6 +44,7 @@ import com.sherpa.transcript.engine.SherpaEmbeddingComputer
 import com.sherpa.transcript.engine.SessionVoiceBank
 import com.sherpa.transcript.engine.SpeakerDiarizationEngine
 import com.sherpa.transcript.engine.SpeakerModelDownloadManager
+import com.sherpa.transcript.engine.ThermalGuard
 import com.sherpa.transcript.engine.TimelineComposer
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -191,6 +192,8 @@ class LiveViewModel : ViewModel() {
     private val engineEn = SherpaOnnxEngine(SherpaTranscriptApp.instance)
     private val speakerEngine = SpeakerDiarizationEngine(SherpaTranscriptApp.instance, SherpaTranscriptApp.instance.assets)
     private val repository = TranscriptRepository()
+    /** 0.10.6: Thermal-Guard – pausiert Inferenz-Ticks bei CPU-Throttling (Cooling-Gap). */
+    private val thermalGuard by lazy { ThermalGuard(SherpaTranscriptApp.instance) }
 
     // ── Neue Rolling-Reconciliation-Pipeline (nur bei Toggle=ON aktiviert) ──
     // Lazy-Init: bei Toggle=OFF werden diese Komponenten nie erzeugt (kein RAM/CPU).
@@ -601,7 +604,14 @@ class LiveViewModel : ViewModel() {
                     while (isActive) {
                         delay(DIARIZATION_INTERVAL_MS)
                         try {
-                            if (ENABLE_CHUNKED_DIARIZATION) runChunkedDiarization() else runDiarization()
+                            // 0.10.6: Thermal-Guard – bei Überhitzung Tick überspringen
+                            // (Audio bleibt im ChunkedAudioBuffer gepuffert → kein Verlust;
+                            // Cooling-Gap beugt Throttling-Drift bei langen Meetings vor)
+                            if (thermalGuard.isOverheating()) {
+                                TestLog.log("THERMAL skip=overheating chunk bleibt gepuffert")
+                            } else {
+                                if (ENABLE_CHUNKED_DIARIZATION) runChunkedDiarization() else runDiarization()
+                            }
                             deriveUiSegments()
                         } catch (e: CancellationException) { Log.d(TAG, "Diarization cancelled"); throw e }
                           catch (t: Throwable) { Log.e(TAG, "Diarization error: ${t.message}", t); break }

@@ -3,6 +3,14 @@
 All version changes are documented here. Every build bumps `versionCode` + `versionName` (see `app/build.gradle.kts`).
 **Policy (since 0.10.6):** entries are written in English and are deliberately free of device-, person- or meeting-specific details (no recording filenames, participant counts, durations, names) — the repository is public.
 
+## 0.10.6 / 153 (2026-08-27)
+
+**Robustness – CPU wake lock for screen-off recordings + thermal guard for long meetings**
+
+- **Wake lock:** the app now holds a `PARTIAL_WAKE_LOCK` (no timeout) for the whole recording. Without it, Doze could let the CPU sleep while the display was off, and `AudioRecord` would lose its buffer and fail mid-session. Release is explicit in `onDestroy()` (covers service stop and system kills) and on `startForeground` failure. Deliberately no timeout: a bounded lock expires inside long sessions and re-opens the same failure mode.
+- **Thermal guard:** during diarization ticks the app now reads the device thermal status (API 29+). At MODERATE heat or above, chunk inferences are paused (cooling gap) until the device recovers; audio stays buffered and is fully processed at stop (`processFinalChunk` drains everything) — no segment loss, only temporarily higher label latency on hot devices.
+- Diagnostics: skipped ticks are recorded in the test log (`THERMAL skip=overheating ...`).
+
 ## 0.10.5 / 152 (2026-08-27)
 
 **Phase 10f – Drift pre-check in the Quick-Confirm path (reduces speaker over-generation)**

@@ -28,6 +28,8 @@ import com.sherpa.transcript.R
  */
 class RecordingService : Service() {
 
+    private val wakeLockManager by lazy { WakeLockManager(this) }
+
     companion object {
         private const val TAG = "RecordingService"
         private const val CHANNEL_ID = "recording_channel"
@@ -72,8 +74,12 @@ class RecordingService : Service() {
                 startForeground(NOTIFICATION_ID, notification)
             }
             Log.d(TAG, "RecordingService foreground (microphone type)")
+            // 0.10.6: CPU-WakeLock während der Aufnahme (Screen-off-Aufnahmen
+            // überstehen sonst Doze; AudioRecord → ERROR_DEAD_OBJECT)
+            wakeLockManager.acquire()
         } catch (t: Throwable) {
             Log.e(TAG, "startForeground failed: ${t.message}")
+            wakeLockManager.release()
             stopSelf()
         }
         return START_NOT_STICKY // nur vom ViewModel gesteuert, kein Auto-Restart
@@ -81,6 +87,9 @@ class RecordingService : Service() {
 
     override fun onDestroy() {
         Log.d(TAG, "RecordingService destroyed")
+        // 0.10.6: WakeLock IMMER explizit freigeben – onDestroy deckt stopService
+        // UND Service-Kill durchs System ab (kein Timeout-Fallback nötig)
+        wakeLockManager.release()
         super.onDestroy()
     }
 
