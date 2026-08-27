@@ -1,34 +1,36 @@
 # Changelog — Meeting Transcriber Sherpa
 
-Alle Versionswechsel werden hier dokumentiert. Jeder Build erhöht `versionCode` + `versionName` (siehe `app/build.gradle.kts`).
+All version changes are documented here. Every build bumps `versionCode` + `versionName` (see `app/build.gradle.kts`).
+**Policy (since 0.10.6):** entries are written in English and are deliberately free of device-, person- or meeting-specific details (no recording filenames, participant counts, durations, names) — the repository is public.
 
 ## 0.10.5 / 152 (2026-08-27)
 
-**Phase 10f – Drift-Vorprüfung im Quick-Confirm-Pfad (Over-Generierung bei Meetings mit vielen Sprechern)**
+**Phase 10f – Drift pre-check in the Quick-Confirm path (reduces speaker over-generation)**
 
-- **Geräte-Befund (27-min-Meeting, exakt 12 Sprecher, testaufnahme_20260827_110226):** Export lieferte 36 Sprecher statt 12. Mechanik: Eine gedriftete bekannte Stimme matcht gegen ihr EIGENES Voiceprint nicht mehr (sim < 0.62) → Reconciler meldet „neue Stimme" → `enroll()` bestätigte sie sofort per Quick-Confirm (1. Kontakt ≥ 4 s) → Phantom-Profile. Die 0.6.20-Drift-Wache (`VB_DRIFT_ABFANG`) existierte nur im 2-Kontakt-Pfad (`identify()`), nicht im 1-Kontakt-Quick-Confirm.
-- **Host-Truth:** 4–7 ERes2Net-Cluster je 5-Min-Fenster auf der App-WAV; Kernstimmen (global 1/9/12/17) kehrten stabil über Chunks wieder = echt. 16 der 36 Export-Sprecher hatten < 3 Segmente/≤ 60 s = Einmal-Fragmente.
-- **Fix:** Vor dem Quick-Confirm wird das Embedding gegen ALLE anderen Bank-Einträge (confirmed + pending) bei `pendingConfirmThreshold` (0,35) geprüft — gleiche Logik wie `VB_DRIFT_ABFANG`. Bei Treffer: **kein Confirm, pending bleibt** (2-Kontakt-Härtung / Save-Auflösung über bestätigten Nachbarn). Diagnosezeile: `VB QUICKCONFIRM-DRIFT global=X → bestehende Stimme global=Y (sim>=0,350)`.
-- **Konservativ:** Echte neue Stimmen (kein ≥0,35-Match zu bestehender Stimme) werden weiter sofort bestätigt; erwartete Wirkung im 12-Sprecher-Fall: 36 → ~12 IDs.
+- **Device finding:** an exported transcript contained far more speaker IDs than the actual number of participants. Mechanism: a drifted known voice no longer matched its own voiceprint (sim < 0.62) → the reconciler reported a "new speaker" → `enroll()` immediately confirmed it via Quick-Confirm (first contact ≥ 4 s) → phantom profiles. The 0.6.20 drift guard (`VB_DRIFT_ABFANG`) only existed on the two-contact path (`identify()`), not on the one-contact Quick-Confirm path.
+- **Host truth:** embedding clustering on the app-recorded WAV confirmed that the core voices recurred stably across chunks (= real), while most of the exported speakers were single-shot fragments.
+- **Fix:** before Quick-Confirm, `enroll()` now checks the embedding against ALL other bank entries (confirmed + pending) at `pendingConfirmThreshold` (0.35) — same logic as `VB_DRIFT_ABFANG`. On a hit: **no confirm, stays pending** (two-contact hardening / save-time nearest-confirmed resolution). Diagnostic line: `VB QUICKCONFIRM-DRIFT global=X → existing voice global=Y (sim>=0,350)`.
+- **Conservative:** genuinely new voices (no ≥ 0.35 similarity to any existing entry) are still confirmed immediately.
+- Unit test added: a drifted contact is blocked, an orthogonal new voice is still confirmed instantly.
 
 ## 0.10.4 / 151 (2026-08-26)
 
-**Phase 10e – Runtime-Update: sherpa-onnx 1.13.4 → 1.13.6**
+**Maintenance – sherpa-onnx runtime 1.13.4 → 1.13.6**
 
-- **Anlass:** Wartungscheck der sherpa-onnx-Komponenten (Runtime-AAR + Modelle). Ergebnis: Kroko-ASR-Modelle (de/en 2025-08-06) sind die neuesten; `segmentation.onnx` (ReVerb v1) und `embedding.onnx` (ERes2Net 3dspeaker) sind upstream unverändert → nur die Runtime wurde nachgezogen.
-- **AAR-Tausch:** `sherpa-onnx-1.13.6.aar` (49,1 MB, Release v1.13.6 vom 18.08.) ersetzt 1.13.4 (vom 07.07.). ONNX-Runtime-Basis aktualisiert sich damit mit.
-- **Relevante Upstream-Änderungen:** Pyannote-Segmentation-Fensterverschiebung jetzt konfigurierbar (`window shift`, neu in C-API/Bindings), Per-Stage-Timing für Offline-Diarization im Debug-Modus (nützlich für künftige POSTPROCESS-Analysen), diverse Fixes (Nemo-Streaming-Decoding, UB-Fix, TTS — für uns ohne Auswirkung).
-- **Kein Verhaltensrisiko erwartet:** Diarization-Pipeline (Segmentation+Embedding+Clustering) unverändert, App-Konfiguration (minDurationOn/Off, AUTO 0.35) bleibt identisch. Erste Geräte-Aufnahme mit der neuen Runtime sollte die üblichen Diagnosezeilen (VB_IDENTIFY-Sims, ASSIGN) im gewohnten Muster zeigen.
+- **Reason:** dependency check of the speech-runtime components (runtime AAR + models). Result: ASR models are already the newest upstream; `segmentation.onnx` (ReVerb v1) and `embedding.onnx` (ERes2Net 3dspeaker) are unchanged upstream → only the runtime was updated.
+- **AAR swap:** `sherpa-onnx-1.13.6.aar` (49.1 MB, release v1.13.6 of 08-18) replaces 1.13.4 (of 07-07). The ONNX Runtime base is updated along with it.
+- **Relevant upstream changes:** pyannote segmentation window shift is now configurable (new in C API/bindings), per-stage timing for offline diarization in debug mode (useful for future POSTPROCESS analyses), several fixes (NeMo streaming decoding, UB fix, TTS — without impact for this app).
+- **No behavioral risk expected:** diarization pipeline (segmentation + embedding + clustering) and app configuration (minDurationOn/Off, AUTO 0.35) unchanged. The next on-device recording should show the usual diagnostic lines (VB_IDENTIFY sims, ASSIGN chain).
 
 ## 0.10.3 / 150 (2026-08-26)
 
-**Phase 10d – Strip-Guard-Lücke geschlossen (Save-Kollaps trotz korrekter Rolling-Trennung) + ID-Kollisions-Guard**
+**Phase 10d – Strip-guard gap closed (save collapse despite correct rolling separation) + ID-collision guard**
 
-- **Geräte-Befund (10-min Meeting, testaufnahme_20260826_101317):** Die Rolling-Diarization trennte die Stimmen korrekt – gid 0 und gid 5 lösten sich abwechselnd auf (12 saubere gid5-RESOLVEs, Sims 0,67–0,81; Host-Matrix mit dem App-Embedding-Modell auf der App-eigenen WAV: Intra ≥ 0,617, Inter ≤ 0,600). Der gespeicherte Export kollabierte trotzdem: Mittelteil 01:38–06:25 als EIN Sprecherblock + 10 „Unbekannt"-Blöcke.
-- **Root Cause:** Der Strip-Guard in `mergeCandidateIntoBest` (Schutz vor unbestätigten Fehlcluster-IDs) warf auch Labels **bank-bestätigter** Sprecher weg. Die Ausnahme „bestätigte Voice-Bank-Sprecher werden nie gestrippt" war seit 0.5.55 dokumentiert, existierte aber nur im Guard-Trigger (`candHasNewIds`) – nicht im per-Segment-Check. Nach dem ersten Trigger blieb nur gid 0 übrig; der Save-Pfad füllte die Restlücken per Nearest-Confirmed-Resolve → Kollaps auf einen Block.
-- **Fix 1:** Per-Segment-Ausnahme ergänzt (`candLabel.speakerId !in confirmedBankIds`) – bank-bestätigte Sprecher überleben den Guard jetzt.
-- **Fix 2 – ID-Kollisions-Guard (Worker):** `freshGlobalId` stammt aus dem Bestands-Maximum und kennt Bank-Pendings nicht. Im Testlauf kollidierte die Bestands-Allokation (gid 17 als Pending) mit der Fehlzuordnungs-Allokation derselben 17 → `enroll()` sah das fremde Pending und bestätigte sofort ein Phantom-Profil aus zwei verschiedenen Stimmen („NEUE ID=17 CONFIRMED"). Vor der Allokation prüft jetzt eine Schleife `hasVoiceprintFor()` (Diagnose-Zeile `VB ID_KOLLISION`).
-- **Diagnose:** Zuweisungs-Entscheidungen wandern ins TestLog (`ASSIGN ACCEPTED_IMPROVED / REJECTED / NO_CHANGE / SKIP_COLLAPSE`) – sie liefen vorher nur in logcat und machten Save-Kollapse aus den Uploads unerklärlich.
+- **Device finding:** the rolling diarization separated the voices correctly (alternating resolution, host-verified embedding matrix: intra ≥ 0.617, inter ≤ 0.600 on the app's own WAV), but the saved export still collapsed to a single speaker block for a large middle section, leaving several "Unknown" blocks.
+- **Root cause:** the strip guard in `mergeCandidateIntoBest` (protection against unconfirmed miscluster IDs) also discarded labels of **bank-confirmed** speakers. The documented exception "confirmed voice-bank speakers are never stripped" existed since 0.5.55 only in the guard trigger (`candHasNewIds`), not in the per-segment check. Once the guard was active, only one voice remained; the save path filled the gaps via nearest-confirmed resolve → collapse into one block.
+- **Fix 1:** per-segment exception added (`candLabel.speakerId !in confirmedBankIds`) — bank-confirmed speakers now survive the guard.
+- **Fix 2 – ID-collision guard (worker):** `freshGlobalId` derives from the bestand maximum and does not know bank pendings. In a test run the bestand allocation (new pending) collided with the misassignment allocation using the same ID → `enroll()` saw the foreign pending and instantly confirmed a phantom profile from two different voices ("NEUE ID=17 CONFIRMED"). Before allocation, a loop now checks `hasVoiceprintFor()` (diagnostic line `VB ID_KOLLISION`).
+- **Diagnostics:** assignment decisions now go to the TestLog (`ASSIGN ACCEPTED_IMPROVED / REJECTED / NO_CHANGE / SKIP_COLLAPSE`) — they previously only ran in logcat, which made save collapses unreadable from uploads.
 
 ## 0.10.2 / 149 (2026-08-25)
 
