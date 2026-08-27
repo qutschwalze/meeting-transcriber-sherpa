@@ -376,6 +376,38 @@ class SessionVoiceBank(
         // Phase 10 (Fix 2): abschaltbar für frisch gespawnte IDs (Drift-Schutz)
         pendingEnrollments[globalId] = PendingEnrollment(embedding)
         if (allowQuickConfirm && durationMs >= (quickConfirmSec * 1000f).toLong()) {
+            // 0.10.5: Drift-Vorprüfung AUCH beim Quick-Confirm (1. Kontakt).
+            // Geräte-Befund 0.10.3 (27-min-Meeting, 12 echte Sprecher): Eine
+            // gedriftete bekannte Stimme matcht gegen ihr EIGENES Voiceprint
+            // nicht mehr (sim < 0.62) → Reconciler meldet "neue Stimme" →
+            // enroll() bestätigte sie sofort per Quick-Confirm → 36 statt 12
+            // IDs im Export. Die Drift-Wache (VB_DRIFT_ABFANG) existierte nur
+            // im 2-Kontakt-Pfad (identify()); hier prüfen wir wie dort gegen
+            // ALLE anderen Bank-Einträge bei pendingConfirmThreshold (0.35).
+            var driftId: Int? = null
+            for ((id, vp) in voiceprints) {
+                if (id != globalId && cosineSimilarity(embedding, vp) >= pendingConfirmThreshold) {
+                    driftId = id
+                    break
+                }
+            }
+            if (driftId == null) {
+                for ((id, p) in pendingEnrollments) {
+                    if (id != globalId && cosineSimilarity(embedding, p.embedding) >= pendingConfirmThreshold) {
+                        driftId = id
+                        break
+                    }
+                }
+            }
+            if (driftId != null) {
+                // Kein Confirm: pending bleibt (2-Kontakt-Härtung / Save-Auflösung
+                // über den bestätigten Nachbarn) – kein Phantom-Sprecher.
+                Log.d(TAG, String.format("enroll QUICKCONFIRM-DRIFT: global=%d gehört zu bestehender Stimme global=%d (sim>=%.3f), kein Quick-Confirm – pending bleibt",
+                    globalId, driftId, pendingConfirmThreshold))
+                TestLog.log(String.format("VB QUICKCONFIRM-DRIFT global=%d → bestehende Stimme global=%d (sim>=%.3f) – kein Quick-Confirm, pending bleibt",
+                    globalId, driftId, pendingConfirmThreshold))
+                return false
+            }
             confirmPending(globalId, embedding)
             Log.d(TAG, "enroll QUICK-CONFIRMED: global=$globalId ($durationMs ms >= ${quickConfirmSec}s, 1. Kontakt) – Bank hat ${voiceprints.size} Sprecher")
             TestLog.log("VB local=$globalId dur=${durationMs}ms → QUICK-CONFIRMED (1. Kontakt >= ${quickConfirmSec}s) – Bank hat ${voiceprints.size} Sprecher")

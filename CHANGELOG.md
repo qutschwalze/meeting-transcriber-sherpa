@@ -2,6 +2,15 @@
 
 Alle Versionswechsel werden hier dokumentiert. Jeder Build erhöht `versionCode` + `versionName` (siehe `app/build.gradle.kts`).
 
+## 0.10.5 / 152 (2026-08-27)
+
+**Phase 10f – Drift-Vorprüfung im Quick-Confirm-Pfad (Over-Generierung bei Meetings mit vielen Sprechern)**
+
+- **Geräte-Befund (27-min-Meeting, exakt 12 Sprecher, testaufnahme_20260827_110226):** Export lieferte 36 Sprecher statt 12. Mechanik: Eine gedriftete bekannte Stimme matcht gegen ihr EIGENES Voiceprint nicht mehr (sim < 0.62) → Reconciler meldet „neue Stimme" → `enroll()` bestätigte sie sofort per Quick-Confirm (1. Kontakt ≥ 4 s) → Phantom-Profile. Die 0.6.20-Drift-Wache (`VB_DRIFT_ABFANG`) existierte nur im 2-Kontakt-Pfad (`identify()`), nicht im 1-Kontakt-Quick-Confirm.
+- **Host-Truth:** 4–7 ERes2Net-Cluster je 5-Min-Fenster auf der App-WAV; Kernstimmen (global 1/9/12/17) kehrten stabil über Chunks wieder = echt. 16 der 36 Export-Sprecher hatten < 3 Segmente/≤ 60 s = Einmal-Fragmente.
+- **Fix:** Vor dem Quick-Confirm wird das Embedding gegen ALLE anderen Bank-Einträge (confirmed + pending) bei `pendingConfirmThreshold` (0,35) geprüft — gleiche Logik wie `VB_DRIFT_ABFANG`. Bei Treffer: **kein Confirm, pending bleibt** (2-Kontakt-Härtung / Save-Auflösung über bestätigten Nachbarn). Diagnosezeile: `VB QUICKCONFIRM-DRIFT global=X → bestehende Stimme global=Y (sim>=0,350)`.
+- **Konservativ:** Echte neue Stimmen (kein ≥0,35-Match zu bestehender Stimme) werden weiter sofort bestätigt; erwartete Wirkung im 12-Sprecher-Fall: 36 → ~12 IDs.
+
 ## 0.10.4 / 151 (2026-08-26)
 
 **Phase 10e – Runtime-Update: sherpa-onnx 1.13.4 → 1.13.6**

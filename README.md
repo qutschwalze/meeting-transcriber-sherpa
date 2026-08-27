@@ -11,7 +11,7 @@ On-device live transcription including **speaker diarization** and a **persisten
 <a name="english"></a>
 ## English
 
-### Features (as of 0.10.4)
+### Features (as of 0.10.5)
 
 **Recognition & diarization**
 
@@ -81,7 +81,7 @@ All processing happens on the device. Voice profiles are biometric data and stay
 
 Live-Transkription auf dem Gerät inkl. **Speaker Diarization** und **persistenter Speaker-Datenbank** – keine Cloud, kein Netzwerk.
 
-### Funktionen (Stand 0.10.4)
+### Funktionen (Stand 0.10.5)
 
 **Erkennung & Diarization**
 

@@ -26,6 +26,24 @@ class SessionVoiceBankTest {
         }
     }
 
+    /**
+     * Drift-Computer (0.10.5): wie FakeComputer, aber 1.5f erzeugt eine
+     * GEDRIFTETE Stimme A ([0.8,0.6,0] – cos=0.8 zu A, aber ungleich A) und
+     * 2.5f+ die echte neue Stimme C ([0,0,1], orthogonal zu A und Drift).
+     */
+    private class DriftComputer : SpeakerEmbeddingComputer {
+        override fun computeEmbedding(samples: FloatArray): FloatArray? {
+            if (samples.isEmpty()) return null
+            val value = samples[0]
+            return when {
+                value <= 1.1f -> floatArrayOf(1f, 0f, 0f)   // Stimme A
+                value <= 1.9f -> floatArrayOf(0.8f, 0.6f, 0f) // Drift von A (sim 0.8)
+                value <= 2.4f -> floatArrayOf(0f, 1f, 0f)   // Stimme B (sim 0.6 zur Drift -> wuerde auch geblockt)
+                else -> floatArrayOf(0f, 0f, 1f)            // echte neue Stimme C (orthogonal)
+            }
+        }
+    }
+
     private fun samplesOf(value: Float, seconds: Float): FloatArray {
         val count = (seconds * 16000).toInt()
         return FloatArray(count) { value }
@@ -156,5 +174,26 @@ class SessionVoiceBankTest {
         // Vektor-Treue: Stimme B ([0,1,0])
         assertEquals(0f, confirmed.getValue(9)[0], 0f)
         assertEquals(1f, confirmed.getValue(9)[1], 0f)
+    }
+
+    @Test
+    fun `0_10_5 Quick-Confirm wird bei Drift zu bestehender Stimme verhindert`() {
+        val bank = SessionVoiceBank(DriftComputer())
+        // Stimme A (1. Kontakt >= 4s) → sofort bestätigt
+        assertTrue("Stimme A wird quick-confirmed", bank.enroll(globalId = 0, samples = samplesOf(1f, 10f), durationMs = 6_000L))
+        assertEquals("1 Sprecher", 1, bank.speakerCount)
+
+        // Gedriftete Stimme A (1. Kontakt >= 4s, sim=0.8 zu A): darf NICHT als
+        // neue Stimme quick-confirmed werden → pending bleibt (Geräte-Befund
+        // 0.10.3: 36 statt 12 Sprecher im Export eines 12-Sprecher-Meetings).
+        val enrolled = bank.enroll(globalId = 1, samples = samplesOf(1.5f, 10f), durationMs = 6_000L)
+        assertTrue("Drift-Kontakt wird NICHT bestätigt", !enrolled)
+        assertEquals("immer noch nur 1 Sprecher", 1, bank.speakerCount)
+        assertEquals("Drift-Kontakt hängt als pending (2-Kontakt-Härtung)", 1, bank.pendingCount)
+
+        // Echte neue Stimme C (orthogonal zu A UND zur Drift, keine 0.35-
+        // Ähnlichkeit) → Quick-Confirm funktioniert weiterhin
+        assertTrue("echte neue Stimme wird quick-confirmed", bank.enroll(globalId = 2, samples = samplesOf(3f, 10f), durationMs = 6_000L))
+        assertEquals("Stimme C bestätigt", 2, bank.speakerCount)
     }
 }
