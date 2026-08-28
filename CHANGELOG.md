@@ -3,6 +3,13 @@
 All version changes are documented here. Every build bumps `versionCode` + `versionName` (see `app/build.gradle.kts`).
 **Policy (since 0.10.6):** entries are written in English and are deliberately free of device-, person- or meeting-specific details (no recording filenames, participant counts, durations, names) — the repository is public.
 
+## 0.10.9 / 156 (2026-08-28)
+
+**Fix – live speaker assignments now reach the saved history + debug upload deletes its sources**
+
+- **History fix:** assigning a profile/name to a segment right after stopping (live screen) updated the voice bank and the live display, but the transcript saved at stop time kept the old labels. Now the profile name is propagated into the persisted transcript via a targeted DAO update (all segments of the same session speaker ID, no re-save). Diagnostic line: `VB_SAVE_LABEL`. Unnamed assignments are untouched.
+- **Debug storage fix:** uploaded diagnostic files (WAV/log/markdown/JSON) are deleted on the device right after a successful upload — no unbounded storage growth, and no re-upload of the whole library on every trigger. Chunk diagnostic WAVs (`testaufnahmen/chunks/`, never uploaded by design) are cleared once the whole library reached the server. On failure nothing is deleted (retry intact).
+
 ## 0.10.8 / 155 (2026-08-28)
 
 **Feature – optional direct share into the MirMirStack companion app**

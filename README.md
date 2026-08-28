@@ -11,7 +11,7 @@ On-device live transcription including **speaker diarization** and a **persisten
 <a name="english"></a>
 ## English
 
-### Features (as of 0.10.8)
+### Features (as of 0.10.9)
 
 **Recognition & diarization**
 
@@ -23,7 +23,7 @@ On-device live transcription including **speaker diarization** and a **persisten
 **Speakers & data**
 
 - Persistent speaker DB (Phase 7): device-wide voice fingerprints (`GlobalVoiceBank`). Confirmed contacts are auto-enrolled at session end and re-recognized **from the first chunk** of any future recording — no manual assignment
-- Naming UI: tap a segment after stopping → assign an existing profile or name a new contact (acoustic enroll straight from the audio buffer); rename any speaker label afterwards in the detail view — also for old/imported transcripts without audio access
+- Naming UI: tap a segment after stopping → assign an existing profile or name a new contact (acoustic enroll straight from the audio buffer); rename any speaker label afterwards in the detail view — also for old/imported transcripts without audio access. Since 0.10.9 the live assignment also updates the saved history entry immediately
 - Contact management: rename, merge (sample-weighted), delete, bulk-delete unnamed profiles; stable speaker colors keyed by profile UUID
 - History with Room database (SQLite), full-text search across titles, segment texts and speaker names
 
@@ -37,7 +37,7 @@ On-device live transcription including **speaker diarization** and a **persisten
 
 - Recording notification with Stop and screen-wake actions; discreet screen-wake toggle; post-processing indicator (final pass + save duration)
 - Screen-off robustness (0.10.6): CPU wake lock for the whole recording (no timeout, released when the service dies) + thermal guard that pauses diarization inference while the device throttles (audio stays buffered, no loss)
-- Debug mode: raw WAV + diagnostic log (`TestLog`) per test recording, uploaded to a companion Flask server (`debug-server/`, port 8520, web dashboard) — no adb needed. Assignment decisions (`ASSIGN ACCEPTED/REJECTED/NO_CHANGE/SKIP_COLLAPSE`), save stages and all voice-bank events are logged
+- Debug mode: raw WAV + diagnostic log (`TestLog`) per test recording, uploaded to a companion Flask server (`debug-server/`, port 8520, web dashboard) — no adb needed. Assignment decisions (`ASSIGN ACCEPTED/REJECTED/NO_CHANGE/SKIP_COLLAPSE`), save stages and all voice-bank events are logged. Since 0.10.9 uploaded sources are deleted on the device (no storage growth, no full-library re-uploads)
 - Host analysis scripts: `scripts/host-test/` Python pipeline simulation matching the app configuration exactly (voice-bank calibration, drift tests, A/B tests)
 
 Device-verified: politics podcast, 3/3 speakers re-recognized across sessions (0.7.1). Duo podcasts with two very similar male voices remain a documented acoustic edge case.
@@ -83,7 +83,7 @@ All processing happens on the device. Voice profiles are biometric data and stay
 
 Live-Transkription auf dem Gerät inkl. **Speaker Diarization** und **persistenter Speaker-Datenbank** – keine Cloud, kein Netzwerk.
 
-### Funktionen (Stand 0.10.8)
+### Funktionen (Stand 0.10.9)
 
 **Erkennung & Diarization**
 
@@ -95,7 +95,7 @@ Live-Transkription auf dem Gerät inkl. **Speaker Diarization** und **persistent
 **Sprecher & Daten**
 
 - Persistente Speaker-DB (Phase 7): geräteweite Stimmen-Fingerprints (`GlobalVoiceBank`). Bestätigte Kontakte werden am Session-Ende automatisch eingelernt und in künftigen Aufnahmen **ab dem ersten Chunk** wiedererkannt – ganz ohne manuelle Zuweisung
-- Namens-UI: Segment antippen nach dem Stoppen → Profil zuweisen oder „Neuer Kontakt" benennen (akustisches Enroll direkt aus dem Audio-Puffer); Sprecher nachträglich im Detail-Screen umbenennen – auch für alte/importierte Transkripte ohne Audio-Zugriff
+- Namens-UI: Segment antippen nach dem Stoppen → Profil zuweisen oder „Neuer Kontakt" benennen (akustisches Enroll direkt aus dem Audio-Puffer); Sprecher nachträglich im Detail-Screen umbenennen – auch für alte/importierte Transkripte ohne Audio-Zugriff. Seit 0.10.9 übernimmt die Live-Zuweisung den Namen sofort in den gespeicherten Verlauf
 - Kontakt-Verwaltung: Umbenennen, Zusammenführen (sample-gewichtet), Löschen, Sammel-Löschen unbenannter Profile; stabile Sprecherfarben per Profil-UUID
 - Verlauf mit Room-Datenbank (SQLite), Volltextsuche über Titel, Segmenttexte und Sprechernamen
 
@@ -109,7 +109,7 @@ Live-Transkription auf dem Gerät inkl. **Speaker Diarization** und **persistent
 
 - Aufnahme-Benachrichtigung mit Stop- und Display-Wach-Aktion; dezenter Screen-Wake-Toggle; Nachbearbeitungs-Anzeige (finaler Lauf + Save-Dauer)
 - Screen-off-Robustheit (0.10.6): CPU-WakeLock für die gesamte Aufnahme (ohne Timeout, Freigabe beim Service-Ende) + Thermal-Guard, der Diarization-Inferenz bei Drosselung pausiert (Audio bleibt gepuffert, kein Verlust)
-- Debug-Modus: Roh-WAV + Diagnose-Log (`TestLog`) pro Testaufnahme, Upload an den Flask-Begleitserver (`debug-server/`, Port 8520, Web-Dashboard) – kein adb nötig. Zuweisungs-Entscheidungen (`ASSIGN ACCEPTED/REJECTED/NO_CHANGE/SKIP_COLLAPSE`), Save-Stufen und alle Voice-Bank-Ereignisse werden geloggt
+- Debug-Modus: Roh-WAV + Diagnose-Log (`TestLog`) pro Testaufnahme, Upload an den Flask-Begleitserver (`debug-server/`, Port 8520, Web-Dashboard) – kein adb nötig. Zuweisungs-Entscheidungen (`ASSIGN ACCEPTED/REJECTED/NO_CHANGE/SKIP_COLLAPSE`), Save-Stufen und alle Voice-Bank-Ereignisse werden geloggt. Seit 0.10.9 werden hochgeladene Quellen auf dem Gerät gelöscht (kein Speicherwachstum, keine Komplett-Re-Uploads)
 - Host-Analyse-Skripte: `scripts/host-test/` (Python-Pipeline-Simulation exakt wie die App: Voice-Bank-Kalibrierung, Drift-Tests, A/B-Tests)
 
 Geräte-verifiziert: Politik-Podcast, 3/3 Sprecher über Sessions wiedererkannt (0.7.1). Duo-Podcasts mit zwei sehr ähnlichen Männerstimmen bleiben dokumentierter akustischer Grenzfall.
