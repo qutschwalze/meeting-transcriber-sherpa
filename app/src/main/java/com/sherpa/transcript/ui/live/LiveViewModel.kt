@@ -1991,11 +1991,18 @@ class LiveViewModel : ViewModel() {
                 diarizationChunkWorker.globalProfileBySessionId(),
                 globalVoiceBank::profileSimilarity,
             )
-            logSaveSpeakerStage("beforeSave overlay", dedupOverlay)
+            // 0.11.0: Mini-Segment-Regel – bank-lose Fragmente (< 8 s Gesamt-
+            // redezeit, nie Global-bestätigt) wandern zum zeitlich nächsten
+            // Sprecher (Geräte-Befund: 6-s-Fragment als eigene „Stimme")
+            val fragmentMergedOverlay = SpeakerOverlayMerger.mergeMiniFragments(
+                dedupOverlay,
+                diarizationChunkWorker.globalProfileBySessionId(),
+            )
+            logSaveSpeakerStage("beforeSave overlay", fragmentMergedOverlay)
             // Segment-Splitting: lange ASR-Segmente an Diarization-Grenzen aufteilen
             val splitOverlay = if (lastDiarizationSegments.isNotEmpty()) {
-                TimelineComposer.splitLongSpeakerSegments(dedupOverlay, lastDiarizationSegments)
-            } else dedupOverlay
+                TimelineComposer.splitLongSpeakerSegments(fragmentMergedOverlay, lastDiarizationSegments)
+            } else fragmentMergedOverlay
             logSaveSpeakerStage("afterSplit", splitOverlay)
             // Finale Konsolidierung (Post-Processing) für History
             val segmentsToSave = if (splitOverlay.size >= 3) {

@@ -3,6 +3,16 @@
 All version changes are documented here. Every build bumps `versionCode` + `versionName` (see `app/build.gradle.kts`).
 **Policy (since 0.10.6):** entries are written in English and are deliberately free of device-, person- or meeting-specific details (no recording filenames, participant counts, durations, names) — the repository is public.
 
+## 0.11.0 / 157 (2026-08-28)
+
+**Phase 11 – meeting protocol tooling + speaker-bank backup**
+
+- **Speaker-bank backup (device change safety):** the persistent voice profiles (biometric fingerprints + names) can now be exported as JSON via the share sheet (Contacts settings) and imported on any device — import replaces the current bank after an explicit confirmation dialog. Round-trip uses the app's own store format (version 2).
+- **Speaker statistics in the transcript detail view:** per person speaking time, share (%) and segment count, sorted by dominance, with progress bars. Unlabeled segments are counted as "Unbekannt".
+- **Mini-segment rule:** at save time, labeled IDs with less than 8 s total speech and no voice-bank confirmation are treated as fragments and reassigned to the temporally nearest speaker (device finding: a 6 s fragment surfaced as its own speaker although the bank twice attached its segments to existing voices). Tuning variable: `SpeakerOverlayMerger.MIN_FRAGMENT_TOTAL_MS` (8 s default).
+- **Protocol export:** new "Protokoll (.md)" entry in the export menu — Markdown with header (duration, participant count) and a speaking-time table per participant, followed by the regular speaker blocks. Ideal for wiki-style meeting notes (MirMirStack/BookStack).
+- Tests: +14 (backup round-trip, speaker stats, protocol export, mini-fragment rule).
+
 ## 0.10.9 / 156 (2026-08-28)
 
 **Fix – live speaker assignments now reach the saved history + debug upload deletes its sources**

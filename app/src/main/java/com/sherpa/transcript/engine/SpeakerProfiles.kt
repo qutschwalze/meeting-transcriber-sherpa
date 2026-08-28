@@ -40,6 +40,28 @@ object SpeakerProfiles {
         store.saveAll(b.snapshot())
     }
 
+    /**
+     * 0.11.0: Backup-Export – serialisiert die Bank ins Store-JSON (biometrische
+     * Daten; der Nutzer entscheidet über das ShareSheet, wohin die Datei geht).
+     * @return JSON-String oder null, wenn die Bank nie geladen wurde.
+     */
+    fun exportJson(): String? = bank?.let { store.toJson(it.snapshot()) }
+
+    /**
+     * 0.11.0: Backup-Import – ERSETZT die aktuelle Bank komplett durch die
+     * Profile aus dem JSON (bewusst: Ersetzen, nicht Mischen – UUIDs bleiben
+     * stabil, Namen kommen mit). Anschließend sofort persistiert.
+     * @return Anzahl importierter Profile oder -1 bei unlesbarem Backup.
+     */
+    fun importJson(content: String): Int {
+        val profiles = store.fromJson(content)
+        if (profiles.isEmpty()) return -1
+        val b = bank ?: ensureBank()
+        b.load(profiles)
+        store.saveAll(profiles)
+        return profiles.size
+    }
+
     /** Test-Hook: Bank-Instanz ersetzen (JVM-Tests ohne Android-App). */
     fun setBankForTest(b: GlobalVoiceBank?) {
         bank = b

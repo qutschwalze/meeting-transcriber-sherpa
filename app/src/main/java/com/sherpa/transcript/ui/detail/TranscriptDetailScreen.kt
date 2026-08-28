@@ -25,6 +25,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.OutlinedTextField
@@ -50,6 +51,7 @@ import androidx.core.content.FileProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.sherpa.transcript.data.local.SegmentEntity
 import com.sherpa.transcript.data.local.TranscriptEntity
+import com.sherpa.transcript.domain.export.SpeakerStats
 import com.sherpa.transcript.domain.export.TranscriptExporter
 import java.io.File
 
@@ -169,6 +171,39 @@ fun TranscriptDetailScreen(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
                 )
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // 0.11.0: Sprecher-Statistik (Redezeit + Anteil je Person)
+            val speakerStats = remember(uiState.segments) {
+                SpeakerStats.compute(uiState.segments)
+            }
+            if (speakerStats.isNotEmpty()) {
+                Column(modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp)) {
+                    speakerStats.forEach { stat ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = stat.label,
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.weight(1f),
+                                maxLines = 1,
+                            )
+                            Text(
+                                text = "${SpeakerStats.formatDurationMs(stat.totalMs)} (${stat.percent} %) · ${stat.segmentCount}×",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        LinearProgressIndicator(
+                            progress = { stat.percent / 100f },
+                            modifier = Modifier.fillMaxWidth().padding(bottom = 2.dp),
+                        )
+                    }
+                }
             }
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -332,6 +367,8 @@ private fun formatTimestamp(ms: Long): String {
 enum class ExportFormat(val label: String, val extension: String, val mime: String) {
     TXT("Text (.txt)", "txt", "text/plain"),
     MARKDOWN("Markdown (.md)", "md", "text/markdown"),
+    // 0.11.0: Besprechungsprotokoll – Markdown mit Kopf + Redezeit-Tabelle
+    PROTOKOLL("Protokoll (.md)", "md", "text/markdown"),
     JSON("JSON (.json)", "json", "application/json"),
 }
 
@@ -345,6 +382,7 @@ private fun exportTranscript(
     val content = when (format) {
         ExportFormat.TXT -> TranscriptExporter.formatTxt(transcript, segments)
         ExportFormat.MARKDOWN -> TranscriptExporter.formatMarkdown(transcript, segments)
+        ExportFormat.PROTOKOLL -> TranscriptExporter.formatProtocolMarkdown(transcript, segments)
         ExportFormat.JSON -> TranscriptExporter.formatJson(transcript, segments)
     }
     shareFile(context, "transcript_${transcript.transcriptId.take(8)}.${format.extension}", content, format.mime)

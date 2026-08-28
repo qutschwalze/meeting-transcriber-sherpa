@@ -19,6 +19,24 @@ class SpeakerProfileStoreTest {
     private fun storeFile() = File(tmp.root!!, "nested/speakerProfiles.json")
 
     @Test
+    fun `backup toJson fromJson roundtrip liefert identische Profile`() {
+        val store = SpeakerProfileStore(storeFile())
+        val profs = listOf(
+            SpeakerProfile("p1", FloatArray(512) { i -> (i % 7) / 7f }, 3, 42L, "Anna"),
+            SpeakerProfile("p2", FloatArray(512) { i -> (i % 5) / 5f }, 1, 7L, null),
+        )
+        val json = store.toJson(profs)
+        val loaded = store.fromJson(json)
+        assertEquals(profs, loaded)
+    }
+
+    @Test
+    fun `backup fromJson mit kaputtem JSON liefert leere Liste`() {
+        val store = SpeakerProfileStore(storeFile())
+        assertEquals(emptyList<SpeakerProfile>(), store.fromJson("{defekt"))
+    }
+
+    @Test
     fun `roundtrip erhaelt Profile inklusive Embedding`() {
         val store = SpeakerProfileStore(storeFile())
         val prof = SpeakerProfile(

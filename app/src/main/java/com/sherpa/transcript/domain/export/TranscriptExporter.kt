@@ -104,6 +104,44 @@ object TranscriptExporter {
         sb.append("# ").append(transcript.title).append("\n\n")
         sb.append("**Dauer:** ").append(formatDuration(transcript.durationMs))
         sb.append(" · **Sprecher:** ").append(transcript.speakerCount).append('\n')
+        appendSpeakerBlocks(sb, segments, profileNames)
+        return sb.toString().trimEnd() + "\n"
+    }
+
+    /**
+     * 0.11.0: Protokoll-Export – wie Markdown, aber mit Kopf + Teilnehmer-
+     * Statistik (Redezeit, Anteil, Segmentzahl je Sprecher). Ideal für
+     * Meeting-Notizen in der Wiki-Ablage (MirMirStack/BookStack).
+     */
+    fun formatProtocolMarkdown(
+        transcript: TranscriptEntity,
+        segments: List<SegmentEntity>,
+        profileNames: Map<String, String> = emptyMap(),
+    ): String {
+        val sb = StringBuilder()
+        sb.append("# ").append(transcript.title).append("\n\n")
+        sb.append("**Dauer:** ").append(formatDuration(transcript.durationMs)).append('\n')
+        val stats = SpeakerStats.compute(segments)
+        sb.append("**Teilnehmer:** ").append(stats.size).append("\n\n")
+        sb.append("## Teilnehmer & Redezeiten\n\n")
+        sb.append("| Sprecher | Redezeit | Anteil | Segmente |\n")
+        sb.append("|---|---|---|---|\n")
+        stats.forEach { s ->
+            sb.append("| ").append(s.label.replace("|", "\\|"))
+                .append(" | ").append(SpeakerStats.formatDurationMs(s.totalMs))
+                .append(" | ").append(s.percent).append(" %")
+                .append(" | ").append(s.segmentCount).append(" |\n")
+        }
+        sb.append('\n')
+        appendSpeakerBlocks(sb, segments, profileNames)
+        return sb.toString().trimEnd() + "\n"
+    }
+
+    private fun appendSpeakerBlocks(
+        sb: StringBuilder,
+        segments: List<SegmentEntity>,
+        profileNames: Map<String, String>,
+    ) {
         for (block in groupBySpeaker(segments)) {
             val label = block.name ?: block.label?.let { profileNames[it] ?: it }
             sb.append("\n## ").append(label ?: "Unbekannt")
@@ -114,7 +152,6 @@ object TranscriptExporter {
             // Text (Geräte-Befund 0.6.4: "…fallen mir schon ein\nBeispiel der…").
             sb.append(block.texts.joinToString(" ")).append('\n')
         }
-        return sb.toString().trimEnd() + "\n"
     }
 
     // ─── JSON ───────────────────────────────────────────────────────────

@@ -1,5 +1,9 @@
 package com.sherpa.transcript.ui.settings
 
+import android.content.Intent
+import android.util.Log
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -16,6 +20,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -26,9 +31,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.core.content.FileProvider
 import com.sherpa.transcript.data.local.SpeakerProfile
 import com.sherpa.transcript.engine.SpeakerProfiles
+import java.io.File
 
 /**
  * Phase 7a (0.7.2): Kontakte-Sektion im Einstellungs-Screen.
@@ -47,6 +55,23 @@ fun ContactsSection() {
     var renameInput by remember { mutableStateOf("") }
     // Phase 10 (0.9.8): Bulk-Löschen aller unbenannten Profile
     var confirmBulkDelete by remember { mutableStateOf(false) }
+    // 0.11.0: Voice-Bank-Backup (Gerätewechsel-Sicherung)
+    var pendingImport by remember { mutableStateOf<String?>(null) }
+    var backupMsg by remember { mutableStateOf<String?>(null) }
+    val ctx = LocalContext.current
+    val importLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        try {
+            val content = ctx.contentResolver.openInputStream(uri)
+                ?.bufferedReader()?.use { it.readText() } ?: return@rememberLauncherForActivityResult
+            pendingImport = content
+        } catch (t: Throwable) {
+            Log.e("ContactsSection", "Backup-Lesen fehlgeschlagen: ${t.message}")
+            backupMsg = "Backup unlesbar: ${t.message}"
+        }
+    }
 
     fun refresh() {
         profiles = SpeakerProfiles.ensureBank().snapshot()
@@ -65,6 +90,44 @@ fun ContactsSection() {
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+
+        // 0.11.0: Voice-Bank-Backup (Gerätewechsel-Sicherung) – biometrische
+        // Profile + Namen als JSON; der Nutzer entscheidet über das ShareSheet.
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            OutlinedButton(onClick = {
+                val json = SpeakerProfiles.exportJson() ?: return@OutlinedButton
+                try {
+                    val dir = File(ctx.cacheDir, "exports").apply { mkdirs() }
+                    val file = File(dir, "speakerProfiles_backup_${System.currentTimeMillis()}.json")
+                    file.writeText(json)
+                    val uri = FileProvider.getUriForFile(ctx, "${ctx.packageName}.fileprovider", file)
+                    val intent = Intent(Intent.ACTION_SEND).apply {
+                        type = "application/json"
+                        putExtra(Intent.EXTRA_STREAM, uri)
+                        putExtra(Intent.EXTRA_SUBJECT, "Speaker-Profile-Backup")
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                    ctx.startActivity(Intent.createChooser(intent, "Backup exportieren"))
+                } catch (t: Throwable) {
+                    Log.e("ContactsSection", "Backup-Export fehlgeschlagen: ${t.message}")
+                    backupMsg = "Export fehlgeschlagen: ${t.message}"
+                }
+            }) { Text("Backup exportieren") }
+            OutlinedButton(onClick = {
+                importLauncher.launch(arrayOf("application/json", "text/plain", "application/octet-stream"))
+            }) { Text("Backup importieren") }
+        }
+        backupMsg?.let { msg ->
+            Text(
+                text = msg,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+        }
 
         if (profiles.isEmpty()) {
             Text(
@@ -219,6 +282,27 @@ fun ContactsSection() {
             },
             confirmButton = {
                 TextButton(onClick = { mergeSource = null }) { Text("Abbrechen") }
+            },
+        )
+    }
+
+    // 0.11.0: Backup-Import-Bestätigung – ERSETZT die aktuelle Bank.
+    pendingImport?.let { content ->
+        AlertDialog(
+            onDismissRequest = { pendingImport = null },
+            title = { Text("Backup importieren?") },
+            text = { Text("Die aktuelle Speaker-Bank (${profiles.size} Profile) wird durch das Backup ERSETZT. Biometrische Daten – nur fortfahren, wenn du der Quelle vertraust.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    val n = SpeakerProfiles.importJson(content)
+                    backupMsg = if (n < 0) "Backup unlesbar – nichts geändert"
+                    else "$n Profile importiert"
+                    pendingImport = null
+                    refresh()
+                }) { Text("Importieren") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingImport = null }) { Text("Abbrechen") }
             },
         )
     }

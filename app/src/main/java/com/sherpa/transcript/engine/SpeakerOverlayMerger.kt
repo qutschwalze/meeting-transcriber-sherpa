@@ -29,6 +29,76 @@ object SpeakerOverlayMerger {
     const val DUP_MERGE_THRESHOLD = 0.60f
 
     /**
+     * 0.11.0: Mini-Segment-Regel (Geräte-Befund: 6-s-Fragment als eigene
+     * „Stimme" im Export, obwohl die Bank die Segmente zweimal bestehenden
+     * Stimmen zuordnen wollte). Ein Session-GID mit insgesamt WENIGER als
+     * [MIN_FRAGMENT_TOTAL_MS] Redezeit UND ohne Global-Profil-Zuordnung
+     * (= nie bank-bestätigt) ist ein Fragment → seine Segmente wandern zum
+     * zeitlich nächsten Nachbar-Segment-Sprecher (vor oder nach dem Segment,
+     * kleinerer Abstand gewinnt). Konservativ: keine Bestätigten, keine
+     * bank-gemappten GIDs, keine Mindestlücken-Anforderungen nötig.
+     * Diagnosezeile: `VB_MINI_MERGE`.
+     */
+    const val MIN_FRAGMENT_TOTAL_MS = 8_000L
+
+    /**
+     * @param overlay Save-Overlay (Orig-GIDs als "speaker_N").
+     * @param profileByGid Session-GID → Global-Profil (Bank-Bestätigung).
+     * @return Overlay mit umgelabelten Fragment-Segmenten.
+     */
+    fun mergeMiniFragments(
+        overlay: List<TranscriptSegment>,
+        profileByGid: Map<Int, String>,
+    ): List<TranscriptSegment> {
+        if (overlay.size < 2) return overlay
+
+        data class Row(val seg: TranscriptSegment, val gid: Int?)
+
+        val rows = overlay.map { it to (it.speakerId?.removePrefix("speaker_")?.toIntOrNull()) }
+        val totalByGid = rows
+            .filter { it.second != null }
+            .groupBy { it.second!! }
+            .mapValues { (_, rs) -> rs.sumOf { (it.first.endTimeMs - it.first.startTimeMs).coerceAtLeast(0L) } }
+
+        val fragmentGids = totalByGid.filter { (gid, total) ->
+            total < MIN_FRAGMENT_TOTAL_MS && gid !in profileByGid
+        }.keys
+        if (fragmentGids.isEmpty()) return overlay
+
+        var moved = 0
+        val result = overlay.mapIndexed { i, seg ->
+            val gid = seg.speakerId?.removePrefix("speaker_")?.toIntOrNull() ?: return@mapIndexed seg
+            if (gid !in fragmentGids) return@mapIndexed seg
+            // Zeitlich nächster Nachbar mit gültigem, NICHT-Fragment-Sprecher
+            var best: TranscriptSegment? = null
+            var bestDist = Long.MAX_VALUE
+            for (j in overlay.indices) {
+                if (j == i) continue
+                val other = overlay[j]
+                val otherGid = other.speakerId?.removePrefix("speaker_")?.toIntOrNull()
+                    ?: continue
+                if (otherGid in fragmentGids) continue
+                val dist = minOf(
+                    kotlin.math.abs(seg.startTimeMs - other.endTimeMs),
+                    kotlin.math.abs(other.startTimeMs - seg.endTimeMs),
+                )
+                if (dist < bestDist) {
+                    bestDist = dist
+                    best = other
+                }
+            }
+            val target = best ?: return@mapIndexed seg
+            moved++
+            seg.copy(speakerId = target.speakerId, speakerLabel = target.speakerLabel)
+        }
+        if (moved > 0) {
+            android.util.Log.i("SpeakerOverlayMerger",
+                "VB_MINI_MERGE fragments=$fragmentGids → $moved Segmente zum nächsten Sprecher (total < ${MIN_FRAGMENT_TOTAL_MS}ms, bank-los)")
+        }
+        return result
+    }
+
+    /**
      * @param overlay Save-Overlay (Segmente tragen Orig-GIDs als "speaker_N").
      * @param profileByGid Session-GID → Global-Profil-ID (Worker-Map).
      * @param profileSimilarity Cosine-Sim zweier Profile (injektiv, z. B. via

@@ -88,4 +88,62 @@ class SpeakerOverlayMergerTest {
         )
         assertTrue(result.map { it.speakerId } == listOf("speaker_0", "speaker_1"))
     }
+
+    // ── 0.11.0: Mini-Segment-Regel ──────────────────────────────────────
+
+    @Test
+    fun `bank-loses Fragment unter 8s wandert zum zeitlich naechsten Sprecher`() {
+        val overlay = listOf(
+            seg("a", "speaker_0", 0, 10_000),
+            seg("b", "speaker_6", 12_000, 16_000), // Fragment 4s, Profil-los
+            seg("c", "speaker_4", 18_000, 40_000),
+        )
+        val result = SpeakerOverlayMerger.mergeMiniFragments(overlay, mapOf(0 to "P-A", 4 to "P-B"))
+        // b liegt zwischen spk0 und spk4 – naeher an spk0 (2s vs 2s → spk0 gewinnt bei gleichem Abstand, hier erster Treffer)
+        assertEquals("speaker_0", result[1].speakerId)
+    }
+
+    @Test
+    fun `Fragment mit Profil-Zuordnung bleibt unangetastet`() {
+        val overlay = listOf(
+            seg("a", "speaker_0", 0, 10_000),
+            seg("b", "speaker_6", 12_000, 16_000),
+            seg("c", "speaker_4", 18_000, 40_000),
+        )
+        // gid 6 hat ein Profil → KEIN Fragment
+        val result = SpeakerOverlayMerger.mergeMiniFragments(overlay, mapOf(0 to "P-A", 6 to "P-6", 4 to "P-B"))
+        assertEquals("speaker_6", result[1].speakerId)
+    }
+
+    @Test
+    fun `Sprecher mit ueber 8s Gesamtredezeit bleibt unangetastet`() {
+        val overlay = listOf(
+            seg("a", "speaker_6", 0, 5_000),
+            seg("b", "speaker_6", 6_000, 10_000), // gid 6 gesamt 9s → kein Fragment
+            seg("c", "speaker_0", 12_000, 20_000),
+        )
+        val result = SpeakerOverlayMerger.mergeMiniFragments(overlay, mapOf(0 to "P-A"))
+        assertEquals(listOf("speaker_6", "speaker_6", "speaker_0"), result.map { it.speakerId })
+    }
+
+    @Test
+    fun `Fragment am Anfang wandert zum einzigen Nachbarn`() {
+        val overlay = listOf(
+            seg("a", "speaker_6", 0, 4_000),
+            seg("b", "speaker_0", 10_000, 20_000),
+        )
+        val result = SpeakerOverlayMerger.mergeMiniFragments(overlay, mapOf(0 to "P-A"))
+        assertEquals("speaker_0", result[0].speakerId)
+    }
+
+    @Test
+    fun `nur Fragmente ohne jeden gueltigen Nachbarn bleiben`() {
+        val overlay = listOf(
+            seg("a", "speaker_6", 0, 4_000),  // Fragment
+            seg("b", "speaker_7", 10_000, 12_000), // Fragment (2s, bank-los)
+        )
+        val result = SpeakerOverlayMerger.mergeMiniFragments(overlay, emptyMap())
+        // beide sind Fragmente, keiner ist gueltiger Nachbar → unveraendert
+        assertEquals(listOf("speaker_6", "speaker_7"), result.map { it.speakerId })
+    }
 }

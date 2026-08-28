@@ -37,54 +37,44 @@ class SpeakerProfileStore(private val profilesFile: File) {
     fun loadAll(): List<SpeakerProfile> {
         if (!profilesFile.exists()) return emptyList()
         return try {
-            val root = JSONObject(profilesFile.readText())
-            val arr = root.optJSONArray("profiles") ?: return emptyList()
-            buildList {
-                for (i in 0 until arr.length()) {
-                    val p = arr.getJSONObject(i)
-                    val embJson = p.getJSONArray("embedding")
-                    val emb = FloatArray(embJson.length()) { j -> embJson.getDouble(j).toFloat() }
-                    add(
-                        SpeakerProfile(
-                            id = p.getString("id"),
-                            embedding = emb,
-                            sampleCount = p.optInt("sampleCount", 1),
-                            updatedAt = p.optLong("updatedAt", 0L),
-                            // 0.7.2: isNull-Check – JSONObject.NULL.toString() waere sonst "null"
-                            name = if (p.isNull("name")) null
-                            else p.optString("name").takeIf { it.isNotBlank() },
-                        )
-                    )
-                }
-            }
+            fromJson(profilesFile.readText())
         } catch (t: Throwable) {
             Log.w(TAG, "loadAll: Profile-Datei unlesbar (${t.message}) – starte mit leerer Bank")
             emptyList()
         }
     }
 
+    /** 0.11.0: Backup-Import – JSON aus beliebiger Quelle lesen (Fehler → leer). */
+    fun fromJson(content: String): List<SpeakerProfile> = try {
+        val root = JSONObject(content)
+        val arr = root.optJSONArray("profiles") ?: return emptyList()
+        buildList {
+            for (i in 0 until arr.length()) {
+                val p = arr.getJSONObject(i)
+                val embJson = p.getJSONArray("embedding")
+                val emb = FloatArray(embJson.length()) { j -> embJson.getDouble(j).toFloat() }
+                add(
+                    SpeakerProfile(
+                        id = p.getString("id"),
+                        embedding = emb,
+                        sampleCount = p.optInt("sampleCount", 1),
+                        updatedAt = p.optLong("updatedAt", 0L),
+                        // 0.7.2: isNull-Check – JSONObject.NULL.toString() waere sonst "null"
+                        name = if (p.isNull("name")) null
+                        else p.optString("name").takeIf { it.isNotBlank() },
+                    )
+                )
+            }
+        }
+    } catch (t: Throwable) {
+        Log.w(TAG, "fromJson: Backup unlesbar (${t.message}) → leere Liste")
+        emptyList()
+    }
+
     /** Schreibt alle Profile atomar (.tmp schreiben, dann renameTo). */
     fun saveAll(profiles: List<SpeakerProfile>) {
         try {
-            val arr = JSONArray()
-            profiles.forEach { p ->
-                val embJson = JSONArray()
-                p.embedding.forEach { embJson.put(it.toDouble()) }
-                arr.put(
-                    JSONObject().apply {
-                        put("id", p.id)
-                        put("embedding", embJson)
-                        put("sampleCount", p.sampleCount)
-                        put("updatedAt", p.updatedAt)
-                        put("name", p.name ?: JSONObject.NULL)
-                    }
-                )
-            }
-            val json = JSONObject().apply {
-                put("version", VERSION)
-                put("profiles", arr)
-            }
-            val content = json.toString(2)
+            val content = toJson(profiles)
             val tmp = File(profilesFile.parentFile, profilesFile.name + ".tmp")
             tmp.writeText(content)
             if (!tmp.renameTo(profilesFile)) {
@@ -96,5 +86,27 @@ class SpeakerProfileStore(private val profilesFile: File) {
         } catch (t: Throwable) {
             Log.e(TAG, "saveAll failed: ${t.message}")
         }
+    }
+
+    /** 0.11.0: Backup-Export – serialisiert Profile ins Store-JSON-Format. */
+    fun toJson(profiles: List<SpeakerProfile>): String {
+        val arr = JSONArray()
+        profiles.forEach { p ->
+            val embJson = JSONArray()
+            p.embedding.forEach { embJson.put(it.toDouble()) }
+            arr.put(
+                JSONObject().apply {
+                    put("id", p.id)
+                    put("embedding", embJson)
+                    put("sampleCount", p.sampleCount)
+                    put("updatedAt", p.updatedAt)
+                    put("name", p.name ?: JSONObject.NULL)
+                }
+            )
+        }
+        return JSONObject().apply {
+            put("version", VERSION)
+            put("profiles", arr)
+        }.toString(2)
     }
 }

@@ -65,8 +65,25 @@ class TranscriptExporterTest {
     @Test
     fun `formatMarkdown enthält Titel Metadaten und Sprecher-Abschnitte`() {
         val md = TranscriptExporter.formatMarkdown(transcript, segments)
-        assertTrue(md.startsWith("# Test-Gespräch\n"))
-        assertTrue(md.contains("**Dauer:** 1:45 Min · **Sprecher:** 2"))
+        assertTrue(md.contains("# Test-Gespräch"))
+        assertTrue(md.contains("**Dauer:** 1:45 Min"))
+        assertTrue(md.contains("## Sprecher 1"))
+        assertTrue(md.contains("## Sprecher 2"))
+    }
+
+    @Test
+    fun `formatProtocolMarkdown enthält Kopf Redezeit-Tabelle und Blöcke`() {
+        val md = TranscriptExporter.formatProtocolMarkdown(transcript, segments)
+        // Kopf
+        assertTrue(md.contains("# Test-Gespräch"))
+        assertTrue(md.contains("**Dauer:** 1:45 Min"))
+        assertTrue(md.contains("**Teilnehmer:** 2"))
+        // Redezeit-Tabelle: Sprecher 1 = 8s (8_000-16_000), Sprecher 2 = 8s (62_000-70_000) → 50/50
+        assertTrue(md.contains("## Teilnehmer & Redezeiten"))
+        assertTrue(md.contains("| Sprecher | Redezeit | Anteil | Segmente |"))
+        assertTrue(md.contains("| Sprecher 1 | 8 s | 50 % | 2 |"))
+        assertTrue(md.contains("| Sprecher 2 | 8 s | 50 % | 2 |"))
+        // Sprecher-Blöcke weiterhin enthalten
         assertTrue(md.contains("## Sprecher 1 · 00:00:08"))
         assertTrue(md.contains("## Sprecher 2 · 00:01:02"))
     }

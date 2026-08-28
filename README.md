@@ -11,21 +11,22 @@ On-device live transcription including **speaker diarization** and a **persisten
 <a name="english"></a>
 ## English
 
-### Features (as of 0.10.9)
+### Features (as of 0.11.0)
 
 **Recognition & diarization**
 
 - Live ASR: Sherpa-ONNX OnlineRecognizer (streaming), Kroko Zipformer transducer (German); optional German + English mode (`DE_EN_AUTO`, loads EN Zipformer ~38 MB, auto-detection after 3 s)
 - Speaker diarization: ReVerb v1 segmentation + ERes2Net embeddings, fully offline, 2–4 speakers on microphone/meeting recordings
 - Rolling diarization: 15 s chunk pipeline with overlap, temporal-vote reconciler and `SessionVoiceBank` (acoustic memory against engine drift)
-- Hardened speaker assignment chain: drift pre-check rejects phantom IDs from chunk-boundary drift (`VB_DRIFT_ABFANG`), Quick-Confirm for long first contacts, bank-aware continuity inheritance across chunks (12 s gap), acoustic resolution of unknown blocks between confirmed speakers (`VB_RESOLVE_UNLABELED`), duplicate-profile consolidation at save (`VB_DUP_MERGE`, 0.10.7) so a drifted known voice no longer survives as several speakers
+- Hardened speaker assignment chain: drift pre-check rejects phantom IDs from chunk-boundary drift (`VB_DRIFT_ABFANG`), Quick-Confirm for long first contacts, bank-aware continuity inheritance across chunks (12 s gap), acoustic resolution of unknown blocks between confirmed speakers (`VB_RESOLVE_UNLABELED`), duplicate-profile consolidation at save (`VB_DUP_MERGE`, 0.10.7) so a drifted known voice no longer survives as several speakers, mini-fragment cleanup at save (bank-less IDs < 8 s move to the nearest speaker, 0.11.0)
 
 **Speakers & data**
 
 - Persistent speaker DB (Phase 7): device-wide voice fingerprints (`GlobalVoiceBank`). Confirmed contacts are auto-enrolled at session end and re-recognized **from the first chunk** of any future recording — no manual assignment
 - Naming UI: tap a segment after stopping → assign an existing profile or name a new contact (acoustic enroll straight from the audio buffer); rename any speaker label afterwards in the detail view — also for old/imported transcripts without audio access. Since 0.10.9 the live assignment also updates the saved history entry immediately
-- Contact management: rename, merge (sample-weighted), delete, bulk-delete unnamed profiles; stable speaker colors keyed by profile UUID
+- Contact management: rename, merge (sample-weighted), delete, bulk-delete unnamed profiles; stable speaker colors keyed by profile UUID; **voice-bank backup** as JSON via share sheet (export/import for device changes, import replaces after confirmation, 0.11.0)
 - History with Room database (SQLite), full-text search across titles, segment texts and speaker names
+- Detail view shows per-person speaking time (share + segments, 0.11.0); **protocol export** ("Protokoll (.md)") adds a header with duration, participants and a speaking-time table (0.11.0)
 
 **Import & export**
 
@@ -83,21 +84,22 @@ All processing happens on the device. Voice profiles are biometric data and stay
 
 Live-Transkription auf dem Gerät inkl. **Speaker Diarization** und **persistenter Speaker-Datenbank** – keine Cloud, kein Netzwerk.
 
-### Funktionen (Stand 0.10.9)
+### Funktionen (Stand 0.11.0)
 
 **Erkennung & Diarization**
 
 - Live-ASR: Sherpa-ONNX OnlineRecognizer (Streaming), Kroko-Zipformer-Transducer (Deutsch); optional Deutsch + Englisch (`DE_EN_AUTO`, lädt EN-Zipformer ~38 MB, Auto-Detection nach 3 s)
 - Speaker Diarization: ReVerb v1 (Segmentation) + ERes2Net (Embedding), komplett offline, 2–4 Sprecher auf Mikrofon-/Meeting-Aufnahmen
 - Rolling-Diarization: 15s-Chunk-Pipeline mit Overlap, Reconciler (temporales Voting) und `SessionVoiceBank` (akustisches Gedächtnis gegen Engine-Drift)
-- Gehärtete Sprecher-Zuweisungskette: Drift-Vorprüfung verwirft Phantom-IDs aus Chunk-Grenzen (`VB_DRIFT_ABFANG`), Quick-Confirm bei langen Erstkontakten, bank-bewusste Kontinuitätsvererbung über Chunk-Grenzen (12 s Gap), akustische Auflösung unbekannter Blöcke zwischen bestätigten Speakern (`VB_RESOLVE_UNLABELED`), Duplikat-Profil-Konsolidierung im Save (`VB_DUP_MERGE`, 0.10.7) – eine gedriftete bekannte Stimme überlebt nicht mehr als mehrere Sprecher
+- Gehärtete Sprecher-Zuweisungskette: Drift-Vorprüfung verwirft Phantom-IDs aus Chunk-Grenzen (`VB_DRIFT_ABFANG`), Quick-Confirm bei langen Erstkontakten, bank-bewusste Kontinuitätsvererbung über Chunk-Grenzen (12 s Gap), akustische Auflösung unbekannter Blöcke zwischen bestätigten Speakern (`VB_RESOLVE_UNLABELED`), Duplikat-Profil-Konsolidierung im Save (`VB_DUP_MERGE`, 0.10.7) – eine gedriftete bekannte Stimme überlebt nicht mehr als mehrere Sprecher, Mini-Fragment-Bereinigung im Save (bank-lose IDs < 8 s wandern zum nächsten Sprecher, 0.11.0)
 
 **Sprecher & Daten**
 
 - Persistente Speaker-DB (Phase 7): geräteweite Stimmen-Fingerprints (`GlobalVoiceBank`). Bestätigte Kontakte werden am Session-Ende automatisch eingelernt und in künftigen Aufnahmen **ab dem ersten Chunk** wiedererkannt – ganz ohne manuelle Zuweisung
 - Namens-UI: Segment antippen nach dem Stoppen → Profil zuweisen oder „Neuer Kontakt" benennen (akustisches Enroll direkt aus dem Audio-Puffer); Sprecher nachträglich im Detail-Screen umbenennen – auch für alte/importierte Transkripte ohne Audio-Zugriff. Seit 0.10.9 übernimmt die Live-Zuweisung den Namen sofort in den gespeicherten Verlauf
-- Kontakt-Verwaltung: Umbenennen, Zusammenführen (sample-gewichtet), Löschen, Sammel-Löschen unbenannter Profile; stabile Sprecherfarben per Profil-UUID
+- Kontakt-Verwaltung: Umbenennen, Zusammenführen (sample-gewichtet), Löschen, Sammel-Löschen unbenannter Profile; stabile Sprecherfarben per Profil-UUID; **Voice-Bank-Backup** als JSON per ShareSheet (Export/Import für Gerätewechsel, Import ersetzt nach Bestätigung, 0.11.0)
 - Verlauf mit Room-Datenbank (SQLite), Volltextsuche über Titel, Segmenttexte und Sprechernamen
+- Detail-Screen mit Sprecher-Statistik (Redezeit, Anteil, Segmentzahl, 0.11.0); **Protokoll-Export** („Protokoll (.md)") mit Kopf – Dauer, Teilnehmer, Redezeit-Tabelle (0.11.0)
 
 **Import & Export**
 
