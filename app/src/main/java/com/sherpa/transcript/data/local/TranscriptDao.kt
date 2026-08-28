@@ -68,6 +68,19 @@ interface TranscriptDao {
     )
     suspend fun assignSpeakerName(tid: String, label: String, name: String?): Int
 
+    /**
+     * 0.10.9: Live-Zuweisung nach Stop in die History übernehmen – alle
+     * Segmente des Transkripts mit gleichem speakerId (Orig-GID) bekommen
+     * den Namen der zugewiesenen Profilstimme (Anzeige + Export nutzen
+     * speakerName). Kein Re-Save des Transkripts nötig; kein ENROLL hier
+     * (das lief bereits über die Live-Zuweisung).
+     */
+    @Query(
+        "UPDATE segments SET speakerName = :name " +
+            "WHERE transcriptId = :tid AND speakerId = :speakerId"
+    )
+    suspend fun assignSpeakerNameById(tid: String, speakerId: String, name: String?): Int
+
     @Query("UPDATE transcripts SET title = :title WHERE transcriptId = :id")
     suspend fun updateTitle(id: String, title: String)
 

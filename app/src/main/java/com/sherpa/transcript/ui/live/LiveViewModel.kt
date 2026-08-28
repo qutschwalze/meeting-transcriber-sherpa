@@ -255,6 +255,13 @@ class LiveViewModel : ViewModel() {
     private var postProcessTicker: Job? = null
     private var postProcessStartMs = 0L
     private var currentTranscriptId: String? = null
+    /**
+     * 0.10.9: Zuletzt gespeichertes Transkript – die Live-Zuweisung nach Stop
+     * übernimmt den Profilnamen damit in die History (DAO-Update by speakerId,
+     * kein Re-Save). Wird bei jedem Save überschrieben; zuweisbare Segmente
+     * gehören immer zum jüngsten Transkript.
+     */
+    private var lastSavedTranscriptId: String? = null
     private var recordingStartedAt: Long = 0L
 
     // ── 0.6.23: Auto-Sprachdetektion DE/EN ──
@@ -2207,6 +2214,9 @@ class LiveViewModel : ViewModel() {
     }
 
     private fun saveTranscript(transcriptId: String, segments: List<TranscriptSegment>): Job {
+        // 0.10.9: Für die History-Übernahme der Live-Zuweisung merken (nach Stop
+        // ist currentTranscriptId bereits null).
+        lastSavedTranscriptId = transcriptId
         return viewModelScope.launch { withContext(Dispatchers.IO) {
             val now = System.currentTimeMillis()
             val durationMs = if (recordingStartedAt > 0) now - recordingStartedAt else 0L
@@ -2441,6 +2451,20 @@ class LiveViewModel : ViewModel() {
                 diarizationChunkWorker.registerProfileMapping(gid, targetId)
                 Log.i(TAG, "VB_GLOBAL_ASSIGN mapping session=$gid → profil=${targetId.takeLast(8)}")
                 TestLog.log("VB_GLOBAL_MAPPING session=$gid profil=${targetId.takeLast(8)}")
+                // 0.10.9: Profilnamen in die GESPEICHERTE History übernehmen –
+                // alle Segmente mit derselben Session-GID bekommen den Namen
+                // (Anzeige + Export nutzen speakerName). Gezieltes DAO-Update,
+                // kein Re-Save des Transkripts. Nur bei benanntem Profil.
+                val tid = lastSavedTranscriptId
+                val displayName = newName?.trim()?.takeIf { it.isNotEmpty() }
+                    ?: globalVoiceBank.nameFor(targetId)
+                if (tid != null && displayName != null) {
+                    val speakerId = "speaker_$gid"
+                    viewModelScope.launch {
+                        repository.assignSpeakerNameById(tid, speakerId, displayName)
+                    }
+                    TestLog.log("VB_SAVE_LABEL transcript=${tid.take(8)} speaker=$speakerId → $displayName")
+                }
             } else {
                 Log.w(TAG, "VB_GLOBAL_ASSIGN: keine Session-GID für ${segmentId.take(8)} ermittelbar")
             }

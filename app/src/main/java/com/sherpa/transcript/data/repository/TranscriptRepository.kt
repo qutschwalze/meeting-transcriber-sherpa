@@ -75,6 +75,13 @@ class TranscriptRepository {
     suspend fun assignSpeakerName(transcriptId: String, label: String, name: String?): Int =
         withContext(Dispatchers.IO) { dao.assignSpeakerName(transcriptId, label, name) }
 
+    /**
+     * 0.10.9: Live-Zuweisung nach Stop in die History übernehmen – alle
+     * Segmente mit gleicher speakerId (Orig-GID) bekommen den Profilnamen.
+     */
+    suspend fun assignSpeakerNameById(transcriptId: String, speakerId: String, name: String?): Int =
+        withContext(Dispatchers.IO) { dao.assignSpeakerNameById(transcriptId, speakerId, name) }
+
     suspend fun saveTranscriptWithSegments(
         transcript: TranscriptEntity,
         segments: List<SegmentEntity>,
