@@ -211,8 +211,31 @@ object DebugUploadClient {
                 val result = uploadFile(file, fileType, sessionId)
                 if (result.isSuccess) {
                     successes.add(file.name)
+                    // Quelle nach erfolgreichem Upload löschen (verhindert
+                    // unbegrenztes Speicherwachstum auf dem Gerät UND den
+                    // Re-Upload der kompletten Bibliothek bei jedem Trigger).
+                    // Nur bei Erfolg: bei Server-Aus bleibt die Datei für den
+                    // nächsten Retry erhalten.
+                    if (file.delete()) {
+                        Log.i(TAG, "  DebugUpload: ${file.name} hochgeladen + gelöscht")
+                    } else {
+                        Log.w(TAG, "  DebugUpload: ${file.name} hochgeladen, Löschen fehlgeschlagen")
+                    }
                 } else {
                     failures.add("${file.name}: ${result.exceptionOrNull()?.message}")
+                }
+            }
+
+            // Chunk-Diagnose-WAVs (testaufnahmen/chunks/) werden bewusst NIE
+            // hochgeladen (skipChunks – riesig, für Host-Analyse unnötig) und
+            // wären sonst ewiger Speichermüll auf dem Gerät. Erst löschen, wenn
+            // die komplette Bibliothek erfolgreich beim Server angekommen ist –
+            // bei Teilerfolg/Fail bleibt alles für den Retry erhalten.
+            if (failures.isEmpty()) {
+                val chunksDir = File(sessionDir, "chunks")
+                val deleted = chunksDir.listFiles()?.filter { it.isFile }?.count { it.delete() } ?: 0
+                if (deleted > 0) {
+                    Log.i(TAG, "DebugUpload: $deleted Chunk-Diagnose-WAVs gelöscht (Bibliothek vollständig hochgeladen)")
                 }
             }
 
