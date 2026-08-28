@@ -1,6 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- 0.10.8: Paket-Sichtbarkeit für den MirMirStack-Installed-Check
+         (Android 11+; ohne <queries> wirft getPackageInfo NameNotFoundException,
+         der Menü-Eintrag würde nie erscheinen. Keine Permission.) -->
+    <queries>
+        <package android:name="com.heddrich.companion" />
+    </queries>
+
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <!-- 0.10.6: CPU-WakeLock für Screen-off-Aufnahmen (Normal-Permission, keine Runtime-Abfrage) -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />

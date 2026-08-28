@@ -3,6 +3,14 @@
 All version changes are documented here. Every build bumps `versionCode` + `versionName` (see `app/build.gradle.kts`).
 **Policy (since 0.10.6):** entries are written in English and are deliberately free of device-, person- or meeting-specific details (no recording filenames, participant counts, durations, names) — the repository is public.
 
+## 0.10.8 / 155 (2026-08-28)
+
+**Feature – optional direct share into the MirMirStack companion app**
+
+- The transcript export menu (History → detail view → share icon) gains an **"An MirMirStack senden"** entry when the companion app (`com.heddrich.companion`) is installed on the same device. It sends the Markdown export directly into the companion's share inbox (ACTION_SEND + EXTRA_TEXT + package targeting) — no system chooser, no file round-trip.
+- **If the companion app is not installed, the menu is unchanged** (TXT / Markdown / JSON via share sheet) — detected via `PackageManager`, no permission needed.
+- Server-side processing (LLM summary, tags, wiki page) happens in the companion's ingest pipeline (`POST /mirmirstack/ingest`) once the user forwards the item there.
+
 ## 0.10.7 / 154 (2026-08-27)
 
 **Diarization – duplicate voice-bank profiles of the same speaker no longer split the export**

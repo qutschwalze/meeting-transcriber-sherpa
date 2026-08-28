@@ -11,7 +11,7 @@ On-device live transcription including **speaker diarization** and a **persisten
 <a name="english"></a>
 ## English
 
-### Features (as of 0.10.7)
+### Features (as of 0.10.8)
 
 **Recognition & diarization**
 
@@ -31,6 +31,7 @@ On-device live transcription including **speaker diarization** and a **persisten
 
 - Voice message import (Phase 9): share audio from WhatsApp/Telegram etc. → automatic transcription through the same diarization/speaker-DB pipeline (MediaCodec decoder for Opus/M4A/MP3/AMR, 30 min limit), visible via global banner + notification, result appears on the live screen with Name/Skip banner
 - Export: TXT / Markdown / JSON via share sheet with speaker blocks and real names (also for history entries)
+- Optional companion bridge (0.10.8): if the MirMirStack app is installed on the device, the export menu shows "An MirMirStack senden" — the Markdown transcript goes straight into its share inbox (no chooser); without the app the menu stays unchanged
 
 **Comfort & diagnostics**
 
@@ -82,7 +83,7 @@ All processing happens on the device. Voice profiles are biometric data and stay
 
 Live-Transkription auf dem Gerät inkl. **Speaker Diarization** und **persistenter Speaker-Datenbank** – keine Cloud, kein Netzwerk.
 
-### Funktionen (Stand 0.10.7)
+### Funktionen (Stand 0.10.8)
 
 **Erkennung & Diarization**
 
@@ -102,6 +103,7 @@ Live-Transkription auf dem Gerät inkl. **Speaker Diarization** und **persistent
 
 - Sprachnachrichten-Import (Phase 9): Audiodatei aus WhatsApp/Telegram & Co. teilen → automatische Transkription durch dieselbe Diarization-/Speaker-DB-Pipeline (MediaCodec-Decoder für Opus/M4A/MP3/AMR, Limit 30 min), sichtbar über globales Banner + Notification, Ergebnis erscheint im Live-Screen mit Benennen/Überspringen
 - Export: TXT / Markdown / JSON per ShareSheet mit Sprecherblöcken und echten Namen (auch für Verlaufs-Einträge)
+- Optionale Companion-Brücke (0.10.8): Ist die MirMirStack-App auf dem Gerät installiert, zeigt das Export-Menü „An MirMirStack senden" – das Markdown-Transkript geht direkt in deren Share-Inbox (ohne Chooser); ohne die App bleibt das Menü unverändert
 
 **Komfort & Diagnose**
 

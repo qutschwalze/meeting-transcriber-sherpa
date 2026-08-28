@@ -22,6 +22,7 @@ import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -106,6 +107,25 @@ fun TranscriptDetailScreen(
                                 onClick = {
                                     exportMenuOpen = false
                                     exportTranscript(context, uiState.transcript, uiState.segments, format)
+                                },
+                            )
+                        }
+                        // 0.10.8: Direkter Weg in die MirMirStack-Outbox (nur wenn installiert;
+                        // sonst verhält sich das Menü exakt wie vorher). Format: Markdown –
+                        // die Ingest-Seite serverseitig rendert daraus die Wiki-Seite.
+                        if (isMirMirStackInstalled(context)) {
+                            HorizontalDivider()
+                            DropdownMenuItem(
+                                text = { Text("An MirMirStack senden") },
+                                onClick = {
+                                    exportMenuOpen = false
+                                    val t = uiState.transcript
+                                    if (t != null) {
+                                        shareToMirMirStack(
+                                            context,
+                                            TranscriptExporter.formatMarkdown(t, uiState.segments),
+                                        )
+                                    }
                                 },
                             )
                         }
@@ -345,5 +365,41 @@ private fun shareFile(context: Context, fileName: String, content: String, mime:
         context.startActivity(Intent.createChooser(intent, "Transkript exportieren"))
     } catch (t: Throwable) {
         Log.e("TranscriptDetail", "Export fehlgeschlagen: ${t.message}")
+    }
+}
+
+// ─── 0.10.8: MirMirStack-Direktversand (optional, nur bei installierter App) ──
+
+/** Paketname der MirMirStack-App (com.heddrich.companion, Share-Empfänger). */
+private const val MIRMIRSTACK_PACKAGE = "com.heddrich.companion"
+
+/**
+ * true, wenn die MirMirStack-App installiert ist (Menü-Eintrag nur dann sichtbar;
+ * ohne Installation verhält sich das Export-Menü exakt wie vor 0.10.8).
+ */
+private fun isMirMirStackInstalled(context: Context): Boolean = try {
+    context.packageManager.getPackageInfo(MIRMIRSTACK_PACKAGE, 0)
+    true
+} catch (e: Exception) {
+    false
+}
+
+/**
+ * Sendet den Inhalt DIREKT in die MirMirStack-Outbox (kein System-Chooser):
+ * ACTION_SEND + EXTRA_TEXT + setPackage – die ShareActivity von MirMirStack
+ * legt das Transkript dort ab (POST /mirmirstack/ingest erfolgt in der App).
+ * Kein Datei-/FileProvider-Umweg nötig (EXTRA_TEXT wird unterstützt).
+ */
+private fun shareToMirMirStack(context: Context, content: String) {
+    try {
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, content)
+            setPackage(MIRMIRSTACK_PACKAGE)
+        }
+        context.startActivity(intent)
+        Log.d("TranscriptDetail", "MirMirStack-Send gestartet (${content.length} Zeichen)")
+    } catch (t: Throwable) {
+        Log.e("TranscriptDetail", "MirMirStack-Send fehlgeschlagen: ${t.message}")
     }
 }
