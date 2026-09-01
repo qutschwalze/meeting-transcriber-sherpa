@@ -11,14 +11,14 @@ On-device live transcription including **speaker diarization** and a **persisten
 <a name="english"></a>
 ## English
 
-### Features (as of 0.11.0)
+### Features (as of 0.11.1)
 
 **Recognition & diarization**
 
 - Live ASR: Sherpa-ONNX OnlineRecognizer (streaming), Kroko Zipformer transducer (German); optional German + English mode (`DE_EN_AUTO`, loads EN Zipformer ~38 MB, auto-detection after 3 s)
 - Speaker diarization: ReVerb v1 segmentation + ERes2Net embeddings, fully offline, 2–4 speakers on microphone/meeting recordings
 - Rolling diarization: 15 s chunk pipeline with overlap, temporal-vote reconciler and `SessionVoiceBank` (acoustic memory against engine drift)
-- Hardened speaker assignment chain: drift pre-check rejects phantom IDs from chunk-boundary drift (`VB_DRIFT_ABFANG`), Quick-Confirm for long first contacts, bank-aware continuity inheritance across chunks (12 s gap), acoustic resolution of unknown blocks between confirmed speakers (`VB_RESOLVE_UNLABELED`), duplicate-profile consolidation at save (`VB_DUP_MERGE`, 0.10.7) so a drifted known voice no longer survives as several speakers, mini-fragment cleanup at save (bank-less IDs < 8 s move to the nearest speaker, 0.11.0)
+- Hardened speaker assignment chain: drift pre-check rejects phantom IDs from chunk-boundary drift (`VB_DRIFT_ABFANG`), Quick-Confirm for long first contacts, bank-aware continuity inheritance across chunks (12 s gap), acoustic resolution of unknown blocks between confirmed speakers (`VB_RESOLVE_UNLABELED`), duplicate-profile consolidation at save (`VB_DUP_MERGE`, 0.10.7) so a drifted known voice no longer survives as several speakers, mini-fragment cleanup at save (bank-less IDs < 8 s move to the nearest speaker, 0.11.0), fragment-cluster merge at save (bank-less IDs with mutually similar confirmed voiceprints ≥ 0.60 are merged, 0.11.1) so large bank-less meetings no longer over-generate speakers
 
 **Speakers & data**
 
@@ -84,14 +84,14 @@ All processing happens on the device. Voice profiles are biometric data and stay
 
 Live-Transkription auf dem Gerät inkl. **Speaker Diarization** und **persistenter Speaker-Datenbank** – keine Cloud, kein Netzwerk.
 
-### Funktionen (Stand 0.11.0)
+### Funktionen (Stand 0.11.1)
 
 **Erkennung & Diarization**
 
 - Live-ASR: Sherpa-ONNX OnlineRecognizer (Streaming), Kroko-Zipformer-Transducer (Deutsch); optional Deutsch + Englisch (`DE_EN_AUTO`, lädt EN-Zipformer ~38 MB, Auto-Detection nach 3 s)
 - Speaker Diarization: ReVerb v1 (Segmentation) + ERes2Net (Embedding), komplett offline, 2–4 Sprecher auf Mikrofon-/Meeting-Aufnahmen
 - Rolling-Diarization: 15s-Chunk-Pipeline mit Overlap, Reconciler (temporales Voting) und `SessionVoiceBank` (akustisches Gedächtnis gegen Engine-Drift)
-- Gehärtete Sprecher-Zuweisungskette: Drift-Vorprüfung verwirft Phantom-IDs aus Chunk-Grenzen (`VB_DRIFT_ABFANG`), Quick-Confirm bei langen Erstkontakten, bank-bewusste Kontinuitätsvererbung über Chunk-Grenzen (12 s Gap), akustische Auflösung unbekannter Blöcke zwischen bestätigten Speakern (`VB_RESOLVE_UNLABELED`), Duplikat-Profil-Konsolidierung im Save (`VB_DUP_MERGE`, 0.10.7) – eine gedriftete bekannte Stimme überlebt nicht mehr als mehrere Sprecher, Mini-Fragment-Bereinigung im Save (bank-lose IDs < 8 s wandern zum nächsten Sprecher, 0.11.0)
+- Gehärtete Sprecher-Zuweisungskette: Drift-Vorprüfung verwirft Phantom-IDs aus Chunk-Grenzen (`VB_DRIFT_ABFANG`), Quick-Confirm bei langen Erstkontakten, bank-bewusste Kontinuitätsvererbung über Chunk-Grenzen (12 s Gap), akustische Auflösung unbekannter Blöcke zwischen bestätigten Speakern (`VB_RESOLVE_UNLABELED`), Duplikat-Profil-Konsolidierung im Save (`VB_DUP_MERGE`, 0.10.7) – eine gedriftete bekannte Stimme überlebt nicht mehr als mehrere Sprecher, Mini-Fragment-Bereinigung im Save (bank-lose IDs < 8 s wandern zum nächsten Sprecher, 0.11.0), Fragment-Cluster-Merge im Save (bank-lose IDs mit sich gegenseitig ähnlichen Bestätigten-Voiceprints ≥ 0,60 werden zusammengeführt, 0.11.1) – große bank-lose Meetings erzeugen keine Sprecherflut mehr
 
 **Sprecher & Daten**
 

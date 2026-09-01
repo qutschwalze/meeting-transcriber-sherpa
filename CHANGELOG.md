@@ -3,6 +3,15 @@
 All version changes are documented here. Every build bumps `versionCode` + `versionName` (see `app/build.gradle.kts`).
 **Policy (since 0.10.6):** entries are written in English and are deliberately free of device-, person- or meeting-specific details (no recording filenames, participant counts, durations, names) — the repository is public.
 
+## 0.11.1 / 158 (2026-09-01)
+
+**Diarization – fragment-cluster merge (large meetings no longer over-generate speakers)**
+
+- **Device finding:** a ~43 min meeting exported 23 speakers. The host embedding matrix on the app's own WAV showed a dense similarity block (0.60–0.73) across ~10–12 of those IDs, plus splits of the dominant voice — i.e., bank-less fragments of fewer real voices. (A 62 min meeting with 30 bank-anchored speakers was verified distinct by the same method.)
+- **Fix:** at save time, bank-less IDs whose **confirmed session voiceprints** resemble each other (cosine ≥ 0.60, transitive union-find) are merged into the ID with the most speech time. Uses the session voice-bank vectors, no WAV access. Diagnostic line: `VB_CLUSTER_MERGE`. Tuning variable: `SpeakerOverlayMerger.FRAGMENT_CLUSTER_THRESHOLD`.
+- Save-time consolidation order: duplicate-profile merge (0.10.7) → mini-fragment rule (0.11.0) → fragment-cluster merge (0.11.1). Confirmed bank profiles stay untouched throughout.
+- Tests: +4 (cluster merge, bank-exclusion, transitivity, empty cases).
+
 ## 0.11.0 / 157 (2026-08-28)
 
 **Phase 11 – meeting protocol tooling + speaker-bank backup**

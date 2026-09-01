@@ -146,4 +146,67 @@ class SpeakerOverlayMergerTest {
         // beide sind Fragmente, keiner ist gueltiger Nachbar → unveraendert
         assertEquals(listOf("speaker_6", "speaker_7"), result.map { it.speakerId })
     }
+
+    // ── 0.11.1: Fragment-Cluster-Merge ──────────────────────────────────
+
+    private fun vp(base: Float): FloatArray = FloatArray(8) { i -> if (i < 4) base else base * 0.5f }
+
+    @Test
+    fun `bank-lose GIDs mit aehnlichen Voiceprints werden zusammengefuehrt`() {
+        val overlay = listOf(
+            seg("a", "speaker_14", 0, 20_000),
+            seg("b", "speaker_23", 30_000, 45_000),  // kürzer als 14 → primary 14
+            seg("c", "speaker_0", 50_000, 90_000),    // bank-gemappt, bleibt
+        )
+        val voices = mapOf(
+            14 to vp(0.9f),  // 14 vs 23: cos = 0.9*0.9+0.9*0.45*4/8... nah genug ≥0.60
+            23 to vp(0.85f),
+        )
+        val result = SpeakerOverlayMerger.mergeFragmentClusters(
+            overlay, mapOf(0 to "P-A"), voices
+        )
+        assertEquals(listOf("speaker_14", "speaker_14", "speaker_0"), result.map { it.speakerId })
+    }
+
+    @Test
+    fun `bank-gemappte GIDs sind vom Cluster-Merge ausgenommen`() {
+        val overlay = listOf(
+            seg("a", "speaker_14", 0, 20_000),
+            seg("b", "speaker_23", 30_000, 45_000),
+        )
+        val voices = mapOf(14 to vp(0.9f), 23 to vp(0.85f))
+        // Beide Profil-gemappt → kein Merge (Duplikat-Merge ist zuständig)
+        val result = SpeakerOverlayMerger.mergeFragmentClusters(
+            overlay, mapOf(14 to "P-14", 23 to "P-23"), voices
+        )
+        assertEquals(listOf("speaker_14", "speaker_23"), result.map { it.speakerId })
+    }
+
+    @Test
+    fun `Cluster-Merge ist transitiv und primary = meiste Redezeit`() {
+        val overlay = listOf(
+            seg("a", "speaker_21", 0, 5_000),
+            seg("b", "speaker_22", 10_000, 30_000),  // primary (20s)
+            seg("c", "speaker_23", 40_000, 50_000),
+        )
+        val voices = mapOf(
+            21 to vp(0.9f),
+            22 to vp(0.89f),
+            23 to vp(0.91f),
+        )
+        val result = SpeakerOverlayMerger.mergeFragmentClusters(overlay, emptyMap(), voices)
+        assertEquals(listOf("speaker_22", "speaker_22", "speaker_22"), result.map { it.speakerId })
+    }
+
+    @Test
+    fun `ohne Voiceprints oder ohne Kandidaten keine Aenderung`() {
+        val overlay = listOf(seg("a", "speaker_14", 0, 20_000), seg("b", "speaker_23", 30_000, 45_000))
+        // leerer Voiceprint-Map
+        assertEquals(overlay, SpeakerOverlayMerger.mergeFragmentClusters(overlay, emptyMap(), emptyMap()))
+        // Kandidat ohne Voiceprint → kein Kandidat übrig
+        assertEquals(
+            overlay,
+            SpeakerOverlayMerger.mergeFragmentClusters(overlay, emptyMap(), mapOf(14 to vp(0.9f)))
+        )
+    }
 }

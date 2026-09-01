@@ -1998,11 +1998,20 @@ class LiveViewModel : ViewModel() {
                 dedupOverlay,
                 diarizationChunkWorker.globalProfileBySessionId(),
             )
-            logSaveSpeakerStage("beforeSave overlay", fragmentMergedOverlay)
+            // 0.11.1: Fragment-Cluster-Merge – größere bank-lose GIDs, deren
+            // Session-Voiceprints sich gegenseitig >= 0,60 ähnlich sind, werden
+            // zusammengeführt (Befund 01.09.: ~10–12 Fragmente weniger Stimmen
+            // als eigene Sprecher im Export)
+            val clusterMergedOverlay = SpeakerOverlayMerger.mergeFragmentClusters(
+                fragmentMergedOverlay,
+                diarizationChunkWorker.globalProfileBySessionId(),
+                sessionVoiceBank.confirmedVoiceprints(),
+            )
+            logSaveSpeakerStage("beforeSave overlay", clusterMergedOverlay)
             // Segment-Splitting: lange ASR-Segmente an Diarization-Grenzen aufteilen
             val splitOverlay = if (lastDiarizationSegments.isNotEmpty()) {
-                TimelineComposer.splitLongSpeakerSegments(fragmentMergedOverlay, lastDiarizationSegments)
-            } else fragmentMergedOverlay
+                TimelineComposer.splitLongSpeakerSegments(clusterMergedOverlay, lastDiarizationSegments)
+            } else clusterMergedOverlay
             logSaveSpeakerStage("afterSplit", splitOverlay)
             // Finale Konsolidierung (Post-Processing) für History
             val segmentsToSave = if (splitOverlay.size >= 3) {

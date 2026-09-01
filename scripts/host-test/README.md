@@ -20,8 +20,8 @@ GPT-Log-Analysetool eine Behauptung aufstellt ("Engine-Fehler", "Cross-Talk",
 
 ```bash
 # 1) venv + pinned Engine-Version (immer die App-AAR-Version verwenden!)
-python3 -m venv /tmp/onnxenv
-/tmp/onnxenv/bin/pip install sherpa-onnx==1.13.4
+python3 -m venv /opt/onnxenv
+/opt/onnxenv/bin/pip install sherpa-onnx==1.13.4
 
 # 2) ASR-Modell (Kroko Deutsch) – wie scripts/download-model.sh
 mkdir -p /tmp/kroko-de && cd /tmp/kroko-de
@@ -40,9 +40,9 @@ Die Diarization-Modelle (`segmentation.onnx`, `embedding.onnx`) kommen direkt au
 
 ```bash
 cd scripts/host-test
-/tmp/onnxenv/bin/python run_asr.py clip16k.wav /tmp/kroko-de   # → asr_out.json
-/tmp/onnxenv/bin/python run_pipeline.py clip16k.wav asr_out.json  # → pipeline_out.json
-/tmp/onnxenv/bin/python compare_words.py asr_out.json           # WER vs. Referenz
+/opt/onnxenv/bin/python run_asr.py clip16k.wav /tmp/kroko-de   # → asr_out.json
+/opt/onnxenv/bin/python run_pipeline.py clip16k.wav asr_out.json  # → pipeline_out.json
+/opt/onnxenv/bin/python compare_words.py asr_out.json           # WER vs. Referenz
 ```
 
 ## Bekannte Befunde (Testclip Di._07.52, 2 Sprecher, Blockwechsel bei ~62 s)

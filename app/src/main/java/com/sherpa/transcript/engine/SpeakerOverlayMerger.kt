@@ -42,6 +42,91 @@ object SpeakerOverlayMerger {
     const val MIN_FRAGMENT_TOTAL_MS = 8_000L
 
     /**
+     * 0.11.1: Fragment-Cluster-Merge (Geräte-Befund 01.09.: Meeting mit 23
+     * Export-Speakern, davon ~10–12 bank-lose Fragmente WENIGER Stimmen – dichter
+     * Ähnlichkeitsblock 0,60–0,73 in der Host-Matrix). Während [mergeMiniFragments]
+     * nur Mini-Fragmente (< [MIN_FRAGMENT_TOTAL_MS]) auffängt, mergt dieser Schritt
+     * GRÖSSERE bank-lose GIDs, deren Session-Voiceprints (confirmed, ohne
+     * Global-Profil) sich gegenseitig ≥ [FRAGMENT_CLUSTER_THRESHOLD] ähnlich sind.
+     * Transitiv (Union-Find); primary = meiste Redezeit. Diagnosezeile:
+     * `VB_CLUSTER_MERGE`. Nutzt die Vektoren der SessionVoiceBank – kein WAV-Zugriff.
+     */
+    const val FRAGMENT_CLUSTER_THRESHOLD = 0.60f
+
+    /**
+     * @param overlay Save-Overlay (Orig-GIDs als "speaker_N").
+     * @param profileByGid Session-GID → Global-Profil (bank-gemappte GIDs sind
+     *   ausgeschlossen – die wickelt der Duplikat-Merge ab).
+     * @param voiceprintByGid Session-Bank-Voiceprints (confirmed) je GID.
+     * @return Overlay mit zusammengeführten Fragment-Clustern.
+     */
+    fun mergeFragmentClusters(
+        overlay: List<TranscriptSegment>,
+        profileByGid: Map<Int, String>,
+        voiceprintByGid: Map<Int, FloatArray>,
+    ): List<TranscriptSegment> {
+        if (overlay.size < 2 || voiceprintByGid.isEmpty()) return overlay
+
+        val activeGids = overlay.mapNotNull { it.speakerId?.removePrefix("speaker_")?.toIntOrNull() }.distinct()
+        val candidates = activeGids.filter { gid ->
+            gid !in profileByGid && voiceprintByGid.containsKey(gid)
+        }
+        if (candidates.size < 2) return overlay
+
+        // Union-Find über Voiceprint-Ähnlichkeit
+        val parent = candidates.associateWith { it }.toMutableMap()
+        fun find(x: Int): Int {
+            var r = x
+            while (parent[r] != r) r = parent[r]!!
+            return r
+        }
+        fun union(a: Int, b: Int) {
+            val ra = find(a)
+            val rb = find(b)
+            if (ra != rb) parent[ra] = rb
+        }
+
+        var pairs = 0
+        for (i in candidates.indices) {
+            for (j in i + 1 until candidates.size) {
+                val a = candidates[i]
+                val b = candidates[j]
+                val sim = SessionVoiceBank.cosineSimilarity(
+                    voiceprintByGid.getValue(a),
+                    voiceprintByGid.getValue(b),
+                )
+                if (sim >= FRAGMENT_CLUSTER_THRESHOLD) {
+                    union(a, b)
+                    pairs++
+                }
+            }
+        }
+        if (pairs == 0) return overlay
+
+        val durationByGid = overlay
+            .filter { it.speakerId != null }
+            .groupBy { it.speakerId!!.removePrefix("speaker_").toIntOrNull() }
+            .mapValues { (_, segs) -> segs.sumOf { it.endTimeMs - it.startTimeMs } }
+
+        val gidToPrimary = mutableMapOf<Int, Int>()
+        val groups = candidates.groupBy { find(it) }
+        for ((_, members) in groups) {
+            if (members.size < 2) continue
+            val primary = members.maxByOrNull { durationByGid[it] ?: 0L } ?: continue
+            members.forEach { gidToPrimary[it] = primary }
+            android.util.Log.i("SpeakerOverlayMerger",
+                "VB_CLUSTER_MERGE gids=${members.sorted()} → primary=$primary (bank-lose Session-Voiceprints, Sim >= ${FRAGMENT_CLUSTER_THRESHOLD})")
+        }
+        if (gidToPrimary.isEmpty()) return overlay
+
+        return overlay.map { seg ->
+            val gid = seg.speakerId?.removePrefix("speaker_")?.toIntOrNull() ?: return@map seg
+            val primary = gidToPrimary[gid] ?: return@map seg
+            if (primary == gid) seg else seg.copy(speakerId = "speaker_$primary")
+        }
+    }
+
+    /**
      * @param overlay Save-Overlay (Orig-GIDs als "speaker_N").
      * @param profileByGid Session-GID → Global-Profil (Bank-Bestätigung).
      * @return Overlay mit umgelabelten Fragment-Segmenten.
