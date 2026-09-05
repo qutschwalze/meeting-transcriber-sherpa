@@ -3,7 +3,11 @@
 All version changes are documented here. Every build bumps `versionCode` + `versionName` (see `app/build.gradle.kts`).
 **Policy (since 0.10.6):** entries are written in English and are deliberately free of device-, person- or meeting-specific details (no recording filenames, participant counts, durations, names) — the repository is public.
 
-## 0.11.1 / 158 (2026-09-01)
+## 0.11.2 / 159 (2026-09-01)
+
+**Feature – Quick Settings Tile (immediate transcription from the notification shade)**
+
+- **New: Quick Settings tile** "Sherpa Transkription" – added to the system's Quick Settings (pul...[truncated]
 
 **Diarization – fragment-cluster merge (large meetings no longer over-generate speakers)**
 

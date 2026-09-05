@@ -11,7 +11,7 @@ On-device live transcription including **speaker diarization** and a **persisten
 <a name="english"></a>
 ## English
 
-### Features (as of 0.11.1)
+### Features (as of 0.11.2)
 
 **Recognition & diarization**
 
@@ -38,6 +38,7 @@ On-device live transcription including **speaker diarization** and a **persisten
 
 - Recording notification with Stop and screen-wake actions; discreet screen-wake toggle; post-processing indicator (final pass + save duration)
 - Screen-off robustness (0.10.6): CPU wake lock for the whole recording (no timeout, released when the service dies) + thermal guard that pauses diarization inference while the device throttles (audio stays buffered, no loss)
+- **Quick Settings tile** (0.11.2): pull-down tile "Sherpa Transkription" starts a new...[truncated]
 - Debug mode: raw WAV + diagnostic log (`TestLog`) per test recording, uploaded to a companion Flask server (`debug-server/`, port 8520, web dashboard) — no adb needed. Assignment decisions (`ASSIGN ACCEPTED/REJECTED/NO_CHANGE/SKIP_COLLAPSE`), save stages and all voice-bank events are logged. Since 0.10.9 uploaded sources are deleted on the device (no storage growth, no full-library re-uploads)
 - Host analysis scripts: `scripts/host-test/` Python pipeline simulation matching the app configuration exactly (voice-bank calibration, drift tests, A/B tests)
 
@@ -84,7 +85,7 @@ All processing happens on the device. Voice profiles are biometric data and stay
 
 Live-Transkription auf dem Gerät inkl. **Speaker Diarization** und **persistenter Speaker-Datenbank** – keine Cloud, kein Netzwerk.
 
-### Funktionen (Stand 0.11.1)
+### Funktionen (Stand 0.11.2)
 
 **Erkennung & Diarization**
 
@@ -111,6 +112,7 @@ Live-Transkription auf dem Gerät inkl. **Speaker Diarization** und **persistent
 
 - Aufnahme-Benachrichtigung mit Stop- und Display-Wach-Aktion; dezenter Screen-Wake-Toggle; Nachbearbeitungs-Anzeige (finaler Lauf + Save-Dauer)
 - Screen-off-Robustheit (0.10.6): CPU-WakeLock für die gesamte Aufnahme (ohne Timeout, Freigabe beim Service-Ende) + Thermal-Guard, der Diarization-Inferenz bei Drosselung pausiert (Audio bleibt gepuffert, kein Verlust)
+- **Quick-Settings-Kachel** (0.11.2): Runterwischen-Kachel „Sherpa Transkription" startet sofort eine neue Aufnahme (auch wenn die App geschlos...[truncated]
 - Debug-Modus: Roh-WAV + Diagnose-Log (`TestLog`) pro Testaufnahme, Upload an den Flask-Begleitserver (`debug-server/`, Port 8520, Web-Dashboard) – kein adb nötig. Zuweisungs-Entscheidungen (`ASSIGN ACCEPTED/REJECTED/NO_CHANGE/SKIP_COLLAPSE`), Save-Stufen und alle Voice-Bank-Ereignisse werden geloggt. Seit 0.10.9 werden hochgeladene Quellen auf dem Gerät gelöscht (kein Speicherwachstum, keine Komplett-Re-Uploads)
 - Host-Analyse-Skripte: `scripts/host-test/` (Python-Pipeline-Simulation exakt wie die App: Voice-Bank-Kalibrierung, Drift-Tests, A/B-Tests)
 

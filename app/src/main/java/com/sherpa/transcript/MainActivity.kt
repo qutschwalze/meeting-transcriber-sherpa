@@ -84,9 +84,12 @@ class MainActivity : ComponentActivity() {
                                 sharedUri, extractSharedAudioName(intent)
                             )
                         }
-                        // 0.12.0: Quick-Start vom Tile → sofort aufnahme starten
-                        if (pendingQuickStart && permissionGranted) {
-                            pendingQuickStart = false  // nur einmal triggern
+                    }
+
+                    // 0.11.2: Quick-Start vom Tile – wartet auf Permission-Erteilung
+                    LaunchedEffect(permissionGranted) {
+                        if (permissionGranted && pendingQuickStart) {
+                            pendingQuickStart = false  // nur einmal
                             liveViewModel.startRecording()
                         }
                     }

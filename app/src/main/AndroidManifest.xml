@@ -16,7 +16,7 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    <!-- 0.12.0: Quick Settings Tile (TileService binding) -->
+    <!-- 0.11.2: Quick Settings Tile (TileService binding) -->
     <uses-permission android:name="android.permission.QUICK_SETTINGS_TILE" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />
@@ -72,7 +72,7 @@
                 android:resource="@xml/file_paths" />
         </provider>
 
-        <!-- 0.12.0: Quick Settings Tile – sofortige Transkription -->
+        <!-- 0.11.2: Quick Settings Tile – sofortige Transkription -->
         <service
             android:name=".service.QuickStartTileService"
             android:exported="true"
