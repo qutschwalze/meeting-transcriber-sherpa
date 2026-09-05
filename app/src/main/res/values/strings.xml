@@ -2,6 +2,7 @@
 <!-- Default strings (English) - Android loads these when device language ≠ de -->
 <resources>
     <string name="app_name">Sherpa Transcript</string>
+    <string name="tile_label">Transkription starten</string>
 
     <!-- Live Screen -->
     <string name="live_title">Live Transcription</string>

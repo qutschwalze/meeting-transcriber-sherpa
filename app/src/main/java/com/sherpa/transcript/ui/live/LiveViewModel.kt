@@ -8,6 +8,7 @@ import android.os.Process
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.sherpa.transcript.BuildConfig
 import com.sherpa.transcript.SherpaTranscriptApp
 import com.sherpa.transcript.data.debug.DebugUploadClient
 import com.sherpa.transcript.data.local.AsrLanguageMode
@@ -2284,8 +2285,10 @@ class LiveViewModel : ViewModel() {
      * Verzeichnis (WAV, .log, .md) an den konfigurierten Upload-Server.
      * Läuft fire-and-forget im Hintergrund; Fehler werden geloggt aber nicht
      * dem User angezeigt (Upload ist optional).
+     * 0.12.0: Nur in Debug-Builds (BuildConfig.DEBUG_UPLOAD_ENABLED).
      */
     private fun triggerDebugUpload() {
+        if (!BuildConfig.DEBUG_UPLOAD_ENABLED) return
         viewModelScope.launch {
             try {
                 // Kurze Pause: TestLog.close() + .md-Schreiben sind async –

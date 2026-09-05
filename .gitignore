@@ -36,3 +36,4 @@ __pycache__/
 
 # Hermes-Agent-Artefakte (interne Pläne) nicht committen
 .hermes/
+debug-server/config.json

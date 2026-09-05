@@ -28,8 +28,8 @@ android {
         applicationId = "com.sherpa.transcript"
         minSdk = 26
         targetSdk = 35
-        versionCode = 158
-        versionName = "0.11.1"
+        versionCode = 159
+        versionName = "0.12.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -46,12 +46,18 @@ android {
     }
 
     buildTypes {
+        debug {
+            // 0.12.0: Debug-Upload nur in Debug-Builds (Threat Model T5/T18)
+            buildConfigField("boolean", "DEBUG_UPLOAD_ENABLED", "true")
+        }
         release {
             isMinifyEnabled = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            // 0.12.0: Debug-Upload komplett deaktiviert im Release
+            buildConfigField("boolean", "DEBUG_UPLOAD_ENABLED", "false")
             if (hasReleaseSigning) {
                 signingConfig = signingConfigs.getByName("release")
             }

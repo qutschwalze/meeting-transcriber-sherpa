@@ -68,6 +68,7 @@ fun SettingsScreen(settingsStore: SettingsStore = SettingsStore.current, onNavig
     val fontSize by settingsStore.fontSize.collectAsState()
     val debugMode by settingsStore.debugMode.collectAsState()
     val debugServerUrl by settingsStore.debugServerUrl.collectAsState()
+    val debugApiKey by settingsStore.debugApiKey.collectAsState()
     val asrLanguageMode by settingsStore.asrLanguageMode.collectAsState()
 
     // 0.6.16: Upload-Status
@@ -76,6 +77,7 @@ fun SettingsScreen(settingsStore: SettingsStore = SettingsStore.current, onNavig
     var isUploading by remember { mutableStateOf(false) }
     var uploadResult by remember { mutableStateOf<String?>(null) }
     var serverUrlInput by remember { mutableStateOf(debugServerUrl) }
+    var apiKeyInput by remember { mutableStateOf(debugApiKey) }
     var maxFiles by remember { mutableIntStateOf(2) } // 0 = alle, 1-10 = letzte N Sessions
 
     Scaffold(
@@ -253,120 +255,153 @@ fun SettingsScreen(settingsStore: SettingsStore = SettingsStore.current, onNavig
                     }
                 }
 
+                // 0.12.0: API-Key Eingabe (Threat Model T5/T18)
                 item {
-                    Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = "Testaufnahmen zum Server senden",
+                        text = "API-Key",
                         style = MaterialTheme.typography.titleSmall,
                     )
                     Spacer(modifier = Modifier.height(4.dp))
-
-                    // 0.6.16: Datei-Limit-Auswahl
-                    Row(
+                    OutlinedTextField(
+                        value = apiKeyInput,
+                        onValueChange = { apiKeyInput = it },
                         modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            text = "Letzte:",
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.width(50.dp),
-                        )
-                        FilterChip(
-                            selected = maxFiles == 1,
-                            onClick = { maxFiles = 1 },
-                            label = { Text("1") },
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        FilterChip(
-                            selected = maxFiles == 2,
-                            onClick = { maxFiles = 2 },
-                            label = { Text("2") },
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        FilterChip(
-                            selected = maxFiles == 5,
-                            onClick = { maxFiles = 5 },
-                            label = { Text("5") },
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        FilterChip(
-                            selected = maxFiles == 0,
-                            onClick = { maxFiles = 0 },
-                            label = { Text("Alle") },
-                        )
-                    }
-
-                    if (isUploading) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.width(20.dp).height(20.dp),
-                                strokeWidth = 2.dp,
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
+                        singleLine = true,
+                        textStyle = MaterialTheme.typography.bodySmall,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                        placeholder = {
                             Text(
-                                "Upload läuft…",
+                                "X-API-Key aus config.json",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        },
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Button(
+                        onClick = { settingsStore.setDebugApiKey(apiKeyInput) },
+                        enabled = apiKeyInput != debugApiKey,
+                    ) {
+                        Text("Key speichern")
+                    }
+                }
+
+                // 0.12.0: Debug-Upload-Sektion nur in Debug-Builds (Threat Model T5/T18)
+                if (BuildConfig.DEBUG_UPLOAD_ENABLED) {
+                    item {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "Testaufnahmen zum Server senden",
+                            style = MaterialTheme.typography.titleSmall,
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+
+                        // 0.6.16: Datei-Limit-Auswahl
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = "Letzte:",
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.width(50.dp),
+                            )
+                            FilterChip(
+                                selected = maxFiles == 1,
+                                onClick = { maxFiles = 1 },
+                                label = { Text("1") },
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            FilterChip(
+                                selected = maxFiles == 2,
+                                onClick = { maxFiles = 2 },
+                                label = { Text("2") },
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            FilterChip(
+                                selected = maxFiles == 5,
+                                onClick = { maxFiles = 5 },
+                                label = { Text("5") },
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            FilterChip(
+                                selected = maxFiles == 0,
+                                onClick = { maxFiles = 0 },
+                                label = { Text("Alle") },
                             )
                         }
-                    } else {
-                        Button(
-                            onClick = {
-                                isUploading = true
-                                uploadResult = null
-                                scope.launch {
-                                    val result = withContext(Dispatchers.IO) {
-                                        try {
-                                            val base = context.getExternalFilesDir(
-                                                Environment.DIRECTORY_DOWNLOADS
-                                            )
-                                            android.util.Log.i("DebugUpload", "SettingsScreen: base=${base?.absolutePath} exists=${base?.exists()}")
-                                            val dir = File(base, "testaufnahmen")
-                                            android.util.Log.i("DebugUpload", "SettingsScreen: dir=${dir.absolutePath} exists=${dir.exists()} canRead=${dir.canRead()}")
-                                            // 0.6.16: In-memory filter statt listFiles(filter) (Android-Bug)
-                                            val allEntries = dir.listFiles()
-                                            val hasMatchingFiles = allEntries?.any { f ->
-                                                f.isFile && f.extension.lowercase() in setOf("wav", "log", "md", "json")
-                                            } == true
-                                            android.util.Log.i("DebugUpload", "SettingsScreen: entries=${allEntries?.size ?: "null"} hasMatching=$hasMatchingFiles")
-                                            if (!dir.exists() || !hasMatchingFiles) {
-                                                return@withContext "Keine Testaufnahmen gefunden (Pfad: ${dir.absolutePath}, Einträge: ${allEntries?.size ?: "null"})"
-                                            }
-                                            val sessionId = "manual_${System.currentTimeMillis()}"
-                                            val uploadResult = DebugUploadClient.uploadDebugBundle(
-                                                dir, sessionId,
-                                                // 0.6.21: maxFiles = Session-Anzahl direkt (kein *2 –
-                                                // die Gruppierung zählt Sessions, nicht Einzeldateien)
-                                                maxFiles = maxFiles,
-                                                skipChunks = true,
-                                            )
-                                            uploadResult.getOrElse { "Fehler: ${it.message}" }
-                                        } catch (e: Exception) {
-                                            "Fehler: ${e.message}"
-                                        }
-                                    }
-                                    uploadResult = result
-                                    isUploading = false
-                                }
-                            },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.primary,
-                            ),
-                        ) {
-                            Text("Alle Testaufnahmen hochladen")
-                        }
-                    }
 
-                    uploadResult?.let { result ->
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = result,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = if (result.contains("Fehler"))
-                                MaterialTheme.colorScheme.error
-                            else
-                                MaterialTheme.colorScheme.primary,
-                        )
+                        if (isUploading) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.width(20.dp).height(20.dp),
+                                    strokeWidth = 2.dp,
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    "Upload läuft…",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        } else {
+                            Button(
+                                onClick = {
+                                    isUploading = true
+                                    uploadResult = null
+                                    scope.launch {
+                                        val result = withContext(Dispatchers.IO) {
+                                            try {
+                                                val base = context.getExternalFilesDir(
+                                                    Environment.DIRECTORY_DOWNLOADS
+                                                )
+                                                android.util.Log.i("DebugUpload", "SettingsScreen: base=${base?.absolutePath} exists=${base?.exists()}")
+                                                val dir = File(base, "testaufnahmen")
+                                                android.util.Log.i("DebugUpload", "SettingsScreen: dir=${dir.absolutePath} exists=${dir.exists()} canRead=${dir.canRead()}")
+                                                // 0.6.16: In-memory filter statt listFiles(filter) (Android-Bug)
+                                                val allEntries = dir.listFiles()
+                                                val hasMatchingFiles = allEntries?.any { f ->
+                                                    f.isFile && f.extension.lowercase() in setOf("wav", "log", "md", "json")
+                                                } == true
+                                                android.util.Log.i("DebugUpload", "SettingsScreen: entries=${allEntries?.size ?: "null"} hasMatching=$hasMatchingFiles")
+                                                if (!dir.exists() || !hasMatchingFiles) {
+                                                    return@withContext "Keine Testaufnahmen gefunden (Pfad: ${dir.absolutePath}, Einträge: ${allEntries?.size ?: "null"})"
+                                                }
+                                                val sessionId = "manual_${System.currentTimeMillis()}"
+                                                val uploadResult = DebugUploadClient.uploadDebugBundle(
+                                                    dir, sessionId,
+                                                    // 0.6.21: maxFiles = Session-Anzahl direkt (kein *2 –
+                                                    // die Gruppierung zählt Sessions, nicht Einzeldateien)
+                                                    maxFiles = maxFiles,
+                                                    skipChunks = true,
+                                                )
+                                                uploadResult.getOrElse { "Fehler: ${it.message}" }
+                                            } catch (e: Exception) {
+                                                "Fehler: ${e.message}"
+                                            }
+                                        }
+                                        uploadResult = result
+                                        isUploading = false
+                                    }
+                                },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.primary,
+                                ),
+                            ) {
+                                Text("Alle Testaufnahmen hochladen")
+                            }
+                        }
+
+                        uploadResult?.let { result ->
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = result,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (result.contains("Fehler"))
+                                    MaterialTheme.colorScheme.error
+                                else
+                                    MaterialTheme.colorScheme.primary,
+                            )
+                        }
                     }
                 }
             }

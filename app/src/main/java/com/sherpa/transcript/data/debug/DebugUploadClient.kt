@@ -54,6 +54,7 @@ object DebugUploadClient {
      * @param fileType MIME / semantic type (e.g. "audio/wav", "text/plain", "application/json")
      * @param sessionId optional session identifier
      * @return Result with the server response body on success
+     * 0.12.0: Sends X-API-Key header for server authentication (Threat Model T5/T18).
      */
     suspend fun uploadFile(
         file: File,
@@ -63,7 +64,9 @@ object DebugUploadClient {
         try {
             require(file.exists()) { "File does not exist: ${file.absolutePath}" }
 
-            val serverUrl = getServerUrl(SherpaTranscriptApp.instance)
+            val ctx = SherpaTranscriptApp.instance
+            val serverUrl = getServerUrl(ctx)
+            val apiKey = runBlocking { SettingsStore.current.debugApiKey.first() }
             val url = URL("$serverUrl/upload")
 
             Log.i(TAG, "Uploading ${file.name} (${file.length()} bytes) → $url")
@@ -77,6 +80,10 @@ object DebugUploadClient {
                 connectTimeout = CONNECT_TIMEOUT_MS
                 readTimeout = READ_TIMEOUT_MS
                 setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
+                // 0.12.0: API-Key für Server-Auth
+                if (apiKey.isNotBlank()) {
+                    setRequestProperty("X-API-Key", apiKey)
+                }
             }
 
             conn.outputStream.use { os ->

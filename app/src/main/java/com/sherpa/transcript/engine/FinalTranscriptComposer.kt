@@ -344,8 +344,10 @@ object FinalTranscriptComposer {
         val sorted = segments.sortedBy { it.startTimeMs }
 
         // 0.6.19: Ein-Sprecher-Modus → großzügigeres Merging
+        // 0.12.2: Pause-Grenze auf 2s reduziert (vorher 5s → 7 Blöcke aus 413 Segmenten).
+        // 2s trennt natürliche Satzpausen, verhindert aber Über-Konsolidierung.
         val distinctSpeakers = sorted.mapNotNull { it.speakerId?.takeIf { s -> s.isNotBlank() } }.distinct().size
-        val pauseLimitMs = if (distinctSpeakers <= 1) 5000L else MAX_PAUSE_FOR_COMPACT_MS
+        val pauseLimitMs = if (distinctSpeakers <= 1) 2000L else MAX_PAUSE_FOR_COMPACT_MS
 
         val merged = mutableListOf<TranscriptSegment>()
 

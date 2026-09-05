@@ -1,11 +1,10 @@
 package com.sherpa.transcript
 
-import android.Manifest
-import android.content.pm.PackageManager
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
-import com.sherpa.transcript.R
 import androidx.activity.compose.rememberLauncherForActivityResult
+import com.sherpa.transcript.R
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -22,17 +21,30 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.sherpa.transcript.data.local.SettingsStore
 import com.sherpa.transcript.data.local.ThemeMode
+import com.sherpa.transcript.service.QuickStartTileService
 import com.sherpa.transcript.ui.navigation.AppNavigation
 import com.sherpa.transcript.ui.theme.SherpaTranscriptTheme
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        handleIntent(intent)
+    }
 
+    /** 0.12.0: Tile-Tipps wenn App schon läuft (onNewIntent statt onCreate). */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleIntent(intent)
+    }
+
+    private var pendingQuickStart = false
+
+    private fun handleIntent(intent: Intent?) {
         // Phase 9 (0.9.0): Geteilte Audiodatei? → an das LiveViewModel weiterreichen.
-        // Der Import läuft im Live-Screen (derselbe ViewModel über viewModel()-Scope);
-        // wir cachen den Intent bis zur ersten Komposition von AppNavigation.
         val sharedUri = extractSharedAudioUri(intent)
+
+        // 0.12.0: Quick Settings Tile → sofortige Transkription
+        pendingQuickStart = intent?.action == QuickStartTileService.ACTION_QUICK_START
 
         setContent {
             // Phase 5 (0.6.8): Dark Mode aus den Einstellungen (System/hell/dunkel)
@@ -50,8 +62,8 @@ class MainActivity : ComponentActivity() {
                     var permissionGranted by mutableStateOf(
                         ContextCompat.checkSelfPermission(
                             this@MainActivity,
-                            Manifest.permission.RECORD_AUDIO
-                        ) == PackageManager.PERMISSION_GRANTED
+                            android.Manifest.permission.RECORD_AUDIO
+                        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
                     )
 
                     val permissionLauncher = rememberLauncherForActivityResult(
@@ -60,20 +72,22 @@ class MainActivity : ComponentActivity() {
                         permissionGranted = granted
                     }
 
-                    // Phase 9: LiveViewModel HIER holen (Composable-Kontext), nicht im LaunchedEffect
                     val liveViewModel: com.sherpa.transcript.ui.live.LiveViewModel = viewModel()
 
                     LaunchedEffect(Unit) {
                         if (!permissionGranted) {
-                            permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                            permissionLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
                         }
-                        // Phase 9c: Share-Intent über PendingImport-Bridge an den
-                        // Live-Screen weiterreichen (dort läuft der Import auf der
-                        // sichtbaren nav-scoped Instanz – Fix für leeren Live-Screen).
+                        // Phase 9c: Share-Intent über PendingImport-Bridge
                         if (sharedUri != null) {
                             com.sherpa.transcript.ui.live.PendingImport.put(
                                 sharedUri, extractSharedAudioName(intent)
                             )
+                        }
+                        // 0.12.0: Quick-Start vom Tile → sofort aufnahme starten
+                        if (pendingQuickStart && permissionGranted) {
+                            pendingQuickStart = false  // nur einmal triggern
+                            liveViewModel.startRecording()
                         }
                     }
 

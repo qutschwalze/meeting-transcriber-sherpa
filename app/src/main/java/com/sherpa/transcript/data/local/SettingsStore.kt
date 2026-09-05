@@ -74,12 +74,24 @@ class SettingsStore private constructor(context: Context) {
         _asrLanguageMode.value = mode
     }
 
+    /** 0.12.0: API-Key für Debug-Upload-Server (Threat Model T5/T18). */
+    private val _debugApiKey = MutableStateFlow(
+        prefs.getString(KEY_DEBUG_API_KEY, "") ?: ""
+    )
+    val debugApiKey: StateFlow<String> = _debugApiKey.asStateFlow()
+
+    fun setDebugApiKey(key: String) {
+        prefs.edit().putString(KEY_DEBUG_API_KEY, key).apply()
+        _debugApiKey.value = key
+    }
+
     companion object {
         private const val KEY_THEME = "themeMode"
         private const val KEY_FONT_SIZE = "fontSize"
         private const val KEY_DEBUG = "debugMode"
         private const val KEY_DEBUG_SERVER_URL = "debugServerUrl"
         private const val KEY_ASR_LANGUAGE = "asrLanguageMode"
+        private const val KEY_DEBUG_API_KEY = "debugApiKey"
         private const val DEFAULT_DEBUG_SERVER_URL = "http://10.0.2.2:8520"
 
         @Volatile
