@@ -86,11 +86,15 @@ class MainActivity : ComponentActivity() {
                         }
                     }
 
-                    // 0.11.2: Quick-Start vom Tile – wartet auf Permission-Erteilung
+                    // 0.11.3: Quick-Start vom Tile – wartet auf Permission-Erteilung
                     LaunchedEffect(permissionGranted) {
                         if (permissionGranted && pendingQuickStart) {
                             pendingQuickStart = false  // nur einmal
-                            liveViewModel.startRecording()
+                            try {
+                                liveViewModel.startRecording()
+                            } catch (t: Throwable) {
+                                android.util.Log.e("MainActivity", "QuickStart fehlgeschlagen: ${t.message}", t)
+                            }
                         }
                     }
 

@@ -6,13 +6,16 @@
     native <methods>;
 }
 
-# ── 0.12.0: Logging-Reduktion im Release (Threat Model T14) ──────────
-# Alle Log.aufrufe werden im Release-Build entfernt (kein Leakage von
-# internen Details via logcat). Debug-Builds bleiben unverändert.
+# ── 0.11.3: Logging im Release – nur verbose/debug/info entfernen ──────
+# Log.e und Log.w bleiben erhalten für Crash-Diagnose und田野テスト
 -assumenosideeffects class android.util.Log {
     public static int v(...);
     public static int d(...);
     public static int i(...);
-    public static int w(...);
-    public static int e(...);
 }
+
+# ── Quick Settings Tile (R8 behält Manifest-Komponenten, aber zur Sicherheit) ──
+-keep class com.sherpa.transcript.service.QuickStartTileService { *; }
+-keep class com.sherpa.transcript.service.RecordingService { *; }
+-keep class com.sherpa.transcript.MainActivity { *; }
+-keep class com.sherpa.transcript.ui.live.LiveViewModel { *; }

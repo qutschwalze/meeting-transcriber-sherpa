@@ -3,7 +3,14 @@
 All version changes are documented here. Every build bumps `versionCode` + `versionName` (see `app/build.gradle.kts`).
 **Policy (since 0.10.6):** entries are written in English and are deliberately free of device-, person- or meeting-specific details (no recording filenames, participant counts, durations, names) — the repository is public.
 
-## 0.11.2 / 159 (2026-09-01)
+## 0.11.3 / 160 (2026-09-05)
+
+**Hotfix – Quick Settings Tile crash on release build**
+
+- **ProGuard fix:** the previous release build stripped ALL `android.util.Log` calls (including `Log.e`/`Log.w`) via an overly aggressive `assumenosideeffects` rule — crash stack traces had no app-level context. Fixed: only `Log.v`/`Log.d`/`Log.i` are removed; `Log.e` and `Log.w` are preserved for crash diagnostics.
+- **ProGuard keep rules added:** explicit `-keep` for `QuickStartTileService`, `RecordingService`, `MainActivity`, and `LiveViewModel` to prevent R8 from renaming/removing manifest-referenced classes that are also called via reflection or coroutines.
+- **Invalid permission removed:** `android.permission.QUICK_SETTINGS_TILE` is not a real Android permission — removed from manifest.
+- **Try-catch around tile start:** `liveViewModel.startRecording()` is now wrapped in a try-catch in the `LaunchedEffect` to prevent app crash if the recording fails to initialize (e.g., permission race, engine not ready). Error is logged via `Log.e`.
 
 **Feature – Quick Settings Tile (immediate transcription from the notification shade)**
 
