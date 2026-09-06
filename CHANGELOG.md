@@ -3,7 +3,14 @@
 All version changes are documented here. Every build bumps `versionCode` + `versionName` (see `app/build.gradle.kts`).
 **Policy (since 0.10.6):** entries are written in English and are deliberately free of device-, person- or meeting-specific details (no recording filenames, participant counts, durations, names) — the repository is public.
 
-## 0.11.4 / 161 (2026-09-05)
+## 0.11.5 / 162 (2026-09-05)
+
+**Hotfix – Quick Settings Tile auto-start not triggering**
+
+- **Root cause:** `pendingQuickStart` was a plain `var` on the Activity — Compose did not observe it. When `onNewIntent` set it to `true`, the `LaunchedEffect(permissionGranted)` didn't re-trigger because its key hadn't changed.
+- **Fix:** `quickStartPending` is now a `mutableStateOf` on the Activity, observed by Compose. The `LaunchedEffect` uses both `permissionGranted` AND `quickStartPending` as keys — any change triggers re-evaluation.
+- **Architecture fix:** `setContent` is now called only in `onCreate` (not in `handleIntent`). `handleIntent` only sets state flags — no side effects in the intent handler.
+- **Slow start:** the existing model-loading flow (download → init → record) is the bottleneck. The tile now correctly triggers this flow; the perceived delay is model initialization, not a tile bug.
 
 **Hotfix – Quick Settings Tile crash on Xiaomi/MIUI**
 
