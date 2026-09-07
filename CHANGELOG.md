@@ -3,6 +3,13 @@
 All version changes are documented here. Every build bumps `versionCode` + `versionName` (see `app/build.gradle.kts`).
 **Policy (since 0.10.6):** entries are written in English and are deliberately free of device-, person- or meeting-specific details (no recording filenames, participant counts, durations, names) — the repository is public.
 
+## 0.12.2 / 165 (2026-09-07)
+
+**Trim-action-bar overflow fix**
+
+- **Fix:** action bar is now a column (marker text on top, three equal-width buttons below) — previously the single row overflowed on narrow screens and the "Loschen" button was squished vertically and cut off
+- CHANGELOG + GitHub-Release mit APKs.
+
 ## 0.12.1 / 164 (2026-09-07)
 
 **Trim-action-bar layout fix + collapsible speaker stats polish**
