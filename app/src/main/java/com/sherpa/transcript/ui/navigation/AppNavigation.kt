@@ -85,7 +85,7 @@ private val bottomNavItems = listOf(
 )
 
 /** Routes with arguments */
-private const val ROUTE_DETAIL = "detail/{transcriptId}"
+private const val ROUTE_DETAIL = "detail/{transcriptId}?startTrim={startTrim}"
 private const val ROUTE_CONTACTS = "contacts"
 
 @Composable
@@ -216,12 +216,15 @@ fun AppNavigation() {
             composable(
                 route = ROUTE_DETAIL,
                 arguments = listOf(
-                    navArgument("transcriptId") { type = NavType.StringType }
+                    navArgument("transcriptId") { type = NavType.StringType },
+                    navArgument("startTrim") { type = NavType.BoolType; defaultValue = false }
                 ),
             ) { backStackEntry ->
                 val transcriptId = backStackEntry.arguments?.getString("transcriptId") ?: ""
+                val startTrim = backStackEntry.arguments?.getBoolean("startTrim") ?: false
                 TranscriptDetailScreen(
                     transcriptId = transcriptId,
+                    startTrim = startTrim,
                     onBack = { navController.popBackStack() },
                 )
             }

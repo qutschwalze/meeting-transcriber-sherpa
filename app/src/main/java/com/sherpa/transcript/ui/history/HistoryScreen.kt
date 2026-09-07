@@ -13,6 +13,13 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ContentCut
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.History
@@ -56,6 +63,7 @@ import java.util.Locale
 @Composable
 fun HistoryScreen(
     onTranscriptClick: (String) -> Unit,
+    onTrimSplit: (String) -> Unit = onTranscriptClick,
     viewModel: HistoryViewModel = viewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsState()
@@ -146,6 +154,7 @@ fun HistoryScreen(
                             onClick = { onTranscriptClick(transcript.transcriptId) },
                             onDelete = { viewModel.deleteTranscript(transcript.transcriptId) },
                             onRename = { newTitle -> viewModel.renameTranscript(transcript.transcriptId, newTitle) },
+                            onTrimSplit = { onTrimSplit(transcript.transcriptId) },
                         )
                     }
                 }
@@ -160,6 +169,7 @@ private fun TranscriptCard(
     onClick: () -> Unit,
     onDelete: () -> Unit,
     onRename: (String) -> Unit,
+    onTrimSplit: () -> Unit,
 ) {
     var showDeleteDialog by remember { mutableStateOf(false) }
     var showRenameDialog by remember { mutableStateOf(false) }

@@ -69,6 +69,7 @@ import java.io.File
 @Composable
 fun TranscriptDetailScreen(
     transcriptId: String,
+    startTrim: Boolean = false,
     onBack: () -> Unit,
     viewModel: TranscriptDetailViewModel = viewModel(),
 ) {
@@ -82,6 +83,9 @@ fun TranscriptDetailScreen(
 
     LaunchedEffect(transcriptId) {
         viewModel.loadTranscript(transcriptId)
+    }
+    LaunchedEffect(startTrim) {
+        if (startTrim) viewModel.enterTrimMode()
     }
 
     Scaffold(
