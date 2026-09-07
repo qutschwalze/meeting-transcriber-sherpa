@@ -3,10 +3,14 @@ package com.sherpa.transcript.ui.detail
 import android.content.Context
 import android.content.Intent
 import android.util.Log
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -19,15 +23,20 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Scaffold
@@ -42,6 +51,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontStyle
@@ -67,6 +77,8 @@ fun TranscriptDetailScreen(
     // Phase 9a (0.9.1): Sprecher-Umbenennen – Label antippen → Dialog
     var renameLabel by remember { mutableStateOf<String?>(null) }
     var renameInput by remember { mutableStateOf("") }
+    // 0.12.0: Trim-Modus
+    var trimConfirmAction by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(transcriptId) {
         viewModel.loadTranscript(transcriptId)
@@ -131,6 +143,17 @@ fun TranscriptDetailScreen(
                                 },
                             )
                         }
+
+                        // 0.12.0: Trim/Split
+                        HorizontalDivider()
+                        DropdownMenuItem(
+                            text = { Text("Trimmen / Aufteilen") },
+                            onClick = {
+                                exportMenuOpen = false
+                                viewModel.enterTrimMode()
+                            },
+                        )
+
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -244,16 +267,62 @@ fun TranscriptDetailScreen(
                             SegmentItem(
                                 segment = segment,
                                 onSpeakerLabelClick = { label ->
-                                    renameLabel = label
-                                    // Vorbelegen mit dem aktuellen Namen (falls vorhanden)
-                                    renameInput = displaySegments
-                                        .lastOrNull { it.speakerLabel == label }?.speakerName ?: ""
+                                    if (!uiState.trimMode) {
+                                        renameLabel = label
+                                        renameInput = displaySegments
+                                            .lastOrNull { it.speakerLabel == label }?.speakerName ?: ""
+                                    }
+                                },
+                                isSelected = uiState.trimMode && uiState.trimMarkerMs != null
+                                    && segment.startTimeMs >= uiState.trimMarkerMs!!,
+                                onLongClick = if (uiState.trimMode) null else {
+                                    { viewModel.selectTrimMarker(segment.startTimeMs) }
                                 },
                             )
                         }
                     }
                 }
             }
+        }
+
+        // ── 0.12.0: Trim-Action-Bar ──
+        if (uiState.trimMode) {
+            TrimActionBar(
+                markerMs = uiState.trimMarkerMs,
+                onTrim = { trimConfirmAction = "trim" },
+                onSplit = { trimConfirmAction = "split" },
+                onCancel = { viewModel.exitTrimMode() },
+            )
+        }
+
+    }
+
+    // ── 0.12.0: Trim-Bestätigungsdialog ──
+    trimConfirmAction?.let { action ->
+        val markerMs = uiState.trimMarkerMs
+        if (markerMs != null) {
+            AlertDialog(
+                onDismissRequest = { trimConfirmAction = null },
+                title = { Text(if (action == "trim") "Abschneiden" else "Aufteilen") },
+                text = {
+                    Text(
+                        if (action == "trim")
+                            "Alles nach ${formatDuration(markerMs)} wird unwiderruflich gelöscht. Fortfahren?"
+                        else
+                            "Das Transkript wird bei ${formatDuration(markerMs)} geteilt. Beide Teile bleiben im Verlauf. Fortfahren?"
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        trimConfirmAction = null
+                        if (action == "trim") viewModel.executeTrim()
+                        else viewModel.executeSplit()
+                    }) { Text("Ja") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { trimConfirmAction = null }) { Text("Abbrechen") }
+                },
+            )
         }
     }
 
@@ -294,11 +363,21 @@ fun TranscriptDetailScreen(
 private fun SegmentItem(
     segment: SegmentEntity,
     onSpeakerLabelClick: ((String) -> Unit)? = null,
+    isSelected: Boolean = false,
+    onLongClick: (() -> Unit)? = null,
 ) {
+    val bgColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
+                  else Color.Transparent
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 6.dp),
+            .background(bgColor, shape = RoundedCornerShape(4.dp))
+            .then(
+                if (onLongClick != null) {
+                    Modifier.combinedClickable(onClick = {}, onLongClick = onLongClick)
+                } else Modifier
+            )
+            .padding(vertical = 6.dp, horizontal = 4.dp),
     ) {
         // Sprecherlabel + Timestamp (Phase 9a: Label antippen = umbenennen)
         Column(
@@ -439,5 +518,44 @@ private fun shareToMirMirStack(context: Context, content: String) {
         Log.d("TranscriptDetail", "MirMirStack-Send gestartet (${content.length} Zeichen)")
     } catch (t: Throwable) {
         Log.e("TranscriptDetail", "MirMirStack-Send fehlgeschlagen: ${t.message}")
+    }
+}
+
+// ─── 0.12.0: Trim/Split Action Bar ──────────────────────────────────
+
+@Composable
+private fun TrimActionBar(
+    markerMs: Long?,
+    onTrim: () -> Unit,
+    onSplit: () -> Unit,
+    onCancel: () -> Unit,
+) {
+    Surface(
+        tonalElevation = 3.dp,
+        shadowElevation = 8.dp,
+        shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = if (markerMs != null) "Ab ${formatDuration(markerMs)}" else "Marker wahlen",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = onCancel) { Text("Abbrechen") }
+                FilledTonalButton(onClick = onSplit, enabled = markerMs != null) { Text("Aufteilen") }
+                Button(
+                    onClick = onTrim,
+                    enabled = markerMs != null,
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                ) { Text("Loschen") }
+            }
+        }
     }
 }

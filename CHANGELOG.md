@@ -3,7 +3,19 @@
 All version changes are documented here. Every build bumps `versionCode` + `versionName` (see `app/build.gradle.kts`).
 **Policy (since 0.10.6):** entries are written in English and are deliberately free of device-, person- or meeting-specific details (no recording filenames, participant counts, durations, names) — the repository is public.
 
-## 0.11.5 / 162 (2026-09-05)
+## 0.12.0 / 163 (2026-09-05)
+
+**Phase 12 – Transcript trim/split (cut or split a transcript at any marker point)**
+
+- **Trim mode:** long-press any segment in the transcript detail view to enter trim mode. The selected segment and all segments after it are highlighted.
+- **Bottom action bar** with three options:
+  - "Aufteilen" – moves all segments after the marker into a new transcript (both remain in history)
+  - "Löschen" – permanently deletes all segments after the marker (confirmation dialog)
+  - "Abbrechen" – exits trim mode
+- **DAO layer:** `deleteSegmentsAfter`, `getSegmentsAfter`, `updateTranscriptMeta`, `countDistinctSpeakers`
+- **Repository:** `trimAfter` (atomic delete + meta update), `splitAt` (creates new transcript with tail segments + updated metadata)
+- **UI entry:** "Trimmen / Aufteilen" in the export dropdown menu
+- Tests: DAO round-trip for trim + split operations
 
 **Hotfix – Quick Settings Tile auto-start not triggering**
 

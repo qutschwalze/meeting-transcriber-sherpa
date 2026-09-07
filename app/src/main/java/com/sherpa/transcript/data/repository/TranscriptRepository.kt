@@ -97,4 +97,59 @@ class TranscriptRepository {
         dao.deleteSegments(id)
         dao.deleteTranscript(id)
     }
+
+    // ─── 0.12.0: Trim/Split ──────────────────────────────────────────
+
+    /**
+     * Trim: Alle Segmente nach [markerMs] löschen, Transkript-Dauer anpassen.
+     * Gibt die Anzahl gelöschter Segmente zurück.
+     */
+    suspend fun trimAfter(transcriptId: String, markerMs: Long): Int = withContext(Dispatchers.IO) {
+        val deleted = dao.deleteSegmentsAfter(transcriptId, markerMs)
+        if (deleted > 0) {
+            dao.updateTranscriptMeta(transcriptId, markerMs)
+        }
+        deleted
+    }
+
+    /**
+     * Split: Segmente nach [markerMs] in ein neues Transkript verschieben.
+     * Gibt die neue transcriptId zurück (oder null bei Fehler).
+     */
+    suspend fun splitAt(transcriptId: String, markerMs: Long): String? = withContext(Dispatchers.IO) {
+        val old = dao.getTranscript(transcriptId) ?: return@withContext null
+        val tail = dao.getSegmentsAfter(transcriptId, markerMs)
+        if (tail.isEmpty()) return@withContext null
+
+        // Neues Transkript mit Tail-Metadaten
+        val newId = "split_${System.currentTimeMillis()}_${transcriptId.take(8)}"
+        val tailDuration = (tail.last().endTimeMs - tail.first().startTimeMs).coerceAtLeast(0)
+        val tailSpeakers = tail.mapNotNull { it.speakerId }.distinct().size
+        val newTranscript = TranscriptEntity(
+            transcriptId = newId,
+            title = "${old.title} (ab ${formatMarker(markerMs)})",
+            language = old.language,
+            durationMs = tailDuration,
+            speakerCount = tailSpeakers,
+            status = "finalized",
+        )
+        dao.insertTranscript(newTranscript)
+
+        // Segmente zum neuen Transkript verschieben
+        val moved = tail.map { it.copy(transcriptId = newId) }
+        dao.insertSegments(moved)
+        dao.deleteSegmentsAfter(transcriptId, markerMs)
+        dao.updateTranscriptMeta(transcriptId, markerMs)
+
+        newId
+    }
+
+    private fun formatMarker(ms: Long): String {
+        val totalSec = ms / 1000
+        val h = totalSec / 3600
+        val m = (totalSec % 3600) / 60
+        val s = totalSec % 60
+        return if (h > 0) "${h}:${String.format("%02d", m)}:${String.format("%02d", s)}"
+        else "${m}:${String.format("%02d", s)}"
+    }
 }

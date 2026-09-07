@@ -92,4 +92,22 @@ interface TranscriptDao {
 
     @Query("SELECT COUNT(*) FROM transcripts")
     suspend fun countTranscripts(): Int
+
+    // ─── 0.12.0: Trim/Split ──────────────────────────────────────────
+
+    /** Segmente nach einem Zeitpunkt löschen (Trim). Gibt die Anzahl gelöschter Segmente zurück. */
+    @Query("DELETE FROM segments WHERE transcriptId = :tid AND startTimeMs > :afterMs")
+    suspend fun deleteSegmentsAfter(tid: String, afterMs: Long): Int
+
+    /** Segmente nach einem Zeitpunkt abrufen (Split: Kopie ins neue Transkript). */
+    @Query("SELECT * FROM segments WHERE transcriptId = :tid AND startTimeMs > :afterMs ORDER BY startTimeMs ASC")
+    suspend fun getSegmentsAfter(tid: String, afterMs: Long): List<SegmentEntity>
+
+    /** Transkript-Metadaten aktualisieren (Dauer + Zeitstempel). */
+    @Query("UPDATE transcripts SET durationMs = :durationMs, updatedAt = :now WHERE transcriptId = :tid")
+    suspend fun updateTranscriptMeta(tid: String, durationMs: Long, now: Long = System.currentTimeMillis())
+
+    /** Anzahl der Sprecher in einem Transkript zählen (DISTINCT speakerId). */
+    @Query("SELECT COUNT(DISTINCT speakerId) FROM segments WHERE transcriptId = :tid")
+    suspend fun countDistinctSpeakers(tid: String): Int
 }

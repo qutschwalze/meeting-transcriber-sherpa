@@ -16,7 +16,17 @@ data class DetailUiState(
     val segments: List<SegmentEntity> = emptyList(),
     val isLoading: Boolean = true,
     val searchQuery: String = "",
+    // 0.12.0: Trim-Modus
+    val trimMode: Boolean = false,
+    val trimMarkerMs: Long? = null,
+    val trimResult: TrimResult? = null,
 )
+
+/** Ergebnis einer Trim/Split-Operation (für Snackbar-Feedback). */
+sealed class TrimResult {
+    data class Trimmed(val deletedSegments: Int) : TrimResult()
+    data class Split(val newTranscriptId: String, val tailSegments: Int) : TrimResult()
+}
 
 class TranscriptDetailViewModel : ViewModel() {
 
@@ -68,8 +78,70 @@ class TranscriptDetailViewModel : ViewModel() {
         val transcriptId = _uiState.value.transcript?.transcriptId ?: return
         viewModelScope.launch {
             repository.assignSpeakerName(transcriptId, label, name.trim().ifBlank { null })
-            // Segmente neu laden (Anzeige + Export nutzen speakerName sofort)
             _uiState.update { it.copy(segments = repository.getSegments(transcriptId)) }
         }
+    }
+
+    // ─── 0.12.0: Trim/Split ──────────────────────────────────────────
+
+    fun enterTrimMode() {
+        _uiState.update { it.copy(trimMode = true, trimMarkerMs = null, trimResult = null) }
+    }
+
+    fun exitTrimMode() {
+        _uiState.update { it.copy(trimMode = false, trimMarkerMs = null) }
+    }
+
+    /** Segment als Marker-Position setzen (nur wenn im Trim-Modus). */
+    fun selectTrimMarker(startTimeMs: Long) {
+        if (!_uiState.value.trimMode) return
+        _uiState.update { it.copy(trimMarkerMs = startTimeMs) }
+    }
+
+    /** Alles nach dem Marker löschen (Trim). */
+    fun executeTrim() {
+        val tid = _uiState.value.transcript?.transcriptId ?: return
+        val markerMs = _uiState.value.trimMarkerMs ?: return
+        viewModelScope.launch {
+            val deleted = repository.trimAfter(tid, markerMs)
+            val segments = repository.getSegments(tid)
+            val transcript = repository.getTranscript(tid)
+            _uiState.update {
+                it.copy(
+                    trimMode = false,
+                    trimMarkerMs = null,
+                    trimResult = TrimResult.Trimmed(deleted),
+                    segments = segments,
+                    transcript = transcript,
+                )
+            }
+        }
+    }
+
+    /** Alles nach dem Marker in ein neues Transkript verschieben (Split). */
+    fun executeSplit() {
+        val tid = _uiState.value.transcript?.transcriptId ?: return
+        val markerMs = _uiState.value.trimMarkerMs ?: return
+        viewModelScope.launch {
+            val newId = repository.splitAt(tid, markerMs)
+            if (newId != null) {
+                val segments = repository.getSegments(tid)
+                val transcript = repository.getTranscript(tid)
+                val tailSegments = repository.getSegments(newId).size
+                _uiState.update {
+                    it.copy(
+                        trimMode = false,
+                        trimMarkerMs = null,
+                        trimResult = TrimResult.Split(newId, tailSegments),
+                        segments = segments,
+                        transcript = transcript,
+                    )
+                }
+            }
+        }
+    }
+
+    fun clearTrimResult() {
+        _uiState.update { it.copy(trimResult = null) }
     }
 }
