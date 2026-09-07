@@ -25,7 +25,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -170,6 +170,17 @@ fun TranscriptDetailScreen(
                 ),
             )
         },
+        // ── 0.12.1: Trim-Action-Bar als bottomBar (fix: war im Content eingequetscht) ──
+        bottomBar = {
+            if (uiState.trimMode) {
+                TrimActionBar(
+                    markerMs = uiState.trimMarkerMs,
+                    onTrim = { trimConfirmAction = "trim" },
+                    onSplit = { trimConfirmAction = "split" },
+                    onCancel = { viewModel.exitTrimMode() },
+                )
+            }
+        },
     ) { padding ->
         Column(
             modifier = Modifier
@@ -223,8 +234,8 @@ fun TranscriptDetailScreen(
                     ) {
                         Icon(
                             imageVector = if (statsExpanded)
-                                Icons.Filled.KeyboardArrowUp
-                            else Icons.Filled.KeyboardArrowDown,
+                                Icons.Filled.KeyboardArrowDown
+                            else Icons.Filled.KeyboardArrowRight,
                             contentDescription = if (statsExpanded) "Einklappen" else "Aufklappen",
                             modifier = Modifier.size(18.dp),
                         )
@@ -319,16 +330,6 @@ fun TranscriptDetailScreen(
                     }
                 }
             }
-        }
-
-        // ── 0.12.0: Trim-Action-Bar ──
-        if (uiState.trimMode) {
-            TrimActionBar(
-                markerMs = uiState.trimMarkerMs,
-                onTrim = { trimConfirmAction = "trim" },
-                onSplit = { trimConfirmAction = "split" },
-                onCancel = { viewModel.exitTrimMode() },
-            )
         }
 
     }

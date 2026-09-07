@@ -3,6 +3,14 @@
 All version changes are documented here. Every build bumps `versionCode` + `versionName` (see `app/build.gradle.kts`).
 **Policy (since 0.10.6):** entries are written in English and are deliberately free of device-, person- or meeting-specific details (no recording filenames, participant counts, durations, names) — the repository is public.
 
+## 0.12.1 / 164 (2026-09-07)
+
+**Trim-action-bar layout fix + collapsible speaker stats polish**
+
+- **Fix:** trim action bar moved to the Scaffold `bottomBar` slot (was rendered inline in the scroll content, appearing squished/cut off with buttons unreachable)
+- **Fix:** speaker-stats chevron now points right when collapsed, down when expanded (standard expand/collapse convention)
+- **UI entry:** long-press any session in history or any segment in detail view enters trim mode directly
+
 ## 0.12.0 / 163 (2026-09-05)
 
 **Phase 12 – Transcript trim/split (cut or split a transcript at any marker point)**
