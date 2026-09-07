@@ -3,6 +3,13 @@
 All version changes are documented here. Every build bumps `versionCode` + `versionName` (see `app/build.gradle.kts`).
 **Policy (since 0.10.6):** entries are written in English and are deliberately free of device-, person- or meeting-specific details (no recording filenames, participant counts, durations, names) — the repository is public.
 
+## 0.12.3 / 166 (2026-09-07)
+
+**Cold-start speedup (frozen UI on launch)**
+
+- **Fix:** ONNX engine warmup (`OnlineRecognizer` + speaker diarization sessions, several hundred MB of weights) ran synchronously on the main thread during `LiveViewModel` init, freezing the UI for 10-15 s on launch. Warmup now runs on `Dispatchers.IO` at startup; the UI is interactive immediately while models load in the background.
+- **Fix:** same blocking init in the record/import paths moved to IO as well; all engine init sites share a mutex so background warmup and a fast record tap cannot create overlapping ONNX sessions.
+
 ## 0.12.2 / 165 (2026-09-07)
 
 **Trim-action-bar overflow fix**

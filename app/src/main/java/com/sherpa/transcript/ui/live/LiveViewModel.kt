@@ -414,6 +414,9 @@ class LiveViewModel : ViewModel() {
 
     // ── Diarization-Serialisierung ──
     private val diarizationMutex = Mutex()
+    // 0.12.3: Engine-Init läuft im Hintergrund (Startup-Prewarm) und beim
+    // Aufnahmestart — Mutex verhindert doppelte/überlappende ONNX-Sessions.
+    private val engineInitMutex = Mutex()
     private var diarizationEpoch = 0L
     private var isStopping = false
     private var isSavingFinalResult = false
@@ -430,7 +433,12 @@ class LiveViewModel : ViewModel() {
 
     init {
         RecordingBridge.current = this   // Phase 8: Notification-Aktionen erreichen die aktive Instanz
-        checkModels()
+        // 0.12.3: Engine-Prewarm im Hintergrund — checkModels() lädt mehrere
+        // hundert MB ONNX-Gewichte (ASR + ggf. EN + Diarization) und blockierte
+        // synchron den Main-Thread (10-15 s eingefrorener App-Start).
+        viewModelScope.launch(Dispatchers.IO) {
+            engineInitMutex.withLock { checkModels() }
+        }
         // Phase 5 (0.6.8): Persistente Einstellungen – Schriftgröße + Debug-Mode
         // aus dem SettingsStore laden und live auf Änderungen reagieren
         // (z.B. wenn der User im Einstellungen-Screen die Schriftgröße ändert).
@@ -507,7 +515,9 @@ class LiveViewModel : ViewModel() {
                     else true
                 }
                 if (!ModelDownloadManager.isModelDownloaded(SherpaTranscriptApp.instance, ASR_MODEL)) { _uiState.update { it.copy(recordingState = RecordingState.Error("ASR-Download fehlgeschlagen")) }; return@launch }
-                engine.initialize(ASR_MODEL); _uiState.update { it.copy(isModelReady = true) }
+                // 0.12.3: ONNX-Session-Aufbau (mehrere Sekunden) gehört auf IO, nicht auf Main.
+                engineInitMutex.withLock { withContext(Dispatchers.IO) { engine.initialize(ASR_MODEL) } }
+                _uiState.update { it.copy(isModelReady = true) }
             }
             // 0.6.23: EN-Fallback-Modell für Auto-Detection (nur laden, wenn Toggle an)
             if (useAutoLanguageDetection() && !engineEn.isInitialized) {
@@ -517,7 +527,8 @@ class LiveViewModel : ViewModel() {
                     else true
                 }
                 if (ModelDownloadManager.isModelDownloaded(SherpaTranscriptApp.instance, EN_MODEL)) {
-                    engineEn.initialize(EN_MODEL)
+                    // 0.12.3: siehe oben — ONNX-Init auf IO.
+                    engineInitMutex.withLock { withContext(Dispatchers.IO) { engineEn.initialize(EN_MODEL) } }
                 } else {
                     Log.w(TAG, "EN-Modell nicht verfügbar – Auto-Detection entfällt (nur Deutsch)")
                 }
@@ -528,7 +539,8 @@ class LiveViewModel : ViewModel() {
                     else true
                 }
                 if (!SpeakerModelDownloadManager.areModelsDownloaded()) { _uiState.update { it.copy(recordingState = RecordingState.Error("Speaker-Download fehlgeschlagen")) }; return@launch }
-                speakerEngine.initialize(clusteringMode)
+                // 0.12.3: siehe oben — ONNX-Init auf IO.
+                engineInitMutex.withLock { withContext(Dispatchers.IO) { speakerEngine.initialize(clusteringMode) } }
             }
 
             _uiState.update { it.copy(segments = emptyList(), latestSegmentId = null, recordingState = RecordingState.Listening) }
@@ -2087,14 +2099,17 @@ class LiveViewModel : ViewModel() {
                         if (!ModelDownloadManager.isModelDownloaded(ctx, ASR_MODEL)) ModelDownloadManager.downloadModel(ctx, ASR_MODEL) { done, total -> _uiState.update { it.copy(downloadProgress = if (total > 0) done.toFloat() / total else 0f) } }
                         else true
                     }
-                    engine.initialize(ASR_MODEL); _uiState.update { it.copy(isModelReady = true) }
+                    // 0.12.3: Mutex-Schutz gegen parallelen Startup-Prewarm.
+                    engineInitMutex.withLock { withContext(Dispatchers.IO) { engine.initialize(ASR_MODEL) } }
+                    _uiState.update { it.copy(isModelReady = true) }
                 }
                 if (!speakerEngine.isInitialized) {
                     downloadWithProgress("Speaker", "Lade Sprechererkennung…") {
                         if (!SpeakerModelDownloadManager.areModelsDownloaded()) SpeakerModelDownloadManager.downloadModels { _, done, total -> _uiState.update { it.copy(downloadProgress = if (total > 0) done.toFloat() / total else 0f) } }
                         else true
                     }
-                    speakerEngine.initialize(clusteringMode)
+                    // 0.12.3: siehe startRecording — ONNX-Init auf IO.
+                    engineInitMutex.withLock { withContext(Dispatchers.IO) { speakerEngine.initialize(clusteringMode) } }
                 }
 
                 // 3. Session zurücksetzen (wie startRecording, ohne Mikrofon)
