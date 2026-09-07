@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -58,6 +59,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
@@ -205,33 +207,59 @@ fun TranscriptDetailScreen(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // 0.11.0: Sprecher-Statistik (Redezeit + Anteil je Person)
+            // 0.12.0: Sprecher-Statistik (einklappbar)
             val speakerStats = remember(uiState.segments) {
                 SpeakerStats.compute(uiState.segments)
             }
+            var statsExpanded by remember { mutableStateOf(false) }
             if (speakerStats.isNotEmpty()) {
                 Column(modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp)) {
-                    speakerStats.forEach { stat ->
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(
-                                text = stat.label,
-                                style = MaterialTheme.typography.bodySmall,
-                                modifier = Modifier.weight(1f),
-                                maxLines = 1,
-                            )
-                            Text(
-                                text = "${SpeakerStats.formatDurationMs(stat.totalMs)} (${stat.percent} %) · ${stat.segmentCount}×",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        LinearProgressIndicator(
-                            progress = { stat.percent / 100f },
-                            modifier = Modifier.fillMaxWidth().padding(bottom = 2.dp),
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { statsExpanded = !statsExpanded }
+                            .padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            imageVector = if (statsExpanded)
+                                Icons.Filled.KeyboardArrowUp
+                            else Icons.Filled.KeyboardArrowDown,
+                            contentDescription = if (statsExpanded) "Einklappen" else "Aufklappen",
+                            modifier = Modifier.size(18.dp),
                         )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "${speakerStats.size} Sprecher",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Medium,
+                        )
+                    }
+                    AnimatedVisibility(visible = statsExpanded) {
+                        Column {
+                            speakerStats.forEach { stat ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(
+                                        text = stat.label,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        modifier = Modifier.weight(1f),
+                                        maxLines = 1,
+                                    )
+                                    Text(
+                                        text = "${SpeakerStats.formatDurationMs(stat.totalMs)} (${stat.percent} %) · ${stat.segmentCount}×",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                                LinearProgressIndicator(
+                                    progress = { stat.percent / 100f },
+                                    modifier = Modifier.fillMaxWidth().padding(bottom = 2.dp),
+                                )
+                            }
+                        }
                     }
                 }
             }
