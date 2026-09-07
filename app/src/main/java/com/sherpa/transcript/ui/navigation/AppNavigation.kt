@@ -204,6 +204,10 @@ fun AppNavigation() {
                     onTranscriptClick = { transcriptId ->
                         navController.navigate("detail/$transcriptId")
                     },
+                    // 0.12.4: Long-Press auf Session → direkt in den Trim-Modus
+                    onTrimSplit = { transcriptId ->
+                        navController.navigate("detail/$transcriptId?startTrim=true")
+                    },
                 )
             }
             composable(BottomNavItem.Settings.route) {

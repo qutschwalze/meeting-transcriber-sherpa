@@ -3,6 +3,12 @@
 All version changes are documented here. Every build bumps `versionCode` + `versionName` (see `app/build.gradle.kts`).
 **Policy (since 0.10.6):** entries are written in English and are deliberately free of device-, person- or meeting-specific details (no recording filenames, participant counts, durations, names) — the repository is public.
 
+## 0.12.4 / 167 (2026-09-07)
+
+**History long-press enters trim mode**
+
+- **Fix:** `HistoryScreen.onTrimSplit` was no longer wired in `AppNavigation` (fell back to a plain open, so long-press never entered trim mode). Long-press on a session now navigates with `?startTrim=true` and lands directly in trim mode.
+
 ## 0.12.3 / 166 (2026-09-07)
 
 **Cold-start speedup (frozen UI on launch)**
