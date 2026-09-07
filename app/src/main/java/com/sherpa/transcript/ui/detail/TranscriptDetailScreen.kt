@@ -279,9 +279,9 @@ fun TranscriptDetailScreen(
                                 },
                                 isSelected = uiState.trimMode && uiState.trimMarkerMs != null
                                     && segment.startTimeMs >= uiState.trimMarkerMs!!,
-                                onLongClick = if (uiState.trimMode) null else {
+                                onLongClick = if (uiState.trimMode) {
                                     { viewModel.selectTrimMarker(segment.startTimeMs) }
-                                },
+                                } else null,
                             )
                         }
                     }
