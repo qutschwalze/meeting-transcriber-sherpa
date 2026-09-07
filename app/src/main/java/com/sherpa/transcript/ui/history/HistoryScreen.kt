@@ -1,5 +1,6 @@
 package com.sherpa.transcript.ui.history
 
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -176,11 +177,15 @@ private fun TranscriptCard(
     var editTitle by remember(transcript.title) { mutableStateOf(transcript.title) }
 
     Card(
-        onClick = onClick,
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
         ),
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onTrimSplit,
+            ),
     ) {
         Row(
             modifier = Modifier
