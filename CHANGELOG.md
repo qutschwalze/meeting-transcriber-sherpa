@@ -3,6 +3,13 @@
 All version changes are documented here. Every build bumps `versionCode` + `versionName` (see `app/build.gradle.kts`).
 **Policy (since 0.10.6):** entries are written in English and are deliberately free of device-, person- or meeting-specific details (no recording filenames, participant counts, durations, names) — the repository is public.
 
+## 0.12.7 / 170 (2026-09-09)
+
+**Crash-fix: debug toggle no longer hangs (ANR)**
+
+- **Root cause:** `DebugUploadClient` used `runBlocking { first() }` to read `debugServerUrl`/`debugApiKey` on the caller thread. When the debug switch triggered recomposition on the main thread, this blocked the UI thread waiting for StateFlow -> ANR after 2s -> crash. Additionally `SettingsStore.debugApiKey` type was corrupted to `***` during the security merge, causing compile/runtime issues.
+- **Fix:** replaced both `runBlocking` with direct `StateFlow.value` reads (non-blocking); fixed type to `StateFlow<String>`; removed unused imports. Toggle is now instant. Clean build verified.
+
 ## 0.12.6 / 169 (2026-09-09)
 
 **Crash-fix: toggling debug mode no longer hangs/crashes**
