@@ -355,6 +355,9 @@ fun SettingsScreen(settingsStore: SettingsStore = SettingsStore.current, onNavig
                                                     Environment.DIRECTORY_DOWNLOADS
                                                 )
                                                 android.util.Log.i("DebugUpload", "SettingsScreen: base=${base?.absolutePath} exists=${base?.exists()}")
+                                                if (base == null) {
+                                                    return@withContext "Kein externer Speicher verfügbar (getExternalFilesDir==null)"
+                                                }
                                                 val dir = File(base, "testaufnahmen")
                                                 android.util.Log.i("DebugUpload", "SettingsScreen: dir=${dir.absolutePath} exists=${dir.exists()} canRead=${dir.canRead()}")
                                                 // 0.6.16: In-memory filter statt listFiles(filter) (Android-Bug)
@@ -376,7 +379,11 @@ fun SettingsScreen(settingsStore: SettingsStore = SettingsStore.current, onNavig
                                                 )
                                                 uploadResult.getOrElse { "Fehler: ${it.message}" }
                                             } catch (e: Exception) {
+                                                android.util.Log.e("DebugUpload", "SettingsScreen crash", e)
                                                 "Fehler: ${e.message}"
+                                            } catch (t: Throwable) {
+                                                android.util.Log.e("DebugUpload", "SettingsScreen Throwable", t)
+                                                "Fehler: ${t.message}"
                                             }
                                         }
                                         uploadResult = result

@@ -65,7 +65,8 @@ object DebugUploadClient {
             require(file.exists()) { "File does not exist: ${file.absolutePath}" }
 
             val ctx = SherpaTranscriptApp.instance
-            val serverUrl = getServerUrl(ctx)
+            val serverUrl = getServerUrl(ctx).trimEnd('/')
+            require(serverUrl.isNotBlank()) { "Server-URL leer – in Einstellungen setzen" }
             val apiKey = runBlocking { SettingsStore.current.debugApiKey.first() }
             val url = URL("$serverUrl/upload")
 
@@ -120,6 +121,9 @@ object DebugUploadClient {
         } catch (e: Exception) {
             Log.e(TAG, "Upload failed for ${file.name}: ${e.message}", e)
             Result.failure(e)
+        } catch (t: Throwable) {
+            Log.e(TAG, "Upload crashed for ${file.name}: ${t.message}", t)
+            Result.failure(RuntimeException(t.message, t))
         }
     }
 
@@ -262,6 +266,9 @@ object DebugUploadClient {
         } catch (e: Exception) {
             Log.e(TAG, "Bundle upload failed: ${e.message}", e)
             Result.failure(e)
+        } catch (t: Throwable) {
+            Log.e(TAG, "Bundle upload crashed: ${t.message}", t)
+            Result.failure(RuntimeException(t.message, t))
         }
     }
 

@@ -2311,6 +2311,10 @@ class LiveViewModel : ViewModel() {
                 delay(500)
                 val ctx = SherpaTranscriptApp.instance
                 val base = ctx.getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS)
+                if (base == null) {
+                    Log.w(TAG, "DebugUpload: getExternalFilesDir==null (Storage nicht bereit)")
+                    return@launch
+                }
                 val dir = java.io.File(base, "testaufnahmen")
                 if (!dir.exists()) {
                     Log.w(TAG, "DebugUpload: kein testaufnahmen-Ordner")
@@ -2325,7 +2329,7 @@ class LiveViewModel : ViewModel() {
                     onFailure = { Log.w(TAG, "DebugUpload fehlgeschlagen: ${it.message}") },
                 )
             } catch (t: Throwable) {
-                Log.w(TAG, "DebugUpload Error: ${t.message}")
+                Log.w(TAG, "DebugUpload Error: ${t.message}", t)
             }
         }
     }

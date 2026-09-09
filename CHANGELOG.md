@@ -3,6 +3,13 @@
 All version changes are documented here. Every build bumps `versionCode` + `versionName` (see `app/build.gradle.kts`).
 **Policy (since 0.10.6):** entries are written in English and are deliberately free of device-, person- or meeting-specific details (no recording filenames, participant counts, durations, names) — the repository is public.
 
+## 0.12.5 / 168 (2026-09-09)
+
+**Crash-fix: debug upload no longer crashes the app**
+
+- **Root cause:** `getExternalFilesDir()` can return `null` (storage not mounted) and `File(null, ...)` threw an NPE outside the guarded path; `DebugUploadClient` only caught `Exception`, not `Throwable` (e.g. `OutOfMemoryError` on large WAVs, `NoClassDefFoundError`). The upload was triggered from `Dispatchers.Main` without full guarding and bubbled as a hard crash.
+- **Fix:** null-guard for `base` in both `LiveViewModel.triggerDebugUpload()` and `SettingsScreen` manual upload; `DebugUploadClient` and `SettingsScreen` now catch `Throwable` and return `Result.failure` / user-visible error instead of crashing; server-URL is validated (blank → user message).
+
 ## 0.12.4 / 167 (2026-09-07)
 
 **History long-press enters trim mode**
