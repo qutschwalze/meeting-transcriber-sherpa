@@ -7,8 +7,6 @@ import com.sherpa.transcript.BuildConfig
 import com.sherpa.transcript.SherpaTranscriptApp
 import com.sherpa.transcript.data.local.SettingsStore
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import java.io.BufferedReader
 import java.io.DataOutputStream
@@ -35,9 +33,7 @@ object DebugUploadClient {
 
     /** Read the stored server URL from SettingsStore (the single source of truth). */
     fun getServerUrl(context: Context): String {
-        return runBlocking {
-            SettingsStore.current.debugServerUrl.first()
-        }
+        return SettingsStore.current.debugServerUrl.value
     }
 
     /** Persist a custom server URL (delegates to SettingsStore). */
@@ -67,7 +63,7 @@ object DebugUploadClient {
             val ctx = SherpaTranscriptApp.instance
             val serverUrl = getServerUrl(ctx).trimEnd('/')
             require(serverUrl.isNotBlank()) { "Server-URL leer – in Einstellungen setzen" }
-            val apiKey = runBlocking { SettingsStore.current.debugApiKey.first() }
+            val apiKey = SettingsStore.current.debugApiKey.value
             val url = URL("$serverUrl/upload")
 
             Log.i(TAG, "Uploading ${file.name} (${file.length()} bytes) → $url")
