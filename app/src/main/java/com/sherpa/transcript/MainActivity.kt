@@ -22,22 +22,15 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.sherpa.transcript.data.local.SettingsStore
 import com.sherpa.transcript.data.local.ThemeMode
-import com.sherpa.transcript.service.QuickStartTileService
+import com.sherpa.transcript.ui.live.PendingQuickStart
 import com.sherpa.transcript.ui.navigation.AppNavigation
 import com.sherpa.transcript.ui.theme.SherpaTranscriptTheme
 
 class MainActivity : ComponentActivity() {
 
-    /**
-     * 0.11.5: Kompositorischer State fuer Quick-Start – wird vom Tile gesetzt
-     * und vom LaunchedEffect beobachtet (auch bei onNewIntent).
-     */
-    private var quickStartPending by mutableStateOf(false)
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         handleIntent(intent)
-
         setContent {
             val themeMode by SettingsStore.current.themeMode.collectAsState()
             val darkTheme = when (themeMode) {
@@ -63,23 +56,9 @@ class MainActivity : ComponentActivity() {
                         permissionGranted = granted
                     }
 
-                    val liveViewModel: com.sherpa.transcript.ui.live.LiveViewModel = viewModel()
-
                     LaunchedEffect(Unit) {
                         if (!permissionGranted) {
                             permissionLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
-                        }
-                    }
-
-                    // Quick-Start: wartet auf Permission, startet Aufnahme
-                    LaunchedEffect(permissionGranted, quickStartPending) {
-                        if (permissionGranted && quickStartPending) {
-                            quickStartPending = false
-                            try {
-                                liveViewModel.startRecording()
-                            } catch (t: Throwable) {
-                                Log.e(TAG, "QuickStart fehlgeschlagen: ${t.message}", t)
-                            }
                         }
                     }
 
@@ -95,9 +74,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleIntent(intent: Intent?) {
-        val wantsQuickStart = intent?.action == QuickStartTileService.ACTION_QUICK_START
+        val wantsQuickStart = intent?.action == com.sherpa.transcript.service.QuickStartTileService.ACTION_QUICK_START
         if (wantsQuickStart) {
-            quickStartPending = true
+            PendingQuickStart.put()
+            android.util.Log.i(TAG, "QuickStart pending -> LiveScreen wird starten")
         }
 
         val sharedUri = extractSharedAudioUri(intent)

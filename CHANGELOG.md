@@ -3,6 +3,13 @@
 All version changes are documented here. Every build bumps `versionCode` + `versionName` (see `app/build.gradle.kts`).
 **Policy (since 0.10.6):** entries are written in English and are deliberately free of device-, person- or meeting-specific details (no recording filenames, participant counts, durations, names) — the repository is public.
 
+## 0.12.9 / 172 (2026-09-10)
+
+**Fix: Quick Tile now starts recording visibly (no more silent 1.9 GB capture)**
+
+- **Root cause:** `MainActivity` created an Activity-scoped `LiveViewModel` and called `startRecording()` there. `LiveScreen` inside `NavHost` uses its own Nav-scoped ViewModel (different `ViewModelStore`) — recording ran invisibly on the wrong instance (notification yes, UI stayed `Idle`). `Tile` showed `ACTIVE`, screen showed `Idle`; forgotten stop produced 1.9 GB WAV.
+- **Fix:** same pattern as import fix 0.9.3: `PendingQuickStart` singleton consumed by `LiveScreen` on the visible Nav-scoped instance (`LaunchedEffect(Unit)` + `ON_RESUME` observer). Recording now shows immediately (`Listening` + live segments + notification + red dot). No more invisible capture.
+
 ## 0.12.8 / 171 (2026-09-09)
 
 **Crash-fix: debug upload OOM + debug toggle hardening**

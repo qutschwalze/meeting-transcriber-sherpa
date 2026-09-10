@@ -49,6 +49,9 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.sherpa.transcript.ui.live.components.AssignSpeakerSheet
 import androidx.compose.ui.platform.LocalContext
 import android.app.Activity
@@ -80,6 +83,32 @@ fun LiveScreen(
         com.sherpa.transcript.ui.live.PendingImport.consume()?.let { (uri, name) ->
             viewModel.importAudio(uri, name)
         }
+        // 0.12.9: QuickTile auf sichtbarer Instanz starten (gleicher Fix wie PendingImport 0.9.3)
+        // Activity-VM != Nav-VM -> MainActivity startete auf falscher Instanz -> unsichtbar + 1.9GB.
+        if (com.sherpa.transcript.ui.live.PendingQuickStart.consume()) {
+            try {
+                viewModel.startRecording()
+            } catch (t: Throwable) {
+                android.util.Log.e("LiveScreen", "QuickStart failed: ${t.message}", t)
+            }
+        }
+    }
+
+    // 0.12.9: Falls App schon offen und Tile feuert onNewIntent -> LaunchedEffect(Unit) läuft nicht erneut.
+    // -> bei ON_RESUME nochmal prüfen (deckt auch Wiederaufnahme nach Home ab).
+    val lifecycleOwner = LocalLifecycleOwner.current
+    androidx.compose.runtime.DisposableEffect(lifecycleOwner, viewModel) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                if (com.sherpa.transcript.ui.live.PendingQuickStart.consume()) {
+                    try { viewModel.startRecording() } catch (t: Throwable) {
+                        android.util.Log.e("LiveScreen", "QuickStart ON_RESUME failed: ${t.message}", t)
+                    }
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     // Phase 8: Display-Wach-Toggle → Window-Flag an/aus (kein Stromsparmodus)
