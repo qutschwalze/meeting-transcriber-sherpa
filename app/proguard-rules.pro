@@ -19,3 +19,9 @@
 -keep class com.sherpa.transcript.service.RecordingService { *; }
 -keep class com.sherpa.transcript.MainActivity { *; }
 -keep class com.sherpa.transcript.ui.live.LiveViewModel { *; }
+
+# ── 0.12.8: SettingsStore + DebugUpload (R8 darf StateFlow-Typen nicht strippen) ──
+-keep class com.sherpa.transcript.data.local.SettingsStore { *; }
+-keep class com.sherpa.transcript.data.local.SettingsStore$* { *; }
+-keep class com.sherpa.transcript.data.debug.DebugUploadClient { *; }
+-keep class com.sherpa.transcript.SherpaTranscriptApp { *; }

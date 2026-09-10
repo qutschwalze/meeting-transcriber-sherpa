@@ -3,6 +3,14 @@
 All version changes are documented here. Every build bumps `versionCode` + `versionName` (see `app/build.gradle.kts`).
 **Policy (since 0.10.6):** entries are written in English and are deliberately free of device-, person- or meeting-specific details (no recording filenames, participant counts, durations, names) — the repository is public.
 
+## 0.12.8 / 171 (2026-09-09)
+
+**Crash-fix: debug upload OOM + debug toggle hardening**
+
+- **Root cause (OOM):** `HttpURLConnection` puffert den Body ohne `setChunkedStreamingMode` komplett im Heap. Deine 1,9-GB-WAV (vergessenes Stoppen) sprengte das 256-MB-Heap → `OutOfMemoryError` (siehe Log: `writeField` + `SherpaOnnxEngine` gleichzeitig). Der Hang von ~2 s war das Puffern, dann `FATAL`.
+- **Fix:** `setChunkedStreamingMode(8192)` (echtes Streaming, kein Full-Body-Buffer) + Guard: Dateien >100 MB werden übersprungen (Hinweis „zu groß – trimmen/löschen“) statt Upload-Versuch. Bitte die 1,9-GB-Datei im Verlauf trimmen oder unter `/Download/testaufnahmen/` löschen.
+- **Zusätzlich:** `SettingsStore.debugApiKey` war durch Security-Merge korrupt (`***`), plus `Throwable`-Guards in `setDebugMode`/Collector/Switch; ProGuard keeps für `SettingsStore`/`DebugUploadClient`/`SherpaTranscriptApp`. Clean build verifiziert.
+
 ## 0.12.7 / 170 (2026-09-09)
 
 **Crash-fix: debug toggle no longer hangs (ANR)**

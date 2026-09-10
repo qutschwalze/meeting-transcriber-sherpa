@@ -214,7 +214,13 @@ fun SettingsScreen(settingsStore: SettingsStore = SettingsStore.current, onNavig
                     }
                     Switch(
                         checked = debugMode,
-                        onCheckedChange = settingsStore::setDebugMode,
+                        onCheckedChange = { enabled ->
+                            try {
+                                settingsStore.setDebugMode(enabled)
+                            } catch (t: Throwable) {
+                                android.util.Log.e("SettingsScreen", "setDebugMode crash: ${t.message}", t)
+                            }
+                        },
                     )
                 }
             }

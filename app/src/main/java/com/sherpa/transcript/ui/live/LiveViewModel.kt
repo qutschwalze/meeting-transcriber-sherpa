@@ -453,8 +453,12 @@ class LiveViewModel : ViewModel() {
         }
         viewModelScope.launch {
             settings.debugMode.collect { enabled ->
-                _uiState.update { it.copy(debugMode = enabled) }
-                audioCapture.saveRawWav = enabled
+                try {
+                    _uiState.update { it.copy(debugMode = enabled) }
+                    audioCapture.saveRawWav = enabled
+                } catch (t: Throwable) {
+                    android.util.Log.e("LiveViewModel", "debugMode collect crash: ${t.message}", t)
+                }
             }
         }
     }

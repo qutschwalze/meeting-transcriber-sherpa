@@ -70,12 +70,15 @@ object DebugUploadClient {
 
             val boundary = "----SherpaBoundary${System.currentTimeMillis()}"
 
+            // 0.12.8: 2 GB WAV von vergessener Aufnahme pufferte HttpURLConnection komplett im Heap → OOM 256 MB
+            // fix: chunked streaming, kein Full-Body-Buffer
             val conn = (url.openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
                 doOutput = true
                 doInput = true
                 connectTimeout = CONNECT_TIMEOUT_MS
                 readTimeout = READ_TIMEOUT_MS
+                setChunkedStreamingMode(8192)
                 setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
                 // 0.12.0: API-Key für Server-Auth
                 if (apiKey.isNotBlank()) {
@@ -207,6 +210,14 @@ object DebugUploadClient {
             val failures = mutableListOf<String>()
 
             for (file in selected) {
+                // 0.12.8: 2-GB-WAVs (vergessenes Stoppen) würden selbst mit chunked streaming ewig dauern + OOM-Risiko
+                // Skip >100 MB (ca. 50 min Aufnahme) mit Hinweis statt Upload-Versuch
+                if (file.length() > 100L * 1024 * 1024) {
+                    val mb = file.length() / (1024 * 1024)
+                    Log.w(TAG, "  SKIP ${file.name}: ${mb}MB >100MB Limit (vergessene Aufnahme?) – manuell trimmen/löschen")
+                    failures.add("${file.name}: übersprungen (${mb}MB > 100MB Limit)")
+                    continue
+                }
                 val fileType = when {
                     file.name.endsWith(".wav", ignoreCase = true) -> "audio/wav"
                     file.name.endsWith(".log", ignoreCase = true) -> "text/plain"

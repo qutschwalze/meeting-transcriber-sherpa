@@ -8,7 +8,6 @@ import kotlinx.coroutines.flow.asStateFlow
 
 /** Phase 5 (0.6.8): Darstellungsmodus – System folgen, hell, dunkel. */
 enum class ThemeMode { SYSTEM, LIGHT, DARK }
-
 /** 0.6.24: ASR-Sprachmodus – Deutsch ist Standard, Englisch optional aktivierbar. */
 enum class AsrLanguageMode { DE_ONLY, DE_EN_AUTO }
 
@@ -51,8 +50,14 @@ class SettingsStore private constructor(context: Context) {
     }
 
     fun setDebugMode(enabled: Boolean) {
-        prefs.edit().putBoolean(KEY_DEBUG, enabled).apply()
-        _debugMode.value = enabled
+        try {
+            prefs.edit().putBoolean(KEY_DEBUG, enabled).apply()
+            _debugMode.value = enabled
+        } catch (t: Throwable) {
+            android.util.Log.e("SettingsStore", "setDebugMode failed: ${t.message}", t)
+            // Still update in-memory state so UI doesn't hang
+            _debugMode.value = enabled
+        }
     }
 
     fun setDebugServerUrl(url: String) {
