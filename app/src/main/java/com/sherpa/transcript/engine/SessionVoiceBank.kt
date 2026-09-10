@@ -316,6 +316,47 @@ class SessionVoiceBank(
     }
 
     /**
+     * 0.12.10 (Step 7): Provisorisches Live-Label für den laufenden Satz –
+     * display-only, MUTIERT NICHTS (kein Confirm, kein Drift-Delete, kein Enroll).
+     * Kürzeres Gate (1s statt 2s), gleiche Schwellen wie identify
+     * (confirmed 0.62, pending 0.35). Der Full-Chunk korrigiert später –
+     * darum nur für livePartial, NIE in raw/assigned/save.
+     * @return globale Speaker-ID oder null.
+     */
+    fun identifyProvisional(samples: FloatArray, minSec: Float = 1.0f): Int? {
+        if (samples.isEmpty() || (voiceprints.isEmpty() && pendingEnrollments.isEmpty())) return null
+        if (samples.size < (minSec * 16000).toInt()) return null
+        val embedding = computer.computeEmbedding(samples) ?: return null
+        var bestId: Int? = null
+        var bestSim = 0f
+        var bestIsPending = false
+        for ((id, vp) in voiceprints) {
+            val sim = cosineSimilarity(embedding, vp)
+            if (sim > bestSim) { bestSim = sim; bestId = id; bestIsPending = false }
+        }
+        for ((id, p) in pendingEnrollments) {
+            val sim = cosineSimilarity(embedding, p.embedding)
+            if (sim > bestSim) { bestSim = sim; bestId = id; bestIsPending = true }
+        }
+        val thr = if (bestIsPending) pendingConfirmThreshold else matchThreshold
+        if (bestId == null || bestSim <= thr) return null
+        // Read-only Drift: best ist pending, aber eine ANDERE Stimme passt auch
+        // → diese nehmen, NICHTS löschen (identify() würde hier verwerfen).
+        if (bestIsPending) {
+            for ((id, vp) in voiceprints) {
+                if (id != bestId && cosineSimilarity(embedding, vp) >= pendingConfirmThreshold) {
+                    Log.d(TAG, String.format("identifyProvisional: pending=%d → bestehend=%d (read-only, sim>=%.2f)",
+                        bestId, id, pendingConfirmThreshold))
+                    return id
+                }
+            }
+        }
+        Log.d(TAG, String.format("identifyProvisional: MATCH → global=%d sim=%.3f (thr=%.2f%s)",
+            bestId, bestSim, thr, if (bestIsPending) ",pending" else ""))
+        return bestId
+    }
+
+    /**
      * Schreibt einen Sprecher ein oder aktualisiert sein Voiceprint.
      * Erst ab [minEnrollmentSec] Redezeit – verhindert Enrollment auf Fragmente.
      *

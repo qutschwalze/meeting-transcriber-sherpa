@@ -2338,6 +2338,47 @@ class LiveViewModel : ViewModel() {
         }
     }
 
+    /** Step 7 (0.12.10): Throttle fürs provisorische Live-Label (Embedding ist ONNX-teuer). */
+    private var lastProvisionalAttemptMs = 0L
+
+    /**
+     * Step 7 (0.12.10): Provisorisches Live-Label für den laufenden Satz.
+     * Nur wenn die Bank schon Stimmen kennt (kein Rateversuch bei leerer Bank),
+     * frühestens 1s nach Satzanfang, max. alle 2,5s, Embedding auf IO-Thread.
+     * Display-only: landet nur auf livePartial (kursiv/gedimmt = erkennbar
+     * provisorisch), NIE in raw/assigned/save. Token-Guard verwirft späte
+     * Ergebnisse nach Final/Stop. Der Full-Chunk korrigiert danach.
+     */
+    private fun maybeProvisionalLiveLabel(nowMs: Long) {
+        if (!ENABLE_CHUNKED_DIARIZATION) return
+        if (sessionVoiceBank.speakerCount + sessionVoiceBank.pendingCount == 0) return
+        val utteranceStart = currentUtteranceStartMs ?: return
+        if (nowMs - utteranceStart < 1000L) return
+        if (nowMs - lastProvisionalAttemptMs < 2500L) return
+        if (livePartial?.speakerId != null) return
+        lastProvisionalAttemptMs = nowMs
+        val tokenText = lastPartialText
+        viewModelScope.launch(Dispatchers.Default) {
+            val samples = try {
+                chunkedAudioBuffer.readWindow(utteranceStart, nowMs)
+            } catch (_: Exception) { FloatArray(0) }
+            if (samples.size < 16000) return@launch
+            val hit = try {
+                sessionVoiceBank.identifyProvisional(samples)
+            } catch (_: Exception) { null }
+            if (hit == null) return@launch
+            withContext(Dispatchers.Main) {
+                if (currentUtteranceStartMs != utteranceStart || lastPartialText != tokenText) return@withContext
+                val lp = livePartial ?: return@withContext
+                if (lp.speakerId != null) return@withContext
+                livePartial = lp.copy(speakerId = "speaker_$hit", speakerLabel = "Sprecher ${hit + 1}")
+                Log.d(TAG, "PROVISIONAL live label → speaker_$hit (Full-Chunk korrigiert)")
+                TestLog.log("VB_PROVISIONAL → speaker_$hit")
+                deriveUiSegments()
+            }
+        }
+    }
+
     private fun handleResult(text: String, isFinal: Boolean) {
         val normalizedText = text.trim()
         if (normalizedText.isBlank()) return
@@ -2382,6 +2423,8 @@ class LiveViewModel : ViewModel() {
             )
             deriveUiSegments()
             _uiState.update { it.copy(recordingState = RecordingState.Processing) }
+            // Step 7 (0.12.10): provisorisches Live-Label (display-only, throttled)
+            maybeProvisionalLiveLabel(now)
             return
         }
 

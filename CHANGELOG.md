@@ -3,6 +3,13 @@
 All version changes are documented here. Every build bumps `versionCode` + `versionName` (see `app/build.gradle.kts`).
 **Policy (since 0.10.6):** entries are written in English and are deliberately free of device-, person- or meeting-specific details (no recording filenames, participant counts, durations, names) — the repository is public.
 
+## 0.12.10 / 173 (2026-09-10)
+
+**Feature: provisional live speaker label from sentence start (display-only)**
+
+- **Gap:** the running sentence (`livePartial`) never carried a speaker label — color appeared only after the first diarization pass, typically 15–20 s into a turn, even when the voice was already known to the session bank.
+- **Fix:** new `SessionVoiceBank.identifyProvisional()` (non-mutating by design: no confirm, no drift-delete, no enroll; shorter 1 s gate, same thresholds as `identify`) colors the running sentence once bank-known voices are detected. Throttled (earliest 1 s after sentence start, max every 2.5 s), embedding on a background thread, token-guarded against late results after final/stop. The live partial already renders italic/dimmed while non-final, so the provisional state is visually distinct; the regular chunk result corrects it afterwards. Ground truth, assignment overlay and save path are untouched. Unit-tested (hit from 1 s, no mutation, foreign/rejected cases).
+
 ## 0.12.9 / 172 (2026-09-10)
 
 **Fix: Quick Tile now starts recording visibly (no more silent 1.9 GB capture)**

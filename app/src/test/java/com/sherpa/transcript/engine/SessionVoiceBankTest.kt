@@ -196,4 +196,34 @@ class SessionVoiceBankTest {
         assertTrue("echte neue Stimme wird quick-confirmed", bank.enroll(globalId = 2, samples = samplesOf(3f, 10f), durationMs = 6_000L))
         assertEquals("Stimme C bestätigt", 2, bank.speakerCount)
     }
+
+    @Test
+    fun `0_12_10 identifyProvisional trifft bekannte Stimme ab 1s ohne zu mutieren`() {
+        val bank = SessionVoiceBank(FakeComputer())
+        bank.enroll(globalId = 0, samples = samplesOf(1f, 10f), durationMs = 6_000L)
+        assertEquals("Setup: 1 Sprecher", 1, bank.speakerCount)
+        // 1,5s (< 2s identify-Gate) → provisional trifft trotzdem
+        assertEquals("provisional trifft Stimme A", 0, bank.identifyProvisional(samplesOf(1f, 1.5f)))
+        assertEquals("kein neues Voiceprint entstanden", 1, bank.speakerCount)
+        assertEquals("kein pending entstanden", 0, bank.pendingCount)
+        // identify() selbst lehnt 1,5s weiter ab (Gate unverändert)
+        assertNull("identify bleibt bei 2s-Gate", bank.identify(samplesOf(1f, 1.5f)))
+    }
+
+    @Test
+    fun `0_12_10 identifyProvisional bestaetigt kein pending und lehnt Fremdes ab`() {
+        val bank = SessionVoiceBank(FakeComputer())
+        // 1. Kontakt (3s < Quick-Confirm) → nur pending
+        bank.enroll(globalId = 0, samples = samplesOf(1f, 10f), durationMs = 3_000L)
+        assertEquals("Setup: 0 bestätigt, 1 pending", 0, bank.speakerCount)
+        assertEquals("Setup: 1 pending", 1, bank.pendingCount)
+        // Provisional matcht pending read-only (2. Kontakt-Sim 1.0 ≥ 0.35)
+        assertEquals("provisional trifft pending-ID", 0, bank.identifyProvisional(samplesOf(1f, 2f)))
+        assertEquals("pending NICHT bestätigt (kein Confirm)", 0, bank.speakerCount)
+        assertEquals("pending bleibt pending", 1, bank.pendingCount)
+        // Fremde Stimme (orthogonal) → null
+        assertNull("fremde Stimme → null", bank.identifyProvisional(samplesOf(3f, 2f)))
+        // Zu kurz (< 1s) → null
+        assertNull("0,5s → null", bank.identifyProvisional(samplesOf(1f, 0.5f)))
+    }
 }
