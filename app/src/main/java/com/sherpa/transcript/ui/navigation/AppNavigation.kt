@@ -1,6 +1,8 @@
 package com.sherpa.transcript.ui.navigation
 
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -248,7 +250,10 @@ fun AppNavigation() {
                         )
                     },
                 ) { padding ->
-                    Column(modifier = Modifier.padding(padding).padding(16.dp)) {
+                    Column(
+                        modifier = Modifier.padding(padding).padding(16.dp)
+                            .verticalScroll(rememberScrollState()),
+                    ) {
                         ContactsSection()
                     }
                 }

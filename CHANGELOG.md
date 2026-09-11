@@ -3,6 +3,13 @@
 All version changes are documented here. Every build bumps `versionCode` + `versionName` (see `app/build.gradle.kts`).
 **Policy (since 0.10.6):** entries are written in English and are deliberately free of device-, person- or meeting-specific details (no recording filenames, participant counts, durations, names) — the repository is public.
 
+## 0.12.11 / 174 (2026-09-11)
+
+**Fix: contacts screen scrollable**
+
+- **Gap:** the dedicated contacts route used a plain `Column` without scroll state — with many stored voice profiles the list (and the bulk-delete action at the end) was unreachable.
+- **Fix:** route content now uses `verticalScroll(rememberScrollState())`. No data or matching logic changed.
+
 ## 0.12.10 / 173 (2026-09-10)
 
 **Feature: provisional live speaker label from sentence start (display-only)**
