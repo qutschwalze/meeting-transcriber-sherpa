@@ -25,6 +25,7 @@ keystore.properties
 # Debug-Upload-Server: hochgeladene Dateien + Metadaten (nur Server-Code kommt ins Repo)
 debug-server/uploads/
 debug-server/metadata/
+debug-pull/
 .venv-debug-server/
 
 # Host-Test-Artefakte (Analyse-Skripte sind eingecheckt, Ergebnisse nicht)

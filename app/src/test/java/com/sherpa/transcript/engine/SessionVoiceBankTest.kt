@@ -189,7 +189,11 @@ class SessionVoiceBankTest {
         val enrolled = bank.enroll(globalId = 1, samples = samplesOf(1.5f, 10f), durationMs = 6_000L)
         assertTrue("Drift-Kontakt wird NICHT bestätigt", !enrolled)
         assertEquals("immer noch nur 1 Sprecher", 1, bank.speakerCount)
-        assertEquals("Drift-Kontakt hängt als pending (2-Kontakt-Härtung)", 1, bank.pendingCount)
+        // 0.12.17: Der Drift-Kontakt wird komplett verworfen statt als pending zu
+        // bleiben – sonst bestätigt ihn der nächste Kontakt gegen sich selbst
+        // (sim ~0.8 >= 0.62), die ID-Liste wuchs bis 65 und die globale Bank
+        // sammelte Drift-Profile.
+        assertEquals("Drift-Kontakt hinterlässt kein pending", 0, bank.pendingCount)
 
         // Echte neue Stimme C (orthogonal zu A UND zur Drift, keine 0.35-
         // Ähnlichkeit) → Quick-Confirm funktioniert weiterhin

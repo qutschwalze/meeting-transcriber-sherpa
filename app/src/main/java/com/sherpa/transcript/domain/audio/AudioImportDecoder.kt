@@ -28,6 +28,7 @@ object AudioImportDecoder {
      */
     fun decodeTo16kMono(context: Context, uri: Uri): FloatArray? {
         val extractor = MediaExtractor()
+        var srcMime = "?"
         try {
             extractor.setDataSource(context, uri, null)
             var trackIndex = -1
@@ -39,7 +40,7 @@ object AudioImportDecoder {
             }
             if (trackIndex < 0 || format == null) return null
 
-            val srcMime = format.getString(MediaFormat.KEY_MIME)!!
+            srcMime = format.getString(MediaFormat.KEY_MIME)!!
             val sampleRate = format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
             val channels = format.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
             val durationUs = if (format.containsKey(MediaFormat.KEY_DURATION)) format.getLong(MediaFormat.KEY_DURATION) else 0L
@@ -53,12 +54,19 @@ object AudioImportDecoder {
             codec.configure(format, null, null, 0)
             codec.start()
 
+            // 0.12.12: Import-Diagnose ins TestLog (Debug-Upload) – MIME/Rate/Kanäle
+            // und Decode-Dauer, damit mp3-/Format-Probleme per Upload analysierbar sind.
+            val decodeStartMs = System.currentTimeMillis()
+            TestLog.log("IMPORT DECODE start mime=$srcMime rate=$sampleRate ch=$channels dur=${durationUs / 1_000_000}s")
+
+            // Chunks sammeln (O(n) gesamt) statt mono.copyOf pro Buffer (O(n²)):
+            // bei mp3 (Stereo 44,1 kHz, mehrere Minuten) bewegte das Wachstum
+            // zig GB Heap und der Import wirkte eingefroren.
             val out = ArrayList<FloatArray>(64)
             var totalSamples = 0
             val info = MediaCodec.BufferInfo()
             var sawInputEos = false
             var sawOutputEos = false
-            var mono = FloatArray(0)
 
             while (!sawOutputEos) {
                 // Input füttern
@@ -92,16 +100,22 @@ object AudioImportDecoder {
                             }
                             chunk[i] = acc / channels   // Downmix auf Mono
                         }
-                        totalSamples += frameSamples
+                        // 0.12.15: SOFORT auf 16 kHz resamplen statt erst das komplette
+                        // Quellrate-Array zu bauen. Eine 14-min-mp3 @48 kHz = 42,5 M Samples
+                        // = 170 MB FloatArray – zusammen mit den ONNX-Sessions (~100+ MB)
+                        // riss das das 256-MB-Heap (Log-Befund: "169869328 byte allocation …
+                        // OOM", Growth-Limit 256 MB). Nur das 16-kHz-Ergebnis sammeln:
+                        // 14,2 M Samples = ~57 MB. Für 16-kHz-WAVs ist fromRate==toRate →
+                        // Resampler gibt den Input unverändert zurück (keine Kopie).
+                        val resampled = AudioResampler.resample(chunk, sampleRate, 16_000)
+                        totalSamples += resampled.size
+                        // Guard jetzt direkt in 16-kHz-Zielsamples (MAX_SAMPLES = 30 min × 16 k)
                         if (totalSamples > MAX_SAMPLES) {
                             codec.releaseOutputBuffer(outIdx, false)
                             codec.stop(); codec.release(); extractor.release()
                             throw IllegalArgumentException("Audiodatei länger als 30 Minuten")
                         }
-                        // An sammelndes Array anhängen (am Stück halten statt viele kleine)
-                        val grown = mono.copyOf(mono.size + chunk.size)
-                        System.arraycopy(chunk, 0, grown, mono.size, chunk.size)
-                        mono = grown
+                        out.add(resampled)
                     }
                     val eosFlag = info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
                     codec.releaseOutputBuffer(outIdx, false)
@@ -112,13 +126,22 @@ object AudioImportDecoder {
             }
             codec.stop(); codec.release()
             extractor.release()
-            if (mono.isEmpty()) return null
-            return AudioResampler.resample(mono, sampleRate, 16_000)
+            if (out.isEmpty()) return null
+            // 16-kHz-Chunks in EIN Array zusammenführen (einmalige O(n)-Kopie statt pro-Buffer)
+            val mono = FloatArray(totalSamples)
+            var off = 0
+            for (c in out) {
+                System.arraycopy(c, 0, mono, off, c.size)
+                off += c.size
+            }
+            TestLog.log("IMPORT DECODE done samples=$totalSamples tookMs=${System.currentTimeMillis() - decodeStartMs}")
+            return mono
         } catch (e: IllegalArgumentException) {
             throw e
         } catch (t: Throwable) {
             android.util.Log.w("AudioImport", "decode fehlgeschlagen: ${t.message}")
             try { extractor.release() } catch (_: Throwable) {}
+            TestLog.log("IMPORT DECODE FAIL: mime=$srcMime msg=${t.message}")
             return null
         }
     }

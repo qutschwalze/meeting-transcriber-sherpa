@@ -420,6 +420,12 @@ class LiveViewModel : ViewModel() {
     private var diarizationEpoch = 0L
     private var isStopping = false
     private var isSavingFinalResult = false
+    // 0.12.18: Nachbearbeitung (Stop → finaler Diar-Lauf → Save) läuft asynchron.
+    // Ein Aufnahmestart in dieser Phase räumte bisher genau den Zustand weg, den
+    // der Save liest (rawFinalSegments, lastDiarizationSegments, Voice-Bank,
+    // currentTranscriptId) → Save-Pipeline sah 0 Segmente und verwarf das
+    // Transkript still. Log-Befund: "SAVE_STAGE beforeSave overlay: segs=0".
+    private val saveInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
 
     /** Letzte Diarization-Segmente – für Segment-Splitting im Save-Pfad */
     private var lastDiarizationSegments: List<DiarizationSegment> = emptyList()
@@ -506,6 +512,19 @@ class LiveViewModel : ViewModel() {
     fun startRecording() {
         val currentState = _uiState.value.recordingState
         if (currentState is RecordingState.Listening || currentState is RecordingState.Processing || currentState is RecordingState.Initializing) return
+        // 0.12.18: Aufnahmestart während der Nachbearbeitung ist ein Datenverlust-Risiko
+        // (Save liest den Session-Zustand, den der Start zurücksetzt). Bis der
+        // Save-Job fertig ist, klar ablehnen statt still zu verwerfen.
+        if (saveInFlight.get()) {
+            TestLog.log("START_BLOCKED saveInFlight – Nachbearbeitung läuft noch")
+            Log.i(TAG, "startRecording blocked: post-processing in flight")
+            try {
+                android.widget.Toast.makeText(SherpaTranscriptApp.instance,
+                    "Nachbearbeitung läuft – bitte kurz warten",
+                    android.widget.Toast.LENGTH_SHORT).show()
+            } catch (_: Throwable) {}
+            return
+        }
         logRecordPermissionState()
         _uiState.update { it.copy(recordingState = RecordingState.Initializing, error = null) }
         // Foreground-Service starten: hält Mikrofon-AppOp aktiv (MIUI-"silencing" Schutz)
@@ -577,6 +596,14 @@ class LiveViewModel : ViewModel() {
             engine.startSession()
             // 0.6.23: EN-Engine für die Auto-Detection ebenfalls starten
             if (useAutoLanguageDetection() && engineEn.isInitialized) engineEn.startSession()
+
+            // 0.12.18: Reste einer Vorgänger-Session hart beenden, BEVOR die neuen
+            // Jobs entstehen. Sonst treffen späte Cancel-Aufrufe des Stop-Pfads die
+            // frisch gestartete Session (Log-Befund 04.11.: neue Aufnahme mit
+            // 44-Byte-WAV, während die alte Capture-Schleife weiterlief).
+            try { audioCapture.stopCapture() } catch (_: Throwable) {}
+            captureJob?.cancel(); captureJob = null
+            diarizationJob?.cancel(); diarizationJob = null
 
             // 0.5.68: Debug-Mode → Roh-Aufnahme als WAV speichern (Host-Analyse)
             audioCapture.saveRawWav = _uiState.value.debugMode
@@ -1932,6 +1959,12 @@ class LiveViewModel : ViewModel() {
     }
 
     fun stopRecording() {
+        // 0.12.18: Doppel-Stop bzw. Stop während laufender Nachbearbeitung ignorieren –
+        // ein zweiter Pipeline-Lauf würde denselben Zustand erneut saven.
+        if (saveInFlight.getAndSet(true)) {
+            TestLog.log("STOP_IGNORED saveInFlight")
+            return
+        }
         isStopping = true
         cancelRecordingNotification()   // Phase 8: Benachrichtigung entfernen
         _uiState.update { it.copy(recordingState = RecordingState.Idle) }
@@ -1942,16 +1975,23 @@ class LiveViewModel : ViewModel() {
         com.sherpa.transcript.service.RecordingService.stop(SherpaTranscriptApp.instance)
         logRecordPermissionState()
 
-        viewModelScope.launch {
+        val saveJob = viewModelScope.launch {
+            // 0.12.18: ID der zu speichernden Session FRÜH sichern – ein späterer
+            // Aufnahmestart darf sie nicht mehr auf eine neue UUID umbiegen.
+            val sessionTranscriptId = currentTranscriptId
             Log.d(TAG, "stopRecording: cancel capture")
-            captureJob?.cancel()
-            captureJob?.join()
-            captureJob = null
+            // 0.12.18: lokale Referenzen. Mit den Feldern direkt würde ein während
+            // der Nachbearbeitung gestarteter Lauf hier gecancelt (Job-Aliasing).
+            val cj = captureJob
+            cj?.cancel()
+            cj?.join()
+            if (captureJob === cj) captureJob = null
 
             Log.d(TAG, "stopRecording: cancel diarization loop")
-            diarizationJob?.cancel()
-            diarizationJob?.join()
-            diarizationJob = null
+            val dj = diarizationJob
+            dj?.cancel()
+            dj?.join()
+            if (diarizationJob === dj) diarizationJob = null
 
             // Phase 8 (0.7.4): Nachbearbeitung sichtbar machen (finaler Lauf + Save)
             startPostProcessingIndicator()
@@ -2040,7 +2080,7 @@ class LiveViewModel : ViewModel() {
             // DBG: Delta-Analyse – welche Segmente/Speaker verändert die Save-Pipeline?
             logSaveStageDelta("beforeSave", dedupOverlay, "afterSplit", splitOverlay)
             logSaveStageDelta("afterSplit", splitOverlay, "afterEnrich", segmentsToSave)
-            val transcriptId = currentTranscriptId
+            val transcriptId = sessionTranscriptId
             if (segmentsToSave.isNotEmpty() && transcriptId != null) {
                 val labeledCount = segmentsToSave.count { !it.speakerId.isNullOrBlank() }
                 val speakerCount = segmentsToSave.mapNotNull { it.speakerId }.distinct().size
@@ -2054,12 +2094,25 @@ class LiveViewModel : ViewModel() {
                 saveTranscript(transcriptId, segmentsToSave)
             } else {
                 stopPostProcessingIndicator()   // nichts zu speichern → sofort fertig
+                // 0.12.18: Ein leerer Save-Pfad darf nicht mehr spurlos enden.
+                TestLog.log("SAVE_EMPTY transcriptId=${transcriptId ?: "null"} segments=${segmentsToSave.size} raw=${rawFinalSegments.size}")
             }
-            currentTranscriptId = null; currentUtteranceStartMs = null; lastPartialText = ""; lastForcedFlushTime = 0L; lastForcedFlushText = ""
+            // 0.12.18: nur die EIGENE Session-ID löschen – nicht die einer bereits
+            // laufenden Nachfolge-Session (sonst scheitert deren Save später).
+            if (currentTranscriptId == sessionTranscriptId) currentTranscriptId = null
+            currentUtteranceStartMs = null; lastPartialText = ""; lastForcedFlushTime = 0L; lastForcedFlushText = ""
+
+            // 0.12.18: Mit dem Persistieren ist die kritische Phase vorbei. Der
+            // Debug-Upload (große WAVs, ~90 s) darf einen neuen Aufnahmestart
+            // nicht blockieren – er liest nur die fertigen Dateien.
+            saveInFlight.set(false)
 
             // 0.6.16: Debug-Upload – alle Dateien zum Server senden (nach Save)
             if (_uiState.value.debugMode) triggerDebugUpload()
         }
+        // 0.12.18: Nachbearbeitung endet erst mit dem Save-Job (auch bei Exception oder
+        // Cancel) – genau so lange blockt startRecording neue Aufnahmen.
+        saveJob.invokeOnCompletion { saveInFlight.set(false) }
     }
 
     /**
@@ -2084,12 +2137,30 @@ class LiveViewModel : ViewModel() {
         com.sherpa.transcript.ui.live.ImportUiBridge.set(0, fileName)
         postImportNotification(fileName, -1)   // Phase 9b: sofort sichtbar
         viewModelScope.launch {
+            // 0.12.12: Import-Diagnose lebte bisher ins Leere (TestLog.open passierte
+            // nur bei startWavCapture) – IMPORT-Zeilen + Debug-Upload hatten kein .log.
+            // Öffnen nur wenn nicht gerade eine Aufnahme ihr Log schreibt; merken fürs Schließen.
+            var importLogOpened = false
+            try {
+                if (TestLog.path == null) {
+                    val ctx = SherpaTranscriptApp.instance
+                    val base = ctx.getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS)
+                    if (base != null) {
+                        val dir = java.io.File(base, "testaufnahmen")
+                        if (!dir.exists()) dir.mkdirs()
+                        val ts = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US).format(java.util.Date())
+                        importLogOpened = TestLog.open(dir, "import_$ts.log")
+                    }
+                }
+            } catch (_: Throwable) {}
             try {
                 // 1. Dekodieren (IO)
                 val samples = withContext(Dispatchers.IO) {
                     AudioImportDecoder.decodeTo16kMono(SherpaTranscriptApp.instance, uri)
                 }
                 if (samples == null || samples.isEmpty()) {
+                    TestLog.log("IMPORT DECODE NULL (nicht dekodierbar)")
+                    if (importLogOpened) TestLog.close()
                     _uiState.update { it.copy(importProgress = -1, importFileName = null,
                         error = "Audioformat konnte nicht dekodiert werden") }
                     return@launch
@@ -2138,9 +2209,15 @@ class LiveViewModel : ViewModel() {
                 //    Virtuelle Uhr: recordingStartedAt wird pro Frame zurückgesetzt, damit
                 //    sessionRelativeMs() == Audiozeit. ASR ist offline schneller als
                 //    Echtzeit → wir drosseln auf ~1×, damit Timestamps konsistent bleiben.
+                //    0.12.14: Feed lief im Main-Dispatcher (viewModelScope.launch) – bei
+                //    langen Dateien (zehntausende Frames) blockierten die synchronen
+                //    processFrame-JNI-Aufrufe die UI: Balken eingefroren bei 0 %, keine
+                //    Segmente. Jetzt auf Dispatchers.Default (StateFlow-Updates + TestLog
+                //    sind thread-safe; keine parallele Aufnahme während des Imports).
                 val frameSize = 1_600   // 100 ms @16 kHz
                 val totalFrames = samples.size / frameSize
                 TestLog.log("IMPORT start file=$fileName samples=${samples.size} frames=$totalFrames")
+                withContext(Dispatchers.Default) {
                 for (f in 0 until totalFrames) {
                     val frame = samples.copyOfRange(f * frameSize, (f + 1) * frameSize)
 
@@ -2165,6 +2242,18 @@ class LiveViewModel : ViewModel() {
                         postImportNotification(fileName, pct)   // Phase 9b: System-Notification
                         delay(50)   // leichte Drossel (ASR läuft sonst der Diarization davon)
                     }
+
+                    // 0.12.16: Diarization im Import-Takt mitlaufen lassen. Ohne diesen
+                    // Aufruf blieb der 120s-Rolling-Buffer unkonsumiert (kein Loop wie im
+                    // Live-Pfad) – der finale forceFinal-Lauf sah nur die letzten ~2 min,
+                    // der Export meldete "Sprecher: 0". Alle 400 Frames (= 40 s Audio)
+                    // wird ein Chunk verarbeitet; der Buffer hält so stabil < 120 s und
+                    // die komplette Datei wird diarisiert (langsamer als Echtzeit-ASR,
+                    // aber deterministisch und ohne Verlust).
+                    if (f % 400 == 399 && speakerEngine.isInitialized && ENABLE_DIARIZATION) {
+                        runChunkedDiarization()
+                    }
+                }
                 }
                 // Rest-Samples (< 100 ms) verwerfen – vernachlässigbar
 
@@ -2218,6 +2307,9 @@ class LiveViewModel : ViewModel() {
                     if (segmentsToSave.isNotEmpty() && transcriptId != null) {
                         // Phase 9d: "fertig"-Anzeige + Notification erst NACH dem Save-Job
                         saveTranscript(transcriptId, segmentsToSave).invokeOnCompletion {
+                            // 0.12.12: Import-Log erst schließen, wenn der Save-Job fertig
+                            // ist (SAVE_STAGE-Zeilen kommen aus dem Save-Job) – vor dem Upload.
+                            if (importLogOpened) TestLog.close()
                             postImportDoneNotification(fileName)
                             // Phase 9d: Bridge auf 100 setzen → globales Banner zeigt
                             // "Benennen/Überspringen" (fehlte bisher → blau hängend)
@@ -2234,6 +2326,7 @@ class LiveViewModel : ViewModel() {
                     TestLog.log("IMPORT fertig file=$fileName segs=${segmentsToSave.size}")
                 }
             } catch (e: IllegalArgumentException) {
+                if (importLogOpened) TestLog.close()
                 cancelImportNotification()
                 com.sherpa.transcript.ui.live.ImportUiBridge.dismiss()
                 _uiState.update { it.copy(importProgress = -1, importFileName = null,
@@ -2241,6 +2334,7 @@ class LiveViewModel : ViewModel() {
             } catch (t: Throwable) {
                 Log.e(TAG, "importAudio fehlgeschlagen", t)
                 TestLog.log("IMPORT FEHLER: ${t.message}")
+                if (importLogOpened) TestLog.close()
                 cancelImportNotification()
                 com.sherpa.transcript.ui.live.ImportUiBridge.dismiss()
                 _uiState.update { it.copy(importProgress = -1, importFileName = null,

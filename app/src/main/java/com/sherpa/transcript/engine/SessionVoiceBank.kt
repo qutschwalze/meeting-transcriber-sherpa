@@ -441,11 +441,17 @@ class SessionVoiceBank(
                 }
             }
             if (driftId != null) {
-                // Kein Confirm: pending bleibt (2-Kontakt-Härtung / Save-Auflösung
-                // über den bestätigten Nachbarn) – kein Phantom-Sprecher.
-                Log.d(TAG, String.format("enroll QUICKCONFIRM-DRIFT: global=%d gehört zu bestehender Stimme global=%d (sim>=%.3f), kein Quick-Confirm – pending bleibt",
+                // 0.12.17: Phantom-Pending ENTFERNEN (Konsistenz zu identify()-Drift-Abfang,
+                // der pendingEnrollments.remove() macht). Vorher blieb das Pending bestehen:
+                // der nächste Kontakt matchte es (sim zum eigenen pending ~0.8 ≥ 0.62), der
+                // Drift-Abfang gegen das ORIGINAL-Voiceprint verfehlte die 0.35-Schwelle knapp
+                // (Geräte-Log: sim 0.345) → confirmPending → Bank-Duplikat → die ID-Liste des
+                // Bestands wuchs epoch um epoch an (bis 65) und die globale Bank akkumulierte
+                // Drift-Profile. Ohne Pending kann die verworfene ID nie bestätigt werden.
+                pendingEnrollments.remove(globalId)
+                Log.d(TAG, String.format("enroll QUICKCONFIRM-DRIFT: global=%d gehört zu bestehender Stimme global=%d (sim>=%.3f), kein Quick-Confirm – pending entfernt",
                     globalId, driftId, pendingConfirmThreshold))
-                TestLog.log(String.format("VB QUICKCONFIRM-DRIFT global=%d → bestehende Stimme global=%d (sim>=%.3f) – kein Quick-Confirm, pending bleibt",
+                TestLog.log(String.format("VB QUICKCONFIRM-DRIFT global=%d → bestehende Stimme global=%d (sim>=%.3f) – kein Quick-Confirm, pending entfernt",
                     globalId, driftId, pendingConfirmThreshold))
                 return false
             }

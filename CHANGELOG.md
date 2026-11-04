@@ -3,6 +3,61 @@
 All version changes are documented here. Every build bumps `versionCode` + `versionName` (see `app/build.gradle.kts`).
 **Policy (since 0.10.6):** entries are written in English and are deliberately free of device-, person- or meeting-specific details (no recording filenames, participant counts, durations, names) — the repository is public.
 
+## 0.12.18 / 181 (2026-11-04)
+
+**Fix: a recording started during post-processing silently discarded the previous transcript**
+
+- Stop/save runs asynchronously (final diarization pass, then persistence). Starting a
+  new recording inside that window reset exactly the session state the save pipeline
+  reads (raw segments, transcript id, session voice bank, rolling audio buffer), so the
+  save ended with zero segments and the transcript was dropped without any error — the
+  history stayed empty while audio and diagnostic upload still completed.
+- New recordings are now refused until persistence has finished (short on-screen hint),
+  a duplicate stop is ignored, and the transcript id is captured before the pipeline
+  starts so it can no longer be replaced by a newer session.
+- Job handling hardened: the stop path cancels its own capture and diarization jobs via
+  local references, and a fresh recording stops any leftover capture chain of the
+  previous session before allocating the microphone source. Both previously allowed a
+  silent second recording that captured no audio at all.
+- Diagnostics: `START_BLOCKED`, `STOP_IGNORED` and `SAVE_EMPTY` log lines, so a
+  discarded save can never end silently again.
+- Test suite: the quick-confirm drift test now asserts the 0.12.17 behaviour (a rejected
+  drift contact leaves no pending enrollment).
+
+## 0.12.17 / 180 (2026-09-25)
+
+**Fix: drifting speaker IDs can no longer be confirmed as duplicate speakers**
+
+- The quick-confirm path and the identify path disagreed on drift detection: when
+  the quick-confirm drift check recognised an ID as belonging to an existing
+  speaker, it skipped the confirmation but left the pending enrollment in place.
+  A later contact then matched that very pending entry and confirmed it, creating
+  a duplicate speaker profile in the session bank (and, over time, in the global
+  bank) — the speaker list of an assignment kept growing epoch after epoch while
+  the final save collapsed to far fewer speakers.
+- Both drift paths now behave identically: the rejected pending enrollment is
+  removed, so a rejected ID can never be confirmed afterwards.
+- Diagnostic log wording: `pending entfernt` instead of `pending bleibt`.
+
+## 0.12.16 / 179 (2026-09-21)
+
+**Fix: imported audio is now diarized over the full file (previously only the trailing window)**
+
+- The import feed filled the rolling audio buffer but never consumed it — the final
+  diarization run only saw the last ~2 minutes of long files, so exported transcripts
+  showed no speaker assignment at all. The chunked diarization now runs alongside the
+  feed (every 40 s of audio) exactly like the live-recording path.
+- Diagnostic log now shows `CHUNKED epoch=…` lines during imports.
+
+## 0.12.15 / 178 (2026-09-21)
+
+**Fix: long MP3 imports crash/hang with OOM — decoded audio is now resampled chunk-by-chunk**
+
+- **Root cause (device-verified via import log):** the decoder decoded the full file in its source rate (48 kHz) before resampling — a 15-min MP3 = 42.5 M source samples = **170 MB** `FloatArray`. Together with the loaded ONNX sessions (~100+ MB) this exceeded the 256 MB heap: `Failed to allocate a 169869328 byte allocation … OOM`. Symptom: import stayed at 0 % (progress only updates after decoding) with no transcription, or crashed after ~1 min.
+- **Fix:** each decoded chunk is downmixed and resampled to 16 kHz immediately; only the 16 kHz result is collected (15-min file ≈ 57 MB). The 30-min guard now counts target-rate samples directly. 16 kHz WAVs are returned unchanged (resampler no-op).
+- **Part of the same import fix series (0.12.12–0.12.14):** O(n) decoder chunk collection instead of O(n²) `copyOf` growth; duration guard converted to source rate (48 kHz files were rejected after ~10 min of source audio); offline feed moved from the main thread to a background dispatcher so progress + live segments stay responsive on long files.
+- **Import diagnostics:** imports open their own log file (`import_<ts>.log`, included in manual/auto debug uploads) which records source MIME, sample rate, channels, decode duration and failure reason — import problems are analysable without a successful import.
+
 ## 0.12.11 / 174 (2026-09-11)
 
 **Fix: contacts screen scrollable**

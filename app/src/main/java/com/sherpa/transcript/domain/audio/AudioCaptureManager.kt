@@ -107,6 +107,23 @@ class AudioCaptureManager(
             throw SecurityException("RECORD_AUDIO permission not granted")
         }
 
+        // 0.12.18: Reste einer vorherigen Aufnahme schließen. Ohne das überschreibt
+        // startCapture() die Felder audioRecord/frameChannel, während die alte
+        // Capture-Schleife weiterläuft und dieselbe AudioRecord-Instanz liest
+        // (Log-Befund 04.11.: neue Aufnahme mit 44-Byte-WAV, alte Schleife schrieb
+        // weiter CAPTURE_RMS in die neue Logdatei).
+        try { captureJob?.cancel() } catch (_: Throwable) {}
+        captureJob = null
+        try { frameChannel?.close() } catch (_: Throwable) {}
+        frameChannel = null
+        try {
+            audioRecord?.apply {
+                if (recordingState == AudioRecord.RECORDSTATE_RECORDING) stop()
+                release()
+            }
+        } catch (_: Throwable) {}
+        audioRecord = null
+
         val minBufferSize = AudioRecord.getMinBufferSize(
             sampleRate,
             AudioFormat.CHANNEL_IN_MONO,

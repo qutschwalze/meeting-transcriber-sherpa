@@ -11,7 +11,7 @@ On-device live transcription including **speaker diarization** and a **persisten
 <a name="english"></a>
 ## English
 
-### Features (as of 0.11.2)
+### Features (as of 0.12.18)
 
 **Recognition & diarization**
 
@@ -30,7 +30,7 @@ On-device live transcription including **speaker diarization** and a **persisten
 
 **Import & export**
 
-- Voice message import (Phase 9): share audio from WhatsApp/Telegram etc. → automatic transcription through the same diarization/speaker-DB pipeline (MediaCodec decoder for Opus/M4A/MP3/AMR, 30 min limit), visible via global banner + notification, result appears on the live screen with Name/Skip banner
+- Voice message import (Phase 9): share audio from WhatsApp/Telegram etc. → automatic transcription through the same diarization/speaker-DB pipeline (MediaCodec decoder for Opus/M4A/MP3/AMR, 30 min limit), visible via global banner + notification, result appears on the live screen with Name/Skip banner. Since 0.12.15 long MP3 imports (44,1/48 kHz, several minutes) are reliable without exhausting the heap: chunk-wise resampling to 16 kHz (≈57 MB for a 15-min file instead of a 170 MB source-rate array), O(n) decoder buffering, source-rate-aware duration guard, background feed thread (progress + live segments stay responsive); imports ship their own diagnostic log (`import_<ts>.log`, included in debug uploads)
 - Export: TXT / Markdown / JSON via share sheet with speaker blocks and real names (also for history entries)
 - Optional companion bridge (0.10.8): if the MirMirStack app is installed on the device, the export menu shows "An MirMirStack senden" — the Markdown transcript goes straight into its share inbox (no chooser); without the app the menu stays unchanged
 
@@ -85,7 +85,7 @@ All processing happens on the device. Voice profiles are biometric data and stay
 
 Live-Transkription auf dem Gerät inkl. **Speaker Diarization** und **persistenter Speaker-Datenbank** – keine Cloud, kein Netzwerk.
 
-### Funktionen (Stand 0.11.2)
+### Funktionen (Stand 0.12.18)
 
 **Erkennung & Diarization**
 
